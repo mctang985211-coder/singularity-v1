@@ -88,7 +88,7 @@ const automerge = await text('.github/workflows/automerge.yml')
 check(automerge.includes('workflow_run:'), 'autonomous merge must run after CI completion')
 check(automerge.includes("github.event.workflow_run.conclusion == 'success'"), 'autonomous merge requires successful CI')
 check(!automerge.includes('actions/checkout'), 'privileged autonomous merge must not checkout PR code')
-check(automerge.includes('enableAutoMerge'), 'autonomous merge must enable auto-merge')
+check(automerge.includes('enablePullRequestAutoMerge'), 'autonomous merge must use the GitHub auto-merge mutation')
 check(automerge.includes("event: 'APPROVE'"), 'autonomous merge must approve verified PRs')
 
 async function sourceFiles(directory) {
