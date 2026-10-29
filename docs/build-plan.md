@@ -11,12 +11,14 @@
 
 ## S1 — DSH 0.2.2-alpha.2 宿主 spike
 
-- **状态**：进行中，S1-A、S1-B、S1-C、S1-D 已完成。
+- **状态**：已完成；S1-A–S1-E 全部完成，S1 Done when 已满足。
 - **S1-A 出口证据**：真实 DSH `0.2.2-alpha.2` profile 的 fixture 与真实模型路径各通过 1/1；覆盖 create/setup/resume、首请求前 prompt/context/skill/tool 装配、restrict/guard dispatch、concludeTurn、usage 持久化、resume 无新请求和凭据未写入 DSH home。详见 `docs/tasks/s1-a-agent-composition.md`。
 - **S1-B 出口证据**：真实 DSH profile 与官方 `@modelcontextprotocol/server` `2.2.0` stdio fixture 通过；覆盖 mount 前 allowlist、startup failure 不发布 Agent、agent-scoped 原生挂载、schema/prompt instructions/resource tools、echo/fail/tool guard、resource server guard、`250ms` timeout、pre-abort/in-flight abort、dispose 后声明移除及所有 fixture PID exit。无真实模型请求；resource 成功路径仅空 `resources`，`read_mcp_resource`/template 未验证。详见 `docs/tasks/s1-b-mcp-stdio.md`。
 - **S1-C 出口证据**：真实 DSH profile 与官方 `@modelcontextprotocol/server` `2.2.0` + `@modelcontextprotocol/node` `2.0.0` streamable-http fixture 通过；覆盖 mount 前 allowlist、closed-port startup failure、`server/discover`→`initialize`→`initialized`→`tools/list`→`tools/call`、每请求配置 header、schema/prompt/resource surface、echo/fail/tool/resource guards、`250ms` timeout、pre-abort/in-flight abort、dispose 后声明消失、无新请求及所有 HTTP sockets 关闭。无真实模型请求。根 `pnpm verify` tests `3/3`；详见 `docs/tasks/s1-c-mcp-streamable-http.md`。
 - **S1-D 出口证据**：真实 DSH profile + chat fixture 验证稳定 `MessageId`：首次发送 1 请求；完成后与 resume 后 already-admitted 不新增请求/turn；raw DSH 同 ID followup 对照会第二次购买；pending/removed/unknown/corrupt 全部 fail closed；独立子进程 provider 收到 hanging 请求后 SIGKILL，父 resume 为 interrupted、无 assistant settlement/usage unknown、deliver 不重发且外部请求仍为 1。请求数以 chat fixture 实际 HTTP 计数，不用 `request/header`；仅 test-local helper，无生产 wake authority 或新账本。根 `pnpm verify` tests `5/5`；详见 `docs/tasks/s1-d-wake-delivery.md`。
-- **剩余未验证**：`read_mcp_resource`/resource template 成功内容、provider exactly-once、pending/removed wake 成功恢复、compaction/context epoch receipt 失效（下一切片）、C-16 manifest/capability precheck 与 C-16 整体；S1-D 无真实模型证据；C-12/C-16/C-20 保持 unproven，`docs/conformance.md` 与 `spec-lock.json` 未改。
+- **S1-E 出口证据**：真实 DSH profile + chat fixture 验证 self-read/preview tool result 原 receipt 为 current；dispose/resume 后 surface 仍可见，但 `session/end-seed` 改变 epoch 使 receipt stale；真实 `ctx.compaction.compactNow()` 增加恰好一次 summarizer fixture 请求，`compaction/start`/`summary`/`end` 与 `shadowedSeqs` 齐全，surface/`deriveMessages` 不含旧正文，receipt epoch+surface 双失效；`inbox.clear` 不改变 epoch/surface。helper 直接复用 `@deepseek-ai/dsh-compaction` 公开类型，无平行事件声明。根 `pnpm verify` tests `6/6`；详见 `docs/tasks/s1-e-compaction-epoch.md`。
+- **剩余未验证**：自动 pressure compaction/prune、失败/取消 compaction、pending/removed wake 成功恢复、provider exactly-once、resource read/template 成功内容、C-12 composition mismatch、C-16 manifest/capability precheck 与 C-20 等后续场景；这些不阻挡 S1 已完成的范围，但保持 unproven，C-12/C-16/C-20 整体亦未改为 proven；`docs/conformance.md` 与 `spec-lock.json` 未改。
+- **下一步**：进入 S2 protocol（类型、schema、digest 与纯 reducer）；当前不宣称 Task/RSI 业务功能已实现。
 - **规范引用**：§2、§3、§12、§14、§19.1。
 - **实现位置**：优先放在未来 runtime 的真实组合测试和 app profile，不新增独立产品包。
 - **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP `stdio` 与 `streamable-http` 挂载及 disposal、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量；两种 transport 均须通过 server/tool guard，不得只验证连接成功。

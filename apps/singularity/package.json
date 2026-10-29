@@ -24,6 +24,7 @@
     "@deepseek-ai/dsh": "0.2.2-alpha.2",
     "@deepseek-ai/dsh-agent": "0.2.2-alpha.2",
     "@deepseek-ai/dsh-app-boot": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-compaction": "0.2.2-alpha.2",
     "@deepseek-ai/dsh-launch-environment": "0.2.2-alpha.2",
     "@deepseek-ai/dsh-llm": "0.2.2-alpha.2",
     "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-alpha.2",
