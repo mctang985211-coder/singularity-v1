@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段，当前执行 `docs/build-plan.md` 的 S1-A 宿主 composition 切片；S1 尚未完成，protocol/runtime 业务实现尚未开始。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1-A（DSH alpha2 宿主 composition）已完成；S1 其余宿主能力仍在推进，protocol/runtime 业务实现尚未开始。
 
 ## 权威入口
 
@@ -16,7 +16,7 @@ Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中�
 
 - Node `>=24.9.0`
 - pnpm `11.18.0`
-- DSH `0.2.2-alpha.2`（首个宿主集成切片安装并验证，当前未声明已完成）
+- DSH `0.2.2-alpha.2`（S1-A 已完成 fixture 与真实模型验证；S1 其余能力进行中）
 
 ## 验证
 
@@ -33,7 +33,7 @@ pnpm verify
 - `pnpm test`：app 宿主组合测试；
 - `pnpm build`：按根 `tsconfig.json` references 构建 app，输出 `apps/singularity/dist`。
 
-CI 只保留一个 `verify` job。通过只代表当前已执行门禁通过；S1-A 仍在集成，真实 DSH 行为、真实模型任务和领域 RSI 收益分别需要独立证据，不能由仓库检查推断。
+CI 只保留一个 `verify` job。S1-A 已完成并通过上述门禁（fixture 与真实模型各 1/1）；S1 整体仍在进行，MCP transport、失败/取消/disposal、wake 去重与 compaction 等仍未验证（C-12/C-16/C-20 保持 unproven）。领域 RSI 收益需要独立证据，不能由仓库检查推断。
 
 ## 协作流程
 
