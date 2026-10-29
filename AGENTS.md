@@ -91,7 +91,7 @@ pnpm verify
 
 - 不读取、复制或传输 secrets、私有 validation payload、golden answers 或私有 verifier 数据。
 - 候选 MCP server 在隔离环境运行，具有明确 filesystem/network/capability/resource limits、timeout 和 cleanup；启动或清理失败按协议结算，不静默降级。
-- 构建者可在 `docs/build-plan.md` 范围内自主创建分支、提交和 PR，并运行已声明预算内的模型/领域验证；CI 全部成功后，由自动工作流批准并 squash auto-merge。不得直接 push main、force push、reset、rebase 或改写历史。
+- 构建者可在 `docs/build-plan.md` 范围内自主创建分支、提交和 PR，并运行已声明预算内的模型/领域验证；CI 全部成功后，由自动工作流批准，clean PR 直接 squash merge，其余符合条件的 PR 启用 squash auto-merge。不得直接 push main、force push、reset、rebase 或改写历史。
 - 生产部署、Method activation、超出已声明预算的付费实验、其他外部写入或扩大权限仍需明确授权。
 - 不通过破坏性清理绕过测试和环境问题。
 - 标准检查受阻时先修复标准路径，不用旁路脚本替代，不擅自缩小交付范围。

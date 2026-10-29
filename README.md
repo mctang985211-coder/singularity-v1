@@ -34,7 +34,7 @@ CI 通过只代表当前已执行门禁通过。真实 DSH 行为、真实模型
 1. 从最新 `main` 创建单一目的分支。
 2. 在任务卡或 PR 中写明 Goal、规范条目、范围、非目标和 Done when。
 3. 实现一个最小垂直切片，运行根 `pnpm verify` 并审查最终 diff。
-4. 提交非草稿 PR，完成 conversation 和最新 `verify` 后，自动工作流批准并启用 squash auto-merge。
+4. 提交非草稿 PR，完成 conversation 和最新 `verify` 后，自动工作流批准；clean PR 直接 squash merge，其余符合条件的 PR 启用 squash auto-merge。
 
 自动流程只处理同一私有仓库内、任务卡完整且 `ci/verify` 成功的 PR；授权工作流不 checkout PR 代码。自动批准不代表未执行的 DSH、模型或领域证据已经成立。
 
