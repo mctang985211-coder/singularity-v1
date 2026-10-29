@@ -18,7 +18,7 @@ export type WakeEventState = 'never-inserted' | 'removed' | 'pending' | 'admitte
 export type WakeDeliveryOutcome = 'sent' | 'already-admitted'
 
 /** Why delivery refused to touch the model path. */
-export type WakeRefusalState = 'pending' | 'corrupt'
+export type WakeRefusalState = 'removed' | 'pending' | 'corrupt'
 
 /** Fail-closed wake delivery error. */
 export class WakeDeliveryRefusedError extends Error {
@@ -225,9 +225,9 @@ export function createWakeMessage(request: WakeRequest): UserMessage {
  * Deliver one wake with a stable message id, or fail closed when the raw DSH
  * session log already carries the id in a state the host must not duplicate.
  *
- * The decision is synchronous over the committed raw log: a pending or
- * contradictory id never reaches `followup`, while a never-delivered or
- * explicitly removed wake can be sent once. This is a test-local adapter
+ * The decision is synchronous over the committed raw log: only a wake with no
+ * prior durable appearance can be sent, while a removed, pending, or
+ * contradictory id never reaches `followup`. This is a test-local adapter
  * procedure, not a durable ledger and not a provider exactly-once promise.
  */
 export function deliverWakeOnceOrFail(agent: Agent, request: WakeRequest): Promise<WakeDeliveryOutcome> {
@@ -250,9 +250,14 @@ export function deliverWakeOnceOrFail(agent: Agent, request: WakeRequest): Promi
           `wake "${request.wakeId}" has contradictory raw session evidence: ${inspection.detail ?? 'unknown'}`,
         ))
       case 'never-inserted':
-      case 'removed':
         agent.followup(expected)
         return Promise.resolve('sent')
+      case 'removed':
+        return Promise.reject(new WakeDeliveryRefusedError(
+          'removed',
+          request.wakeId,
+          `wake "${request.wakeId}" was previously enqueued and removed; recovery semantics are undefined`,
+        ))
     }
   } catch (error) {
     return Promise.reject(error instanceof Error

@@ -195,7 +195,7 @@ void test('wake delivery reuses admitted wake across resume and raw followup pro
   let control: AgentHandle | undefined
   let pending: AgentHandle | undefined
   try {
-    fixture = await startChatCompletionsFixture([FIXTURE_REPLY, FIXTURE_REPLY, FIXTURE_REPLY, FIXTURE_REPLY, FIXTURE_REPLY])
+    fixture = await startChatCompletionsFixture([FIXTURE_REPLY, FIXTURE_REPLY, FIXTURE_REPLY])
     spike = await bootSpikeProfile({ home, baseURL: fixture.baseURL, apiKey: 'fixture-key' })
     const ctx = spike.ctx
 
@@ -272,11 +272,16 @@ void test('wake delivery reuses admitted wake across resume and raw followup pro
     assert.deepEqual(inboxInsertedIds(pendingHandle.agent.session), [pendingWake.wakeId])
     assert.equal(pendingHandle.agent.inbox.remove(pendingMessage.id), true)
     assert.equal(pendingHandle.agent.inbox.nextStep.length, 0)
-    assert.equal(await deliverWakeOnceOrFail(pendingHandle.agent, pendingWake), 'sent')
-    await pendingHandle.agent.whenIdle()
-    assert.equal(fixture.requests.length, 4, 'a removed, never-admitted wake can be sent once')
-    assert.equal(eventsOf(pendingHandle.agent.session, 'turn/start').length, 1)
-    assert.equal(userMessagesWithId(pendingHandle.agent.session, pendingWake.wakeId).length, 1)
+    const removedEventsBefore = readSessionEvents(pendingHandle.agent.session).length
+    await assert.rejects(
+      deliverWakeOnceOrFail(pendingHandle.agent, pendingWake),
+      isWakeRefusal('removed'),
+    )
+    assert.equal(fixture.requests.length, 3, 'a removed wake must not be re-sent')
+    assert.equal(readSessionEvents(pendingHandle.agent.session).length, removedEventsBefore)
+    assert.equal(eventsOf(pendingHandle.agent.session, 'turn/start').length, 0)
+    assert.equal(eventsOf(pendingHandle.agent.session, 'request/header').length, 0)
+    assert.equal(userMessagesWithId(pendingHandle.agent.session, pendingWake.wakeId).length, 0)
     await pendingHandle.dispose()
     pending = undefined
   } finally {
