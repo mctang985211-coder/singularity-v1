@@ -4,15 +4,15 @@
 
 ## S0 — 仓库与规范门禁
 
-- **范围**：正式规范、spec digest、统一 `pnpm verify`、GitHub CI、PR 和 main 分支保护。
-- **出口**：本地与远程 `verify` 通过；私有仓库和保护配置已核对。
+- **范围**：正式规范、spec digest、conformance registry、统一 `pnpm verify`、GitHub CI、验证后自动批准与 auto-merge、main 分支保护。
+- **出口**：本地与远程 `verify` 通过；私有仓库、保护配置和后续 PR 自动合并链路均已核对。
 - **边界**：不包含 protocol/runtime 业务实现。
 
 ## S1 — DSH 0.2.2-alpha.2 宿主 spike
 
 - **规范引用**：§2、§3、§12、§14、§19.1。
 - **实现位置**：优先放在未来 runtime 的真实组合测试和 app profile，不新增独立产品包。
-- **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP stdio 挂载、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量。
+- **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP `stdio` 与 `streamable-http` 挂载及 disposal、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量；两种 transport 均须通过 server/tool guard，不得只验证连接成功。
 - **Done when**：目标 alpha2 的真实组合运行证明声明与 dispatch 两层能力面一致，恢复不重复购买请求，MCP/server disposal 完整；所有未覆盖行为仍标为 unproven。
 - **禁止**：修改 DSH 本体、引入 patch/shim、使用旧 vendored DSH 或全局 dsh 替代目标版本。
 

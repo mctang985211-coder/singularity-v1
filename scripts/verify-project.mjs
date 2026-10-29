@@ -18,6 +18,7 @@ for (const relative of [
   'AGENTS.md',
   'README.md',
   'docs/framework.md',
+  'docs/conformance.md',
   'docs/build-plan.md',
   'spec-lock.json',
   '.github/workflows/ci.yml',
@@ -57,6 +58,18 @@ for (let index = 1; index <= 24; index += 1) {
   check(scenarioCounts.get(id) === 1, `conformance C-${id} must appear exactly once`)
 }
 
+const conformance = await text('docs/conformance.md')
+const registryCounts = new Map()
+for (const match of conformance.matchAll(/^\| C-(\d{2}) \|/gm)) {
+  const id = match[1]
+  registryCounts.set(id, (registryCounts.get(id) ?? 0) + 1)
+}
+for (let index = 1; index <= 24; index += 1) {
+  const id = String(index).padStart(2, '0')
+  check(registryCounts.get(id) === 1, `conformance registry C-${id} must appear exactly once`)
+}
+check(!/(?:["']?transport["']?\s*[:=]\s*["']sse["']|["']sse["']\s*[|,])/i.test(specification), 'framework retains unsupported SSE transport')
+
 const agents = await text('AGENTS.md')
 check(agents.includes('`docs/framework.md`'), 'AGENTS.md must point to docs/framework.md')
 check(agents.includes('V1 发布规范'), 'AGENTS.md must recognize the V1 release')
@@ -71,6 +84,13 @@ check(ci.includes('node-version: 24'), 'CI must use Node 24')
 check(ci.includes('pnpm install --frozen-lockfile'), 'CI must install from the frozen lockfile')
 check(ci.includes('pnpm verify'), 'CI must run pnpm verify')
 
+const automerge = await text('.github/workflows/automerge.yml')
+check(automerge.includes('workflow_run:'), 'autonomous merge must run after CI completion')
+check(automerge.includes("github.event.workflow_run.conclusion == 'success'"), 'autonomous merge requires successful CI')
+check(!automerge.includes('actions/checkout'), 'privileged autonomous merge must not checkout PR code')
+check(automerge.includes('enablePullRequestAutoMerge'), 'autonomous merge must use the GitHub auto-merge mutation')
+check(automerge.includes("event: 'APPROVE'"), 'autonomous merge must approve verified PRs')
+
 async function sourceFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true })
   const files = []
@@ -82,22 +102,29 @@ async function sourceFiles(directory) {
   return files
 }
 
-const packagesDirectory = path.join(root, 'packages')
-try {
-  await access(packagesDirectory)
-  for (const file of await sourceFiles(packagesDirectory)) {
+for (const sourceRoot of ['packages', 'apps']) {
+  const sourceDirectory = path.join(root, sourceRoot)
+  let exists = true
+  try {
+    await access(sourceDirectory)
+  } catch (error) {
+    if (error?.code === 'ENOENT') exists = false
+    else throw error
+  }
+  if (!exists) continue
+
+  for (const file of await sourceFiles(sourceDirectory)) {
     const source = await readFile(file, 'utf8')
     const relative = path.relative(root, file)
     for (const forbidden of ['ProcessToolContext', 'entry.execute']) {
       check(!source.includes(forbidden), `${relative}: forbidden TS tool adapter symbol ${forbidden}`)
     }
+    check(!/(?:["']?transport["']?\s*[:=]\s*["']sse["']|["']sse["']\s*[|,])/i.test(source), `${relative}: unsupported SSE transport`)
     if (relative.startsWith('packages/singularity/protocol/')) {
       check(!/@deepseek-ai\/dsh-/.test(source), `${relative}: protocol must not depend on DSH`)
       check(!/node:(?:fs|child_process|net|process|timers)/.test(source), `${relative}: protocol must not access host effects`)
     }
   }
-} catch {
-  // Packages are introduced by their implementation slices.
 }
 
 if (failures.length > 0) {
