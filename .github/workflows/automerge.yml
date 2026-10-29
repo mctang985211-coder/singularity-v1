@@ -75,6 +75,22 @@ jobs:
                 body: 'Automated approval after successful verify. This does not claim unexecuted DSH, model, or domain evidence.',
               })
 
+              const { data: ready } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: number,
+              })
+              if (ready.mergeable_state === 'clean') {
+                await github.rest.pulls.merge({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: number,
+                  merge_method: 'squash',
+                })
+                console.log(`Approved and merged ready PR #${number}`)
+                continue
+              }
+
               await github.graphql(
                 `mutation EnablePullRequestAutoMerge($pullRequestId: ID!) {
                   enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) {
