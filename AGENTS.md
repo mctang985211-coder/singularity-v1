@@ -4,7 +4,7 @@
 
 - 唯一 framework/protocol 权威是 `docs/framework.md`，状态为 **V1 发布规范**。旧草案、旧实现、handoff、蓝图和运行记录只作证据与反例。
 - `spec-lock.json` 固定当前规范 digest。规范变化必须先有获批 amendment，再在同一变更中更新规范、lock、相关协议和 conformance。
-- 当前仓库处于工程门禁与构建准备阶段。不得把文件骨架、类型核对或 CI 通过描述成 Task/RSI 功能已经实现。
+- 当前仓库进入 V1 构建阶段，按 `docs/build-plan.md` 从 S1 推进。不得把文件骨架、类型核对或 CI 通过描述成 Task/RSI 功能已经实现。
 - 不继承旧 Singularity、singularity-core、singularity-harness 的接口、状态、兼容层或包结构。不得用代码先形成行为，再回写规范追认。
 - 规范冲突、字段缺失或行为未定义时，停止受影响部分并提出 amendment；独立且已定义的工作可以继续。
 
@@ -91,8 +91,9 @@ pnpm verify
 
 - 不读取、复制或传输 secrets、私有 validation payload、golden answers 或私有 verifier 数据。
 - 候选 MCP server 在隔离环境运行，具有明确 filesystem/network/capability/resource limits、timeout 和 cleanup；启动或清理失败按协议结算，不静默降级。
-- 未经明确授权，不执行生产部署、Method activation、付费大规模评测、外部写入或扩大权限。
-- 未经用户要求，不执行 git commit、push、reset、rebase、force 操作或历史改写；不通过破坏性清理绕过测试和环境问题。
+- 构建者可在 `docs/build-plan.md` 范围内自主创建分支、提交和 PR，并运行已声明预算内的模型/领域验证；CI 全部成功后，由自动工作流批准并 squash auto-merge。不得直接 push main、force push、reset、rebase 或改写历史。
+- 生产部署、Method activation、超出已声明预算的付费实验、其他外部写入或扩大权限仍需明确授权。
+- 不通过破坏性清理绕过测试和环境问题。
 - 标准检查受阻时先修复标准路径，不用旁路脚本替代，不擅自缩小交付范围。
 
 ## 8. 本文件的维护

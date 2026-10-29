@@ -1,10 +1,11 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库目前包含正式规范、构建计划和工程门禁；protocol/runtime 业务实现尚未开始。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段，当前从 `docs/build-plan.md` 的 S1 宿主 spike 推进；protocol/runtime 业务实现尚未开始。
 
 ## 权威入口
 
 - 施工规范：[`docs/framework.md`](docs/framework.md)
+- 符合性登记：[`docs/conformance.md`](docs/conformance.md)
 - 构建流：[`docs/build-plan.md`](docs/build-plan.md)（非规范，可按构建证据调整）
 - Agent 工作约束：[`AGENTS.md`](AGENTS.md)
 - 规范身份：[`spec-lock.json`](spec-lock.json)
@@ -33,6 +34,8 @@ CI 通过只代表当前已执行门禁通过。真实 DSH 行为、真实模型
 1. 从最新 `main` 创建单一目的分支。
 2. 在任务卡或 PR 中写明 Goal、规范条目、范围、非目标和 Done when。
 3. 实现一个最小垂直切片，运行根 `pnpm verify` 并审查最终 diff。
-4. 提交 PR，完成 conversation 和最新 `verify` 后由人执行 squash merge。
+4. 提交非草稿 PR，完成 conversation 和最新 `verify` 后，自动工作流批准并启用 squash auto-merge。
+
+自动流程只处理同一私有仓库内、任务卡完整且 `ci/verify` 成功的 PR；授权工作流不 checkout PR 代码。自动批准不代表未执行的 DSH、模型或领域证据已经成立。
 
 `main` 禁止直接 push、force push 和删除。规范变更必须在 PR 中同时更新 `docs/framework.md`、`spec-lock.json` 及所有受影响实现。
