@@ -29,11 +29,13 @@ const taskGoalSchema = closedObject({
   constraints: z.array(z.string()),
 })
 
-const taskCriterionSchema = closedObject({
+export const taskCriterionSchema = closedObject({
   id: z.string(),
   statement: z.string(),
   required: z.boolean(),
 })
+
+export type TaskCriterion = z.infer<typeof taskCriterionSchema>
 
 /** Frozen input authorisation resolved by the host. */
 export const inputRefSchema = closedObject({

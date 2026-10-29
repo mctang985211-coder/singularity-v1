@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import { computeDigest, digestSchema, verifyDigest } from '../src/digest.ts'
 import * as protocol from '../src/index.ts'
+import * as methodModule from '../src/method.ts'
 import {
   childBindingSchema,
   methodRevisionPayloadSchema,
@@ -17,11 +18,12 @@ import type {
   ChildBinding,
   MethodRevision,
   MethodRevisionPayload,
-  OutputSpec,
   SkillAsset,
   TaskTemplate,
   ToolAsset,
 } from '../src/method.ts'
+import { outputSpecSchema, taskCriterionSchema, taskSpecSchema } from '../src/task.ts'
+import type { OutputSpec, TaskCriterion } from '../src/task.ts'
 
 const REF_DIGEST = `sha256:${'a'.repeat(64)}`
 
@@ -250,7 +252,11 @@ void test('rejects unsupported transport, invalid join, unknown fields, and malf
   assert.throws(() => childBindingSchema.parse({ ...childBinding(), join: invalidJoin }))
   assert.throws(() => childBindingSchema.parse(withExtra(childBinding())))
 
-  const criterion = { id: 'criterion-a', statement: 'The result is traceable.', required: true }
+  const criterion: TaskCriterion = {
+    id: 'criterion-a',
+    statement: 'The result is traceable.',
+    required: true,
+  }
   const output: OutputSpec = {
     id: 'result',
     path: 'result.json',
@@ -380,6 +386,21 @@ void test('sealMethodRevision rejects malformed payloads before sealing', () => 
   )
 })
 
+void test('Method uses the task-owned criterion and output schema objects directly', () => {
+  assert.equal(taskTemplateSchema.shape.requiredCriteria.element, taskCriterionSchema)
+  assert.equal(taskTemplateSchema.shape.requiredOutputs.element, outputSpecSchema)
+  assert.equal(taskSpecSchema.shape.criteria.element, taskCriterionSchema)
+  assert.equal(taskSpecSchema.shape.outputs.element, outputSpecSchema)
+
+  assert.equal(methodModule.taskTemplateSchema, taskTemplateSchema)
+  assert.equal(Object.hasOwn(methodModule, 'outputSpecSchema'), false)
+  assert.equal(Object.hasOwn(methodModule, 'taskCriterionSchema'), false)
+
+  assert.equal(protocol.taskCriterionSchema, taskCriterionSchema)
+  assert.equal(protocol.outputSpecSchema, outputSpecSchema)
+  assert.equal(protocol.taskSpecSchema, taskSpecSchema)
+})
+
 void test('index exports existing protocol surface plus Method schemas and helpers', () => {
   const exported = [
     'CanonicalJsonError',
@@ -399,6 +420,10 @@ void test('index exports existing protocol surface plus Method schemas and helpe
     'protocolJsonSchema',
     'ProtocolSchemaError',
     'refSchema',
+    'taskCriterionSchema',
+    'taskSpecSchema',
+    'taskContractSchema',
+    'decomposeInputSchema',
     'methodRevisionSchema',
     'methodRevisionPayloadSchema',
     'taskTemplateSchema',

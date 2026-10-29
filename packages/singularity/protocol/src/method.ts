@@ -4,17 +4,7 @@ import { digestSchema, seal, verifyDigest } from './digest.ts'
 import { jsonObjectSchema } from './json.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
-
-/** Output declaration frozen into a TaskSpec from docs/framework.md §4.2. */
-export const outputSpecSchema = closedObject({
-  id: z.string(),
-  path: z.string(),
-  kind: z.enum(['file', 'tree']),
-  role: z.enum(['deliverable', 'supporting', 'skill-draft', 'mcp-draft']),
-  required: z.boolean(),
-})
-
-export type OutputSpec = z.infer<typeof outputSpecSchema>
+import { outputSpecSchema, taskCriterionSchema } from './task.ts'
 
 /** Static child binding from docs/framework.md §5. */
 export const childBindingSchema = closedObject({
@@ -33,13 +23,7 @@ export const taskTemplateSchema = closedObject({
   guidance: refSchema,
   example: refSchema,
   instanceSchema: jsonObjectSchema,
-  requiredCriteria: z.array(
-    closedObject({
-      id: z.string(),
-      statement: z.string(),
-      required: z.boolean(),
-    }),
-  ),
+  requiredCriteria: z.array(taskCriterionSchema),
   requiredOutputs: z.array(outputSpecSchema),
   acceptancePolicy: refSchema,
   skills: z.array(z.string()),
