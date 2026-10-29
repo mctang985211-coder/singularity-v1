@@ -89,6 +89,8 @@ check(automerge.includes('workflow_run:'), 'autonomous merge must run after CI c
 check(automerge.includes("github.event.workflow_run.conclusion == 'success'"), 'autonomous merge requires successful CI')
 check(!automerge.includes('actions/checkout'), 'privileged autonomous merge must not checkout PR code')
 check(automerge.includes('enablePullRequestAutoMerge'), 'autonomous merge must use the GitHub auto-merge mutation')
+check(automerge.includes('github.rest.pulls.merge'), 'autonomous merge must merge an already-clean PR')
+check(automerge.includes("ready.mergeable_state === 'clean'"), 'autonomous merge must distinguish clean and waiting states')
 check(automerge.includes("event: 'APPROVE'"), 'autonomous merge must approve verified PRs')
 
 async function sourceFiles(directory) {
