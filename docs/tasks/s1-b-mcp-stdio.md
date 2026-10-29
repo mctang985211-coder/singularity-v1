@@ -1,5 +1,7 @@
 # S1-B 任务卡：DSH alpha2 MCP stdio
 
+- **状态**：已完成；仅覆盖 stdio，S1 整体继续。
+
 ## Goal
 
 通过真实 DSH `0.2.2-alpha.2` Agent scope 和官方 MCP server，验证 stdio transport 的挂载前 server 准入、工具声明/dispatch 一致性、tool guard、启动与工具失败、timeout、取消和完整子进程清理。
@@ -42,4 +44,47 @@ git diff --check
 
 ## 失败证据与运行记录
 
-待首个 stdio 复现和实现后填写实际命令、结果、环境与未验证项。
+### 初始红证据
+
+缺失 fixture 时，真实 `agents.create` 在 mcp-client initial connection/tool synchronization 失败：`MODULE_NOT_FOUND` / `Connection closed`。
+
+### 集成环境与门禁
+
+- Node：官方 Node `24.9.0`。
+- pnpm：`11.18.0`。
+- DSH package manifest：`0.2.2-alpha.2`。
+
+```bash
+pnpm install --frozen-lockfile
+pnpm verify
+git diff --check
+```
+
+结果：安装成功；根 `pnpm verify` 的 project、typecheck、lint、test、build 全部通过；S1-A + S1-B tests `2/2`；`git diff --check` 通过。
+
+### stdio 真实组合证据
+
+使用官方 `@modelcontextprotocol/server` `2.2.0` fixture，通过真实 DSH `0.2.2-alpha.2` profile 验证：
+
+- mount 前 server allowlist：未准入 server 不启动子进程；
+- startup command failure：不发布 Agent；
+- agent-scoped 原生 DSH MCP mount；
+- schema、system prompt instructions 与 resource tools；
+- `echo`/`fail` 与 tool guard；guard 拒绝的调用不到 server；
+- resource server guard；
+- `250ms` timeout 后 server 仍可继续响应 `echo`；
+- pre-abort：返回 `ABORTED_BEFORE_DISPATCH`，请求不到 server；
+- in-flight abort：调用已到达 server，结果为 `isError`；随后 `echo` 仍可用；
+- dispose 后 MCP 声明消失；所有 probe/session PID 都有 exit 记录且 `signal 0` 不再存活。
+
+resource 成功路径只覆盖空 `resources` 列表；`read_mcp_resource` 与 resource template 的实际资源内容未验证。本切片使用 dummy chat URL/key，没有真实模型请求，不能表述为真实模型证据。
+
+### 仍未验证（S1 继续）
+
+- `streamable-http` transport 及其 server/tool guard；
+- 稳定 wake/message ID 去重；
+- compaction/context epoch receipt 失效；
+- C-16 manifest/capability precheck 与 C-16 整体；
+- C-12、C-20 及其他 conformance 场景状态未改变；`docs/conformance.md` 与 `spec-lock.json` 未改动。
+
+结论：S1-B 完成；S1 整体继续。

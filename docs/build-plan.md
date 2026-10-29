@@ -11,9 +11,10 @@
 
 ## S1 — DSH 0.2.2-alpha.2 宿主 spike
 
-- **状态**：进行中，S1-A 已完成。
+- **状态**：进行中，S1-A、S1-B 已完成。
 - **S1-A 出口证据**：真实 DSH `0.2.2-alpha.2` profile 的 fixture 与真实模型路径各通过 1/1；覆盖 create/setup/resume、首请求前 prompt/context/skill/tool 装配、restrict/guard dispatch、concludeTurn、usage 持久化、resume 无新请求和凭据未写入 DSH home。详见 `docs/tasks/s1-a-agent-composition.md`。
-- **剩余未验证**：MCP `stdio`/`streamable-http` 及 server/tool guards、失败/timeout/取消/disposal、稳定 wake/message ID 去重、compaction/context epoch receipt 失效；C-12/C-16/C-20 保持 unproven，`docs/conformance.md` 与 `spec-lock.json` 未改。
+- **S1-B 出口证据**：真实 DSH profile 与官方 `@modelcontextprotocol/server` `2.2.0` stdio fixture 通过；覆盖 mount 前 allowlist、startup failure 不发布 Agent、agent-scoped 原生挂载、schema/prompt instructions/resource tools、echo/fail/tool guard、resource server guard、`250ms` timeout、pre-abort/in-flight abort、dispose 后声明移除及所有 fixture PID exit。无真实模型请求；resource 成功路径仅空 `resources`，`read_mcp_resource`/template 未验证。详见 `docs/tasks/s1-b-mcp-stdio.md`。
+- **剩余未验证**：`streamable-http` 及 server/tool guards、稳定 wake/message ID 去重、compaction/context epoch receipt 失效、C-16 manifest/capability precheck 与 C-16 整体；C-12/C-16/C-20 保持 unproven，`docs/conformance.md` 与 `spec-lock.json` 未改。
 - **规范引用**：§2、§3、§12、§14、§19.1。
 - **实现位置**：优先放在未来 runtime 的真实组合测试和 app profile，不新增独立产品包。
 - **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP `stdio` 与 `streamable-http` 挂载及 disposal、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量；两种 transport 均须通过 server/tool guard，不得只验证连接成功。
