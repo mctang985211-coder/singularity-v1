@@ -4,6 +4,7 @@
 
 ## S0 — 仓库与规范门禁
 
+- **状态**：已完成；后续构建从 S1 推进。
 - **范围**：正式规范、spec digest、conformance registry、统一 `pnpm verify`、GitHub CI、验证后自动批准与 auto-merge、main 分支保护。
 - **出口**：本地与远程 `verify` 通过；私有仓库、保护配置和后续 PR 自动合并链路均已核对。
 - **边界**：不包含 protocol/runtime 业务实现。
