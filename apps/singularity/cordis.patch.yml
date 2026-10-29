@@ -1,0 +1,37 @@
+- id: sdk-app-startup
+  disabled: true
+- id: sdk-jsonrpc-server
+  disabled: true
+
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      singularity-local:
+        apiKeyEnv: SINGULARITY_SPIKE_API_KEY
+        api: openai-completions
+        baseURL: !!js process.env.SINGULARITY_SPIKE_BASE_URL ?? 'http://127.0.0.1:16660/v1'
+        reasoning: max
+        retryPolicy:
+          mode: normal
+          maxRetries: 0
+        compat:
+          supportsDeveloperRole: false
+          supportsReasoningEffort: true
+          supportsUsageInStreaming: true
+          supportsFinishReason: true
+          thinkingFormat: deepseek
+        models:
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+            contextWindow: 256000
+            maxTokens: 8192
+            input: [text]
+            reasoningEfforts:
+              max: max
+
+- insert:
+    - id: skills
+      name: '@deepseek-ai/dsh-skill'
+    - id: tool-skill
+      name: '@deepseek-ai/dsh-tool-skill'

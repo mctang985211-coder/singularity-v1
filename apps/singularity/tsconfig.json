@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "rewriteRelativeImportExtensions": true,
+    "types": ["node"],
+    "skipLibCheck": false
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "eslint.config.js"]
+}
