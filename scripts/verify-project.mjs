@@ -5,6 +5,19 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const failures = []
+const protocolSourcePrefix = 'packages/singularity/protocol/src/'
+const protocolForbiddenCalls = [
+  [/\bJSON\s*\.\s*parse\s*\(/, 'JSON.parse'],
+  [/\bz\s*\.\s*(?:object|looseObject)\s*\(/, 'z.object/z.looseObject'],
+  [/\bDate\s*\.\s*now\s*\(/, 'Date.now'],
+  [/\bnew\s+Date\b/, 'new Date'],
+  [/\bMath\s*\.\s*random\s*\(/, 'Math.random'],
+  [/\bprocess\s*\./, 'process.*'],
+  [/\bfetch\s*\(/, 'fetch'],
+  [/\bperformance\s*\.\s*now\s*\(/, 'performance.now'],
+  [/\b(?:setTimeout|setInterval|setImmediate)\s*\(/, 'global timers'],
+]
+const protocolHostImport = /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](?:node:)?(?:fs(?:\/promises)?|child_process|net|http2?|https|dgram|dns|tls|process|timers(?:\/promises)?|perf_hooks|worker_threads|cluster)['"]/
 
 function check(condition, message) {
   if (!condition) failures.push(message)
@@ -62,6 +75,16 @@ for (const packageDirectory of ['apps/singularity', 'packages/singularity/protoc
   check(packageBuildTsconfig.compilerOptions?.outDir === 'dist', `${packageDirectory} build outDir must be dist`)
   check(packageBuildTsconfig.include?.length === 1 && packageBuildTsconfig.include[0] === 'src/**/*.ts', `${packageDirectory} build must include only src`)
 }
+
+const protocolManifest = JSON.parse(await text('packages/singularity/protocol/package.json'))
+check(protocolManifest.dependencies?.zod === '4.4.3', 'protocol must depend on zod 4.4.3')
+const protocolDependencyNames = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']
+  .flatMap(section => Object.keys(protocolManifest[section] ?? {}))
+check(
+  protocolDependencyNames.every(name => !name.startsWith('@deepseek-ai/')),
+  'protocol must not depend on @deepseek-ai packages',
+)
+
 const rootTsconfig = JSON.parse(await text('tsconfig.json'))
 for (const buildPath of ['apps/singularity/tsconfig.build.json', 'packages/singularity/protocol/tsconfig.build.json']) {
   check(rootTsconfig.references?.some(reference => reference.path === buildPath), `root tsconfig must reference ${buildPath}`)
@@ -150,8 +173,14 @@ for (const sourceRoot of ['packages', 'apps']) {
     }
     check(!/(?:["']?transport["']?\s*[:=]\s*["']sse["']|["']sse["']\s*[|,])/i.test(source), `${relative}: unsupported SSE transport`)
     if (relative.startsWith('packages/singularity/protocol/')) {
-      check(!/@deepseek-ai\/dsh-/.test(source), `${relative}: protocol must not depend on DSH`)
+      check(!/@deepseek-ai\//.test(source), `${relative}: protocol must not depend on @deepseek-ai packages`)
       check(!/node:(?:fs|child_process|net|process|timers)/.test(source), `${relative}: protocol must not access host effects`)
+    }
+    if (relative.startsWith(protocolSourcePrefix)) {
+      for (const [pattern, label] of protocolForbiddenCalls) {
+        check(!pattern.test(source), `${relative}: protocol must not use ${label}`)
+      }
+      check(!protocolHostImport.test(source), `${relative}: protocol must not import FS, network, process, or clock modules`)
     }
   }
 }

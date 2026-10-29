@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；下一步进入 S2 protocol，protocol/runtime 业务实现尚未开始。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；S2-A（protocol JSON/JCS/digest/schema 基础）已完成，S2 继续，Task/RSI 业务实现尚未开始。
 
 ## 权威入口
 
@@ -16,7 +16,7 @@ Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中�
 
 - Node `>=24.9.0`
 - pnpm `11.18.0`
-- DSH `0.2.2-alpha.2`（S1-A–S1-E 已完成真实 DSH 组合验证；下一步 S2 protocol）
+- DSH `0.2.2-alpha.2`（S1-A–S1-E 已完成真实 DSH 组合验证；S2-A protocol 基础已完成）
 
 ## 验证
 
@@ -27,13 +27,13 @@ pnpm verify
 
 `verify` 是本地与 CI 共用的唯一稳定入口，依次执行项目门禁、typecheck、lint、test 和 build：
 
-- `pnpm verify:project`：规范 digest、conformance 登记、仓库/CI 配置和架构禁用项；
-- `pnpm typecheck`：app `src` 与 `test` 的严格 TypeScript 检查；
-- `pnpm lint`：app ESLint；
-- `pnpm test`：app 宿主组合测试；
-- `pnpm build`：按根 `tsconfig.json` references 构建 app，输出 `apps/singularity/dist`。
+- `pnpm verify:project`：规范 digest、conformance 登记、仓库/CI 配置、架构禁用项与 protocol 纯度检查；
+- `pnpm typecheck`（`pnpm --recursive typecheck`）：所有 workspace 包的严格 TypeScript 检查，覆盖 app 与 protocol 的 `src`/`test`；
+- `pnpm lint`（`pnpm --recursive lint`）：所有 workspace 包的 ESLint；
+- `pnpm test`（`pnpm --recursive test`）：所有 workspace 包的测试，包括 app 宿主组合与 protocol 单元/负例；
+- `pnpm build`（`tsc -b tsconfig.json`）：按根 references 构建 app 与 protocol，输出各自 `dist`。
 
-CI 只保留一个 `verify` job。S1-A–S1-E 已完成并通过上述门禁（tests 6/6；S1-B/S1-C/S1-D/S1-E 无真实模型请求，S1-D/S1-E 仅 test-local helper）；S1 整体已完成。自动 pressure compaction/prune、失败/取消 compaction、pending/removed wake 成功恢复、provider exactly-once、resource read/template 成功内容、C-12 composition mismatch、C-16 manifest/capability precheck 与 C-20 等后续场景仍未验证；C-12/C-16/C-20 整体保持 unproven。下一步 S2 protocol；尚未实现 Task/RSI 业务功能。领域 RSI 收益需要独立证据，不能由仓库检查推断。
+CI 只保留一个 `verify` job。S1-A–S1-E 已完成；S2-A protocol 基础已完成，根 `pnpm verify` 的 project/typecheck/lint/test/build 全通过（protocol tests 49/49、app tests 6/6），`git diff --check` 通过。S2 继续，闭合 fact payload、reducer、FS/runtime 与真实模型未验证；Task/RSI 业务功能尚未实现，所有 conformance 保持 unproven。领域 RSI 收益需要独立证据，不能由仓库检查推断。
 
 ## 协作流程
 

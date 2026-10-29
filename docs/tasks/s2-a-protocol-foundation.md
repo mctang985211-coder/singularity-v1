@@ -1,5 +1,7 @@
 # S2-A 任务卡：protocol JSON、schema 与 digest 基础
 
+- **状态**：已完成；S2 继续。
+
 ## Goal
 
 建立纯 `packages/singularity/protocol`，以 zod `4.4.3` 作为对象 schema 与 TS 类型的单一来源，实现严格 JSON 文本解析、RFC 8785/JCS 规范化、冻结 digest 域与 seal/verify，为后续已冻结合同和事实提供无宿主副作用的基础。
@@ -43,4 +45,41 @@ git diff --check
 
 ## 失败证据与运行记录
 
-待首个复现和实现后填写实际命令、结果、环境与未验证项。
+### 初始红证据
+
+- JSON tests：`ERR_MODULE_NOT_FOUND`，strict JSON text parser/JCS 实现尚不存在。
+- digest tests：seal/verify 等实现缺失，测试失败。
+
+### 集成环境与门禁
+
+- Node：官方 Node `24.9.0`。
+- pnpm：`11.18.0`。
+- DSH：`0.2.2-alpha.2`（app 组合测试）。
+
+```bash
+pnpm install --frozen-lockfile
+pnpm verify
+git diff --check
+```
+
+结果：frozen install 通过；根 `pnpm verify` 的 project、typecheck、lint、test、build 全部通过；protocol tests `49/49`、app tests `6/6`；`git diff --check` 通过。
+
+### 覆盖摘要
+
+- 严格 JSON 文本入口：拒绝重复键（含转义键）、非有限数、非 JSON 值、lone surrogate、sparse/accessor/array extra property 和 plain unsafe integer；指数/小数遵循 IEEE/JCS；未新增未冻结的深度限制。
+- JCS：保留数组顺序、按 UTF-16 键排序、不做 Unicode normalization；`JSON.stringify` 只用于标量序列化，不冒充完整 JCS。
+- digest：8 个冻结 domain 使用规定前缀；seal 只移除最外层 digest，嵌套 digest 保留；篡改与错域可检测；`node:crypto` 仅用于纯 SHA-256 hash。
+- schema：zod `4.4.3` 为单一权威源；`closedObject`/`z.strictObject` 拒绝未知字段；`parseProtocolValue` 拒绝 transform/default；input/output JSON Schema 一致。
+- 静态纯度：`protocol` 的 `dependencies.zod` 固定为 `4.4.3`，无 `@deepseek-ai` 依赖；`src` 禁止 `JSON.parse`、`z.object`/`z.looseObject`、`Date.now`/`new Date`/`Math.random`/`process.`/`fetch` 及 FS/网络/进程/时钟导入；允许 `node:crypto` 纯 hash。检查只覆盖 `src`，不误伤测试与 `JSON.stringify` 标量序列化。
+
+### zod 版本
+
+集成中曾出现 MCP server/core 的 zod peer 混用；已显式固定 app devDependency `zod` `4.6.7` 与 protocol dependency `zod` `4.4.3`，不跳过检查、不删除断言。
+
+### 仍未验证
+
+- 闭合 fact payload、command guard、纯 reducer、journal/FS、runtime/DSH 业务执行；
+- 真实模型请求与领域任务；
+- 所有 conformance 场景保持 unproven；`docs/conformance.md` 与 `spec-lock.json` 未改。
+
+结论：S2-A 完成；S2 继续。

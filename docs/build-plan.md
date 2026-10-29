@@ -18,7 +18,7 @@
 - **S1-D 出口证据**：真实 DSH profile + chat fixture 验证稳定 `MessageId`：首次发送 1 请求；完成后与 resume 后 already-admitted 不新增请求/turn；raw DSH 同 ID followup 对照会第二次购买；pending/removed/unknown/corrupt 全部 fail closed；独立子进程 provider 收到 hanging 请求后 SIGKILL，父 resume 为 interrupted、无 assistant settlement/usage unknown、deliver 不重发且外部请求仍为 1。请求数以 chat fixture 实际 HTTP 计数，不用 `request/header`；仅 test-local helper，无生产 wake authority 或新账本。根 `pnpm verify` tests `5/5`；详见 `docs/tasks/s1-d-wake-delivery.md`。
 - **S1-E 出口证据**：真实 DSH profile + chat fixture 验证 self-read/preview tool result 原 receipt 为 current；dispose/resume 后 surface 仍可见，但 `session/end-seed` 改变 epoch 使 receipt stale；真实 `ctx.compaction.compactNow()` 增加恰好一次 summarizer fixture 请求，`compaction/start`/`summary`/`end` 与 `shadowedSeqs` 齐全，surface/`deriveMessages` 不含旧正文，receipt epoch+surface 双失效；`inbox.clear` 不改变 epoch/surface。helper 直接复用 `@deepseek-ai/dsh-compaction` 公开类型，无平行事件声明。根 `pnpm verify` tests `6/6`；详见 `docs/tasks/s1-e-compaction-epoch.md`。
 - **剩余未验证**：自动 pressure compaction/prune、失败/取消 compaction、pending/removed wake 成功恢复、provider exactly-once、resource read/template 成功内容、C-12 composition mismatch、C-16 manifest/capability precheck 与 C-20 等后续场景；这些不阻挡 S1 已完成的范围，但保持 unproven，C-12/C-16/C-20 整体亦未改为 proven；`docs/conformance.md` 与 `spec-lock.json` 未改。
-- **下一步**：进入 S2 protocol（类型、schema、digest 与纯 reducer）；当前不宣称 Task/RSI 业务功能已实现。
+- **下一步**：S2 protocol；S2-A（JSON/JCS/digest/schema 基础）已完成，S2 继续。
 - **规范引用**：§2、§3、§12、§14、§19.1。
 - **实现位置**：优先放在未来 runtime 的真实组合测试和 app profile，不新增独立产品包。
 - **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP `stdio` 与 `streamable-http` 挂载及 disposal、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量；两种 transport 均须通过 server/tool guard，不得只验证连接成功。
@@ -27,6 +27,9 @@
 
 ## S2 — Protocol 类型、schema、digest 与纯 reducer
 
+- **状态**：进行中，S2-A 已完成。
+- **S2-A 出口证据**：JSON/JCS/digest/schema 基础通过 protocol tests `49/49`，app 组合 tests `6/6`，根 `pnpm verify` 全通过；严格 parser、JCS、8 个 digest domain 与 closed schema 已实现。zod 固定为 protocol `4.4.3`、app dev `4.6.7`；protocol 无 `@deepseek-ai` 依赖，`src` 不访问 FS/网络/进程/时钟，仅允许 `node:crypto` 纯 hash。详见 `docs/tasks/s2-a-protocol-foundation.md`。
+- **剩余未验证**：闭合 fact payload、command guard、纯 reducer、journal/FS、runtime/DSH 业务执行与真实模型；所有 conformance 场景保持 unproven，`docs/conformance.md` 与 `spec-lock.json` 未改。
 - **规范引用**：§4、§5、§9、§10。
 - **工作**：建立 `packages/singularity/protocol`，选择单一 schema 权威源，实现冻结对象、闭合 facts、命令 guard、纯 projection、JCS/digest 和错误 union。
 - **Done when**：C-01、C-05 及 C-11 的纯协议部分有正负例；protocol 不依赖 DSH、FS、网络、进程、时钟或领域包；根 `pnpm verify` 已纳入 typecheck、lint、test、build。
