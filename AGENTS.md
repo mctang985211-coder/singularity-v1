@@ -78,14 +78,14 @@ pnpm verify
 `pnpm verify` 是唯一根门禁，依次执行：
 
 ```text
-pnpm verify:project   # node scripts/verify-project.mjs：规范、仓库、CI 与架构门禁
-pnpm typecheck        # pnpm --filter @singularity/app typecheck：tsc --noEmit，覆盖 app src 与 test
-pnpm lint             # pnpm --filter @singularity/app lint
-pnpm test             # pnpm --filter @singularity/app test
-pnpm build            # tsc -b tsconfig.json：经 references 构建 app，产出 apps/singularity/dist
+pnpm verify:project   # node scripts/verify-project.mjs：规范、仓库、CI、架构与 protocol 纯度门禁
+pnpm typecheck        # pnpm --recursive typecheck：所有 workspace 包，覆盖 src 与 test
+pnpm lint             # pnpm --recursive lint：所有 workspace 包
+pnpm test             # pnpm --recursive test：所有 workspace 包
+pnpm build            # tsc -b tsconfig.json：经 references 构建 app 与 protocol
 ```
 
-首个 TypeScript 切片已把 typecheck、lint、test 和 build 纳入同一入口。不得新增绕过根入口的 CI 检查；交付前必须运行根 `pnpm verify`，不能只运行局部测试。
+当前根入口已覆盖 app 与 protocol 的 typecheck、lint、test 和 build。不得新增绕过根入口的 CI 检查；交付前必须运行根 `pnpm verify`，不能只运行局部测试。
 
 证据按以下等级区分：
 
