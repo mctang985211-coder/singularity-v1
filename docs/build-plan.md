@@ -11,6 +11,9 @@
 
 ## S1 — DSH 0.2.2-alpha.2 宿主 spike
 
+- **状态**：进行中，S1-A 已完成。
+- **S1-A 出口证据**：真实 DSH `0.2.2-alpha.2` profile 的 fixture 与真实模型路径各通过 1/1；覆盖 create/setup/resume、首请求前 prompt/context/skill/tool 装配、restrict/guard dispatch、concludeTurn、usage 持久化、resume 无新请求和凭据未写入 DSH home。详见 `docs/tasks/s1-a-agent-composition.md`。
+- **剩余未验证**：MCP `stdio`/`streamable-http` 及 server/tool guards、失败/timeout/取消/disposal、稳定 wake/message ID 去重、compaction/context epoch receipt 失效；C-12/C-16/C-20 保持 unproven，`docs/conformance.md` 与 `spec-lock.json` 未改。
 - **规范引用**：§2、§3、§12、§14、§19.1。
 - **实现位置**：优先放在未来 runtime 的真实组合测试和 app profile，不新增独立产品包。
 - **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP `stdio` 与 `streamable-http` 挂载及 disposal、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量；两种 transport 均须通过 server/tool guard，不得只验证连接成功。
@@ -62,7 +65,7 @@
 ## 每片共同出口
 
 - PR 中的 Goal、规范引用、范围和 Done when 完整；
-- 根 `pnpm verify` 通过，包含当前已有全部检查；
+- 根 `pnpm verify` 通过，且已纳入项目门禁、typecheck、lint、test 和 build；
 - 最终 diff 无越界、第二权威或无关重构；
 - 文档、测试、证据等级和未验证项同步更新；
 - 不通过删减验收、跳过测试或缩小交付来结束切片。

@@ -1,0 +1,43 @@
+- id: sdk-app-startup
+  disabled: true
+- id: sdk-jsonrpc-server
+  disabled: true
+
+# The sdk-minimal bundle ships the official DeepSeek route. This host profile
+# replaces it with the native pi-ai adapter so the spike can target an
+# OpenAI-compatible endpoint reached through the launch environment.
+- id: llm-deepseek
+  disabled: true
+
+- insert:
+    - id: llm-pi-ai
+      name: '@deepseek-ai/dsh-llm-pi-ai'
+      config:
+        providers:
+          singularity-local:
+            apiKeyEnv: SINGULARITY_SPIKE_API_KEY
+            api: openai-completions
+            baseURL: !!js ctx.get('launchEnvironment')?.get('SINGULARITY_SPIKE_BASE_URL')?.value
+            reasoning: max
+            retryPolicy:
+              mode: normal
+              maxRetries: 0
+            compat:
+              supportsDeveloperRole: false
+              supportsReasoningEffort: true
+              supportsUsageInStreaming: true
+              supportsFinishReason: true
+              thinkingFormat: deepseek
+            models:
+              - id: deepseek-v4.1-flash
+                name: DeepSeek V4.1 Flash
+                contextWindow: 256000
+                maxTokens: 8192
+                input: [text]
+                reasoningEfforts:
+                  max: max
+
+    - id: skills
+      name: '@deepseek-ai/dsh-skill'
+    - id: tool-skill
+      name: '@deepseek-ai/dsh-tool-skill'

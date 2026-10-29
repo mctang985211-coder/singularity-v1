@@ -1,0 +1,38 @@
+{
+  "name": "@singularity/app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-sdk-minimal"
+      ]
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --test test/*.test.ts",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.6-alpha.1",
+    "@deepseek-ai/dsh": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-agent": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-app-boot": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-launch-environment": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-sdk-minimal": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-session": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-skill": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-token-meter": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-tool-skill": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-tools": "0.2.2-alpha.2"
+  }
+}
