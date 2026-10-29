@@ -168,6 +168,10 @@ function assertFinishParameters(parameters: unknown): void {
 }
 
 async function assertComposition(ctx: Context, agent: Agent, workspace: string): Promise<void> {
+  const globalTools = ctx.tools.definitions().map(definition => definition.name)
+  assert.ok(globalTools.includes('bash'), 'bash must be registered globally before restrict hides it')
+  assert.ok(globalTools.length > EXPECTED_TOOLS.length, 'restrict must remove global tools from the scoped view')
+
   const declaredTools = ctx.tools.definitions(agent).map(definition => definition.name).sort()
   assert.deepEqual(declaredTools, [...EXPECTED_TOOLS].sort())
   const schemas = ctx.tools.schemas(agent)
