@@ -548,6 +548,12 @@ void test('alpha2 MCP streamable-http keeps admission, declarations, dispatch, c
     assertSuccess(afterAbort)
     assert.equal(textOfResult(afterAbort), 'after-abort')
 
+    for (const record of requestRecords(mcpFixture.records)) {
+      if (record.rpcMethod !== null) {
+        assert.equal(record.clientHeader, CLIENT_HEADER_VALUE, 'every MCP request must carry the configured header')
+      }
+    }
+
     assert.ok(mcpFixture.openedConnections > 0, 'the fixture must have accepted real HTTP connections')
     assert.equal(requestRecords(mcpFixture.records).some(record => record.httpMethod === 'DELETE'), false)
     // Cancelled MCP responses are dropped by the protocol layer, so the HTTP
