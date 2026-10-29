@@ -7,13 +7,13 @@ import test from 'node:test'
 
 import type { Agent, AgentHandle, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
-import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ReasoningEffortId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SkillSummary } from '@deepseek-ai/dsh-skill'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 
 import { bootSpikeProfile } from '../src/host-composition.ts'
 import { startChatCompletionsFixture } from './fixtures/chat-completions.ts'
@@ -35,12 +35,18 @@ const FIXTURE_USAGE = {
   totalTokens: 140,
   cacheReadTokens: 20,
 } as const
-const PROMPT_TEXT = [
+const DIRECT_DENY_CALL_ID = 'direct-deny-spike-finish'
+const DIRECT_BASH_CALL_ID = 'direct-restricted-bash'
+const FIXTURE_PROMPT_TEXT = [
   'Run the host composition check in one tool-call batch:',
   `1. Call ${FINISH_TOOL} with message "${ALLOW_MESSAGE}".`,
   `2. Call ${FINISH_TOOL} with message "${DENY_MESSAGE}".`,
   '3. Call bash with command "printf should-not-run".',
   'Do not answer in text.',
+].join('\n')
+const LIVE_PROMPT_TEXT = [
+  `Call ${FINISH_TOOL} exactly once with message "${ALLOW_MESSAGE}" in this step.`,
+  'That tool concludes the turn; do not call any other tool and do not answer in text.',
 ].join('\n')
 
 interface CompositionState {
@@ -264,7 +270,18 @@ function finishMessage(call: ObservedToolCall): string {
   return message
 }
 
-function assertToolOutcomes(session: Session, state: CompositionState): void {
+function toolResults(session: Session) {
+  return new Map(eventsOf(session, 'tool/result').map(event => [String(event.data.message.toolCallId), event.data]))
+}
+
+function resultOf(results: ReturnType<typeof toolResults>, call: ObservedToolCall) {
+  const result = results.get(call.callId)
+  assert.ok(result, `missing tool result for ${call.name} call ${call.callId}`)
+  return result
+}
+
+/** Fixture path: one model batch carries allow, deny, and restricted bash calls. */
+function assertFixtureToolOutcomes(session: Session, state: CompositionState): void {
   const calls = observedToolCalls(session)
   assert.equal(calls.length, 3)
 
@@ -286,24 +303,19 @@ function assertToolOutcomes(session: Session, state: CompositionState): void {
   assert.ok(bashCall)
   const allowMessage = finishMessage(allowCall)
 
-  const results = new Map(eventsOf(session, 'tool/result').map(event => [String(event.data.message.toolCallId), event.data]))
+  const results = toolResults(session)
   assert.equal(results.size, 3)
-  const resultOf = (call: ObservedToolCall) => {
-    const result = results.get(call.callId)
-    assert.ok(result, `missing tool result for ${call.name} call ${call.callId}`)
-    return result
-  }
 
-  const allowed = resultOf(allowCall)
+  const allowed = resultOf(results, allowCall)
   assert.equal(allowed.message.isError, false)
   assert.equal(textOfBlocks(allowed.message.content), allowMessage)
 
-  const denied = resultOf(denyCall)
+  const denied = resultOf(results, denyCall)
   assert.equal(denied.message.isError, true)
   assert.equal(denied.error, undefined)
   assert.equal(textOfBlocks(denied.message.content), `Error: ${DENIAL_REASON}`)
 
-  const bash = resultOf(bashCall)
+  const bash = resultOf(results, bashCall)
   assert.equal(bash.message.isError, true)
   const bashError = bash.error
   assert.ok(bashError)
@@ -311,6 +323,86 @@ function assertToolOutcomes(session: Session, state: CompositionState): void {
   assert.equal(bashError.code, 'UNKNOWN_TOOL')
 
   assert.deepEqual(state.finishBodies, [allowMessage])
+}
+
+/** Live path: the model is asked for exactly one allow call and nothing else. */
+function assertLiveToolOutcomes(session: Session, state: CompositionState): void {
+  const calls = observedToolCalls(session)
+  assert.equal(calls.length, 1)
+
+  const [allowCall] = calls
+  assert.ok(allowCall)
+  assert.equal(allowCall.name, FINISH_TOOL)
+  const allowMessage = finishMessage(allowCall)
+  assert.equal(allowMessage.includes('deny'), false)
+
+  const results = toolResults(session)
+  assert.equal(results.size, 1)
+  const allowed = resultOf(results, allowCall)
+  assert.equal(allowed.message.isError, false)
+  assert.equal(textOfBlocks(allowed.message.content), allowMessage)
+
+  assert.deepEqual(state.finishBodies, [allowMessage])
+}
+
+/**
+ * Direct negatives run through the same native dispatch pipeline as a model
+ * batch, without a log step, so they must leave the session log untouched.
+ */
+async function assertDirectNegativeOutcomes(
+  ctx: Context,
+  agent: Agent,
+  state: CompositionState,
+): Promise<void> {
+  const eventsBefore = readSessionEvents(agent.session).length
+  const toolCallsBefore = eventsOf(agent.session, 'tool/call').length
+  const toolResultsBefore = eventsOf(agent.session, 'tool/result').length
+  const bodiesBefore = [...state.finishBodies]
+  const outcome = await ctx.tools.execute({
+    signal: new AbortController().signal,
+    agent,
+    calls: [
+      {
+        type: 'tool-call',
+        id: ToolCallId(DIRECT_DENY_CALL_ID),
+        name: FINISH_TOOL,
+        arguments: JSON.stringify({ message: DENY_MESSAGE }),
+      },
+      {
+        type: 'tool-call',
+        id: ToolCallId(DIRECT_BASH_CALL_ID),
+        name: 'bash',
+        arguments: JSON.stringify({ command: 'printf should-not-run' }),
+      },
+    ],
+  })
+
+  assert.equal(outcome.concluded, false)
+  assert.equal(outcome.additionalContexts.length, 0)
+  assert.equal(outcome.results.length, 2)
+
+  const results = new Map<string, ToolExecutionResult>(outcome.results.map(item => [String(item.callId), item.result]))
+  assert.equal(results.size, 2)
+
+  const denied = results.get(DIRECT_DENY_CALL_ID)
+  assert.ok(denied)
+  if (!denied.isError) assert.fail('denied spike_finish must not succeed')
+  assert.equal(denied.error.message, DENIAL_REASON)
+  assert.equal(denied.error.info, undefined)
+  assert.equal(textOfBlocks(denied.content), `Error: ${DENIAL_REASON}`)
+
+  const bash = results.get(DIRECT_BASH_CALL_ID)
+  assert.ok(bash)
+  if (!bash.isError) assert.fail('restricted bash must not dispatch')
+  const bashInfo = bash.error.info
+  assert.ok(bashInfo)
+  assert.equal(bashInfo.name, 'ToolNotFoundError')
+  assert.equal(bashInfo.code, 'UNKNOWN_TOOL')
+
+  assert.deepEqual(state.finishBodies, bodiesBefore)
+  assert.equal(readSessionEvents(agent.session).length, eventsBefore)
+  assert.equal(eventsOf(agent.session, 'tool/call').length, toolCallsBefore)
+  assert.equal(eventsOf(agent.session, 'tool/result').length, toolResultsBefore)
 }
 
 function assertWireRequest(request: CapturedChatRequest): void {
@@ -425,9 +517,10 @@ void test('alpha2 agent composition keeps declarations, dispatch, persistence, a
     assert.equal(handle.agent.status, 'idle')
     assert.equal(fixture?.requests.length ?? 0, 0)
     await assertComposition(ctx, handle.agent, workspace)
+    await assertDirectNegativeOutcomes(ctx, handle.agent, state)
 
     const prompt = createUserMessage({
-      content: [{ type: 'text', text: PROMPT_TEXT }],
+      content: [{ type: 'text', text: live ? LIVE_PROMPT_TEXT : FIXTURE_PROMPT_TEXT }],
       source: { kind: 'user' },
     })
     handle.agent.followup(prompt)
@@ -437,7 +530,8 @@ void test('alpha2 agent composition keeps declarations, dispatch, persistence, a
     assertRequestHeader(handle.agent.session)
     assertPersistedComposition(handle.agent.session)
     assertUsage(handle.agent.session, !live)
-    assertToolOutcomes(handle.agent.session, state)
+    if (live) assertLiveToolOutcomes(handle.agent.session, state)
+    else assertFixtureToolOutcomes(handle.agent.session, state)
 
     if (fixture !== undefined) {
       assert.equal(fixture.requests.length, 1)
@@ -473,6 +567,7 @@ void test('alpha2 agent composition keeps declarations, dispatch, persistence, a
     }
 
     const restoredCountAtResume = restoredHistory.length
+    await assertDirectNegativeOutcomes(ctx, resumed.agent, state)
     await resumed.agent.whenIdle()
     assert.equal(fixture?.requests.length ?? 0, requestsAtResume)
     assert.equal(readSessionEvents(resumed.agent.session).length, restoredCountAtResume)
@@ -480,7 +575,8 @@ void test('alpha2 agent composition keeps declarations, dispatch, persistence, a
     assertRequestHeader(resumed.agent.session)
     assertPersistedComposition(resumed.agent.session)
     assertUsage(resumed.agent.session, !live)
-    assertToolOutcomes(resumed.agent.session, state)
+    if (live) assertLiveToolOutcomes(resumed.agent.session, state)
+    else assertFixtureToolOutcomes(resumed.agent.session, state)
     await assertComposition(ctx, resumed.agent, workspace)
   } finally {
     disposeCreatedListener?.()
