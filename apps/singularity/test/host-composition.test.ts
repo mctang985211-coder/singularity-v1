@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { access, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -27,9 +28,6 @@ const CONTEXT_TEXT = 'Required context: scoped composition is active for this ag
 const ALLOW_MESSAGE = 'fixture-complete'
 const DENY_MESSAGE = 'deny-fixture-call'
 const DENIAL_REASON = `${FINISH_TOOL} denied by scoped guard`
-const ALLOW_CALL_ID = 'call-spike-finish-allow'
-const DENY_CALL_ID = 'call-spike-finish-deny'
-const BASH_CALL_ID = 'call-spike-bash'
 const EXPECTED_TOOLS = ['skill', FINISH_TOOL, 'working_directory'] as const
 const FIXTURE_USAGE = {
   inputTokens: 103,
@@ -238,34 +236,81 @@ function assertSingleCompletedStep(session: Session): void {
   assert.equal(turnEnd.data.reason.kind, 'completed')
 }
 
+interface ObservedToolCall {
+  readonly callId: string
+  readonly name: string
+  readonly parsedArguments: unknown
+}
+
+function parseToolArguments(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+}
+
+function observedToolCalls(session: Session): ObservedToolCall[] {
+  return eventsOf(session, 'tool/call').map(event => ({
+    callId: String(event.data.callId),
+    name: event.data.name,
+    parsedArguments: parseToolArguments(event.data.arguments),
+  }))
+}
+
+function finishMessage(call: ObservedToolCall): string {
+  const message = messageOf(call.parsedArguments)
+  if (message === undefined) assert.fail(`${FINISH_TOOL} call ${call.callId} must carry a string message`)
+  return message
+}
+
 function assertToolOutcomes(session: Session, state: CompositionState): void {
-  const calls = new Map(eventsOf(session, 'tool/call').map(event => [String(event.data.callId), event.data]))
-  assert.equal(calls.get(ALLOW_CALL_ID)?.name, FINISH_TOOL)
-  assert.equal(calls.get(DENY_CALL_ID)?.name, FINISH_TOOL)
-  assert.equal(calls.get(BASH_CALL_ID)?.name, 'bash')
+  const calls = observedToolCalls(session)
+  assert.equal(calls.length, 3)
+
+  const finishCalls = calls.filter(call => call.name === FINISH_TOOL)
+  assert.equal(finishCalls.length, 2)
+  const allowCalls = finishCalls.filter(call => !finishMessage(call).includes('deny'))
+  const denyCalls = finishCalls.filter(call => finishMessage(call).includes('deny'))
+  assert.equal(allowCalls.length, 1, 'exactly one non-denied spike_finish call is required')
+  assert.equal(denyCalls.length, 1, 'exactly one denied spike_finish call is required')
+
+  const bashCalls = calls.filter(call => call.name === 'bash')
+  assert.equal(bashCalls.length, 1, 'exactly one restricted bash call is required')
+
+  const [allowCall] = allowCalls
+  const [denyCall] = denyCalls
+  const [bashCall] = bashCalls
+  assert.ok(allowCall)
+  assert.ok(denyCall)
+  assert.ok(bashCall)
+  const allowMessage = finishMessage(allowCall)
 
   const results = new Map(eventsOf(session, 'tool/result').map(event => [String(event.data.message.toolCallId), event.data]))
+  assert.equal(results.size, 3)
+  const resultOf = (call: ObservedToolCall) => {
+    const result = results.get(call.callId)
+    assert.ok(result, `missing tool result for ${call.name} call ${call.callId}`)
+    return result
+  }
 
-  const allowed = results.get(ALLOW_CALL_ID)
-  assert.ok(allowed)
+  const allowed = resultOf(allowCall)
   assert.equal(allowed.message.isError, false)
-  assert.equal(textOfBlocks(allowed.message.content), ALLOW_MESSAGE)
+  assert.equal(textOfBlocks(allowed.message.content), allowMessage)
 
-  const denied = results.get(DENY_CALL_ID)
-  assert.ok(denied)
+  const denied = resultOf(denyCall)
   assert.equal(denied.message.isError, true)
   assert.equal(denied.error, undefined)
   assert.equal(textOfBlocks(denied.message.content), `Error: ${DENIAL_REASON}`)
 
-  const bash = results.get(BASH_CALL_ID)
-  assert.ok(bash)
+  const bash = resultOf(bashCall)
   assert.equal(bash.message.isError, true)
   const bashError = bash.error
   assert.ok(bashError)
   assert.equal(bashError.name, 'ToolNotFoundError')
   assert.equal(bashError.code, 'UNKNOWN_TOOL')
 
-  assert.deepEqual(state.finishBodies, [ALLOW_MESSAGE])
+  assert.deepEqual(state.finishBodies, [allowMessage])
 }
 
 function assertWireRequest(request: CapturedChatRequest): void {
@@ -327,9 +372,9 @@ void test('alpha2 agent composition keeps declarations, dispatch, persistence, a
         {
           reasoning: 'fixture-reasoning',
           toolCalls: [
-            { id: ALLOW_CALL_ID, name: FINISH_TOOL, arguments: JSON.stringify({ message: ALLOW_MESSAGE }) },
-            { id: DENY_CALL_ID, name: FINISH_TOOL, arguments: JSON.stringify({ message: DENY_MESSAGE }) },
-            { id: BASH_CALL_ID, name: 'bash', arguments: JSON.stringify({ command: 'printf should-not-run' }) },
+            { id: `call-allow-${randomUUID()}`, name: FINISH_TOOL, arguments: JSON.stringify({ message: ALLOW_MESSAGE }) },
+            { id: `call-deny-${randomUUID()}`, name: FINISH_TOOL, arguments: JSON.stringify({ message: DENY_MESSAGE }) },
+            { id: `call-bash-${randomUUID()}`, name: 'bash', arguments: JSON.stringify({ command: 'printf should-not-run' }) },
           ],
           usage: {
             promptTokens: 123,
