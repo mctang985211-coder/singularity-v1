@@ -1,11 +1,57 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
+/** One model response the fixture emits for a captured request. */
+export interface FixtureReply {
+  readonly reasoning?: string
+  readonly content?: string
+  readonly toolCalls?: readonly FixtureToolCall[]
+  readonly usage?: FixtureUsage
+}
+
+export interface FixtureToolCall {
+  readonly id: string
+  readonly name: string
+  readonly arguments: string
+}
+
+/** OpenAI chat-completions usage counters the adapter maps onto DSH token usage. */
+export interface FixtureUsage {
+  readonly promptTokens: number
+  readonly completionTokens: number
+  readonly totalTokens: number
+  readonly cachedTokens?: number
+  readonly reasoningTokens?: number
+}
+
+export interface WireContentPart {
+  readonly type?: string
+  readonly text?: string
+}
+
+export interface WireChatMessage {
+  readonly role?: string
+  readonly content?: string | readonly WireContentPart[] | null
+}
+
+export interface WireToolFunction {
+  readonly name?: string
+  readonly parameters?: unknown
+}
+
+export interface WireTool {
+  readonly type?: string
+  readonly function?: WireToolFunction
+}
+
+/** Parsed request body captured for assertions about the actual model request. */
 export interface CapturedChatRequest {
   readonly model?: unknown
-  readonly messages?: unknown
-  readonly tools?: unknown
+  readonly messages?: readonly WireChatMessage[]
+  readonly tools?: readonly WireTool[]
   readonly reasoning_effort?: unknown
+  readonly stream?: unknown
+  readonly stream_options?: unknown
   readonly [key: string]: unknown
 }
 
@@ -15,17 +61,97 @@ export interface ChatCompletionsFixture {
   close(): Promise<void>
 }
 
-function chunk(model: string, delta: object, finishReason: string | null = null) {
-  return `${JSON.stringify({
-    id: 'chatcmpl-singularity-spike',
+const DEFAULT_MODEL = 'deepseek-v4.1-flash'
+const COMPLETION_ID_PREFIX = 'chatcmpl-singularity-spike'
+const CREATED_AT = 1
+
+interface ChunkChoiceDelta {
+  readonly role?: 'assistant'
+  readonly content?: string | null
+  readonly reasoning_content?: string
+  readonly tool_calls?: readonly {
+    readonly index: number
+    readonly id: string
+    readonly type: 'function'
+    readonly function: {
+      readonly name: string
+      readonly arguments: string
+    }
+  }[]
+}
+
+function chunk(id: string, model: string, delta: ChunkChoiceDelta, finishReason: string | null = null): string {
+  return `data: ${JSON.stringify({
+    id,
     object: 'chat.completion.chunk',
-    created: 1,
+    created: CREATED_AT,
     model,
+    system_fingerprint: 'fp_singularity_spike',
     choices: [{ index: 0, delta, finish_reason: finishReason }],
   })}\n\n`
 }
 
-export async function startChatCompletionsFixture(): Promise<ChatCompletionsFixture> {
+function usageChunk(id: string, model: string, usage: FixtureUsage): string {
+  const promptDetails = usage.cachedTokens === undefined
+    ? {}
+    : { prompt_tokens_details: { cached_tokens: usage.cachedTokens } }
+  const completionDetails = usage.reasoningTokens === undefined
+    ? {}
+    : { completion_tokens_details: { reasoning_tokens: usage.reasoningTokens } }
+  return `data: ${JSON.stringify({
+    id,
+    object: 'chat.completion.chunk',
+    created: CREATED_AT,
+    model,
+    system_fingerprint: 'fp_singularity_spike',
+    choices: [],
+    usage: {
+      prompt_tokens: usage.promptTokens,
+      completion_tokens: usage.completionTokens,
+      total_tokens: usage.totalTokens,
+      ...promptDetails,
+      ...completionDetails,
+    },
+  })}\n\n`
+}
+
+/** Render one scripted reply as an openai-completions SSE stream. */
+function replyChunks(id: string, model: string, reply: FixtureReply): string[] {
+  const chunks: string[] = []
+  const toolCalls = reply.toolCalls ?? []
+  const first: ChunkChoiceDelta = {
+    role: 'assistant',
+    ...reply.reasoning === undefined ? {} : { reasoning_content: reply.reasoning },
+    ...reply.content === undefined ? {} : { content: reply.content },
+    ...reply.content === undefined && toolCalls.length === 0 && reply.reasoning === undefined
+      ? { content: '' }
+      : {},
+  }
+  chunks.push(chunk(id, model, first))
+  if (toolCalls.length > 0) {
+    chunks.push(chunk(id, model, {
+      tool_calls: toolCalls.map((toolCall, index) => ({
+        index,
+        id: toolCall.id,
+        type: 'function',
+        function: { name: toolCall.name, arguments: toolCall.arguments },
+      })),
+    }))
+    chunks.push(chunk(id, model, {}, 'tool_calls'))
+  } else {
+    chunks.push(chunk(id, model, {}, 'stop'))
+  }
+  if (reply.usage !== undefined) chunks.push(usageChunk(id, model, reply.usage))
+  return chunks
+}
+
+/**
+ * Local openai-completions endpoint. Replies are scripted per request index and
+ * every parsed request is retained so tests can assert the actual wire request.
+ */
+export async function startChatCompletionsFixture(
+  replies: readonly FixtureReply[],
+): Promise<ChatCompletionsFixture> {
   const requests: CapturedChatRequest[] = []
   const server = createServer((request, response) => {
     if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
@@ -36,49 +162,24 @@ export async function startChatCompletionsFixture(): Promise<ChatCompletionsFixt
     request.setEncoding('utf8')
     request.on('data', (part: string) => { body += part })
     request.on('end', () => {
-      const parsed = JSON.parse(body) as CapturedChatRequest
+      let parsed: CapturedChatRequest
+      try {
+        parsed = JSON.parse(body) as CapturedChatRequest
+      } catch {
+        response.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid JSON"}')
+        return
+      }
+      const index = requests.length
       requests.push(parsed)
-      const model = typeof parsed.model === 'string' ? parsed.model : 'deepseek-v4.1-flash'
+      const model = typeof parsed.model === 'string' ? parsed.model : DEFAULT_MODEL
+      const id = `${COMPLETION_ID_PREFIX}-${String(index + 1)}`
+      const reply = replies[index] ?? { content: `unexpected request ${String(index + 1)}` }
       response.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-cache',
+        connection: 'keep-alive',
       })
-      if (requests.length === 1) {
-        response.write(`data: ${chunk(model, {
-          role: 'assistant',
-          content: null,
-          tool_calls: [{
-            index: 0,
-            id: 'call-spike-finish',
-            type: 'function',
-            function: { name: 'spike_finish', arguments: '' },
-          }],
-        })}`)
-        response.write(`data: ${chunk(model, {
-          tool_calls: [{
-            index: 0,
-            function: { arguments: '{"message":"fixture-complete"}' },
-          }],
-        })}`)
-        response.write(`data: ${chunk(model, {}, 'tool_calls')}`)
-      } else {
-        response.write(`data: ${chunk(model, { role: 'assistant', content: 'unexpected second request' }, 'stop')}`)
-      }
-      response.write(`data: ${JSON.stringify({
-        id: 'chatcmpl-singularity-spike',
-        object: 'chat.completion.chunk',
-        created: 1,
-        model,
-        choices: [],
-        usage: {
-          prompt_tokens: 123,
-          completion_tokens: 17,
-          total_tokens: 140,
-          prompt_cache_hit_tokens: 20,
-          prompt_cache_miss_tokens: 103,
-          completion_tokens_details: { reasoning_tokens: 7 },
-        },
-      })}\n\n`)
+      for (const data of replyChunks(id, model, reply)) response.write(data)
       response.end('data: [DONE]\n\n')
     })
   })
@@ -88,9 +189,10 @@ export async function startChatCompletionsFixture(): Promise<ChatCompletionsFixt
   })
   const address = server.address() as AddressInfo
   return {
-    baseURL: `http://127.0.0.1:${address.port}/v1`,
+    baseURL: `http://127.0.0.1:${String(address.port)}/v1`,
     requests,
     async close() {
+      server.closeAllConnections()
       await new Promise<void>((resolve, reject) => {
         server.close(error => { if (error) reject(error); else resolve() })
       })
