@@ -42,26 +42,30 @@ const verifySteps = ['verify:project', 'typecheck', 'lint', 'test', 'build']
 const expectedVerify = verifySteps.map(step => `pnpm ${step}`).join(' && ')
 check(manifest.scripts?.verify === expectedVerify, `pnpm verify must run ${verifySteps.join(', ')} in order`)
 check(manifest.scripts?.['verify:project'] === 'node scripts/verify-project.mjs', 'verify:project must execute scripts/verify-project.mjs')
-check(manifest.scripts?.typecheck === 'pnpm --filter @singularity/app typecheck', 'typecheck must execute the app TypeScript check')
-check(manifest.scripts?.lint === 'pnpm --filter @singularity/app lint', 'lint must execute the app lint command')
-check(manifest.scripts?.test === 'pnpm --filter @singularity/app test', 'test must execute the app test command')
+check(manifest.scripts?.typecheck === 'pnpm --recursive typecheck', 'typecheck must execute every workspace TypeScript check')
+check(manifest.scripts?.lint === 'pnpm --recursive lint', 'lint must execute every workspace lint command')
+check(manifest.scripts?.test === 'pnpm --recursive test', 'test must execute every workspace test command')
 check(manifest.scripts?.build === 'tsc -b tsconfig.json', 'build must build the referenced TypeScript projects')
 
-const appManifest = JSON.parse(await text('apps/singularity/package.json'))
-for (const step of ['typecheck', 'lint', 'test', 'build']) {
-  check(typeof appManifest.scripts?.[step] === 'string', `@singularity/app must define the ${step} script`)
+for (const packageDirectory of ['apps/singularity', 'packages/singularity/protocol']) {
+  const packageManifest = JSON.parse(await text(`${packageDirectory}/package.json`))
+  for (const step of ['typecheck', 'lint', 'test', 'build']) {
+    check(typeof packageManifest.scripts?.[step] === 'string', `${packageDirectory} must define the ${step} script`)
+  }
+  const packageTsconfig = JSON.parse(await text(`${packageDirectory}/tsconfig.json`))
+  check(packageTsconfig.compilerOptions?.strict === true, `${packageDirectory} typecheck must enable strict mode`)
+  check(packageTsconfig.compilerOptions?.noEmit === true, `${packageDirectory} typecheck project must not emit`)
+  check(packageTsconfig.include?.includes('src/**/*.ts') && packageTsconfig.include?.includes('test/**/*.ts'), `${packageDirectory} typecheck must include src and test`)
+  const packageBuildTsconfig = JSON.parse(await text(`${packageDirectory}/tsconfig.build.json`))
+  check(packageBuildTsconfig.compilerOptions?.composite === true, `${packageDirectory} build project must be composite`)
+  check(packageBuildTsconfig.compilerOptions?.rootDir === 'src', `${packageDirectory} build rootDir must be src`)
+  check(packageBuildTsconfig.compilerOptions?.outDir === 'dist', `${packageDirectory} build outDir must be dist`)
+  check(packageBuildTsconfig.include?.length === 1 && packageBuildTsconfig.include[0] === 'src/**/*.ts', `${packageDirectory} build must include only src`)
 }
-const appTsconfig = JSON.parse(await text('apps/singularity/tsconfig.json'))
-check(appTsconfig.compilerOptions?.strict === true, 'app typecheck must enable strict mode')
-check(appTsconfig.compilerOptions?.noEmit === true, 'app typecheck project must not emit')
-check(appTsconfig.include?.includes('src/**/*.ts') && appTsconfig.include?.includes('test/**/*.ts'), 'app typecheck must include src and test')
-const appBuildTsconfig = JSON.parse(await text('apps/singularity/tsconfig.build.json'))
-check(appBuildTsconfig.compilerOptions?.composite === true, 'app build project must be composite')
-check(appBuildTsconfig.compilerOptions?.rootDir === 'src', 'app build rootDir must be src')
-check(appBuildTsconfig.compilerOptions?.outDir === 'dist', 'app build outDir must be dist')
-check(appBuildTsconfig.include?.length === 1 && appBuildTsconfig.include[0] === 'src/**/*.ts', 'app build must include only src')
 const rootTsconfig = JSON.parse(await text('tsconfig.json'))
-check(rootTsconfig.references?.some(reference => reference.path === 'apps/singularity/tsconfig.build.json'), 'root tsconfig must reference the app build project')
+for (const buildPath of ['apps/singularity/tsconfig.build.json', 'packages/singularity/protocol/tsconfig.build.json']) {
+  check(rootTsconfig.references?.some(reference => reference.path === buildPath), `root tsconfig must reference ${buildPath}`)
+}
 
 const lock = JSON.parse(await text('spec-lock.json'))
 check(lock.version === '1.0', 'spec-lock version must be 1.0')
