@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent, AgentHandle, AgentOptions } from '@deepseek-ai/dsh-agent'
+import type { AgentHandle, AgentOptions } from '@deepseek-ai/dsh-agent'
+import type { CompactionEngine } from '@deepseek-ai/dsh-compaction'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, Message } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -39,18 +40,6 @@ const INITIAL_PROMPT = [
   `Call ${SELF_READ_TOOL} and ${PREVIEW_TOOL} in one tool-call batch.`,
   'Do not answer in text in this step.',
 ].join('\n')
-
-interface CompactionResultLike {
-  readonly compactionId: string
-  readonly startSeq: SessionSeq
-  readonly summarySeq: SessionSeq
-  readonly endSeq: SessionSeq
-  readonly shadowedSeqs: readonly SessionSeq[]
-}
-
-interface CompactionServiceLike {
-  compactNow(agent: Agent, signal: AbortSignal): Promise<CompactionResultLike | null>
-}
 
 type EventOf<T extends SessionEvent['type']> = Extract<SessionEvent, { type: T }>
 
@@ -134,19 +123,6 @@ function scriptedReplies(selfCallId: string, previewCallId: string): readonly Fi
     { content: 'Self-read and preview tool results are persisted.' },
     { content: SUMMARY_CONTENT },
   ]
-}
-
-/**
- * Read the profile-mounted `ctx.compaction` service. The app does not depend on
- * the compaction package, so the test supplies the minimal structural face it
- * invokes instead of importing the DSH implementation type.
- */
-function requireCompaction(ctx: Context): CompactionServiceLike {
-  const service: unknown = (ctx as Context & { readonly compaction?: unknown }).compaction
-  if (typeof service !== 'object' || service === null || !('compactNow' in service) || typeof service.compactNow !== 'function') {
-    throw new Error('the DSH profile must expose ctx.compaction')
-  }
-  return service as unknown as CompactionServiceLike
 }
 
 void test('alpha2 compaction invalidates context-epoch receipts on resume and surface replacement', { timeout: 180_000 }, async () => {
@@ -263,7 +239,7 @@ void test('alpha2 compaction invalidates context-epoch receipts on resume and su
     assert.deepEqual([...resumedSession.surface.nodes], surfaceBeforeClear, 'inbox.clear must not change the surface')
     assert.equal(evaluateContextEpochReceipt(resumedSession, selfReceipt).current, false)
 
-    const compaction = requireCompaction(ctx)
+    const compaction: CompactionEngine = ctx.compaction
     const requestsBeforeCompaction = fixture.requests.length
     const epochBeforeCompaction = deriveContextEpoch(resumedSession)
     const result = await compaction.compactNow(resumed.agent, new AbortController().signal)

@@ -1,37 +1,8 @@
 import { createHash } from 'node:crypto'
 
+// Load the public SessionEventMap augmentation owned by dsh-compaction.
+import type {} from '@deepseek-ai/dsh-compaction'
 import type { Session, SessionEvent, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
-
-/**
- * Test-local projection of the compaction lifecycle events mounted by the DSH
- * profile. The app does not take a direct dependency on
- * `@deepseek-ai/dsh-compaction`, so this augmentation exposes only the fields
- * this helper inspects; the DSH package remains the runtime type authority.
- */
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    'compaction/start': {
-      compactionId: string
-      sourceCommandId?: string
-      turn: number | null
-    }
-    'compaction/summary': {
-      compactionId: string
-      sourceCommandId?: string
-      shadowedSeqs: SessionSeq[]
-      shadowedRange: {
-        start: SessionSeq
-        end: SessionSeq
-      }
-    }
-    'compaction/end': {
-      compactionId: string
-      sourceCommandId?: string
-      turn: number | null
-      error?: string
-    }
-  }
-}
 
 /**
  * Test-local deterministic context-epoch identity.

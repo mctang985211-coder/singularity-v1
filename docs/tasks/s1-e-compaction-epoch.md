@@ -21,6 +21,7 @@
 - `docs/tasks/s1-e-compaction-epoch.md`
 - `apps/singularity/test/helpers/context-epoch.ts`
 - `apps/singularity/test/compaction-epoch.test.ts`
+- `apps/singularity/package.json` 与 `pnpm-lock.yaml`：仅新增当前消费者需要的直接 dependency `@deepseek-ai/dsh-compaction@0.2.2-alpha.2` 及其 lock 记录。
 - 确有必要时新增独立 fixture 文件；本片段复用现有 `test/fixtures/chat-completions.ts`，未新增 fixture，也未修改其他现有文件。
 
 ## 非目标
@@ -28,7 +29,7 @@
 - 不实现 production runtime 的 epoch 服务、receipt 存储、compaction 策略或第二 writer/journal/transcript/model loop/registry。
 - 不实现或声称自动 pressure compaction、tool-result pruning、context-overflow recovery。
 - 不把 fixture summarizer 结果表述为真实模型证据。
-- 不修改 DSH、`docs/framework.md`、`docs/build-plan.md`、`README.md`、`docs/conformance.md`、`spec-lock.json` 或根门禁；不需要 amendment。
+- 不修改 DSH、`docs/framework.md`、`docs/build-plan.md`、`README.md`、`docs/conformance.md`、`spec-lock.json` 或根门禁；除 `@deepseek-ai/dsh-compaction` 直接依赖及其 lock 记录外不改变依赖；不需要 amendment。
 - 不把 `request/header` 事件数量当作模型请求数；请求数只读取 chat fixture 实际收到的 HTTP 请求。
 
 ## Test-local 设计
@@ -52,6 +53,10 @@
 ```
 
 `digest` 是 test-local 事件内容摘要。`evaluateContextEpochReceipt(session, receipt)` 同时检查 session identity、epoch、event digest 和当前 surface membership；`current` 只在四项全部成立时为 true。raw log 里仍能用 `snapshotEvents()` 找到源事件，但源事件已被 compaction replacement shadow 时，`eventExists`/`digestMatches` 可以为 true，而 `surfaceMember` 与 `current` 必须为 false。
+
+### 类型权威
+
+`@deepseek-ai/dsh-compaction@0.2.2-alpha.2` 是 app 的直接 dependency。helper 用 `import type {} from '@deepseek-ai/dsh-compaction'` 加载该包公开的 `SessionEventMap` augmentation；测试直接用公开 `CompactionEngine` 类型读取 `ctx.compaction` 并调用 `compactNow`，结果形状由公开 `CompactionResult` 推导。仓库内没有本地 `declare module`、平行 compaction event 形状或 structural service interface。
 
 ## Done when
 
@@ -115,14 +120,15 @@ PATH=/tmp/node249/bin:$PATH HOME=<worktree>/.tmp/home node --test test/compactio
 - session log 恰好出现各 1 条同一 `compactionId` 的 `compaction/start`、`compaction/summary`、无 `error` 的 `compaction/end`；`shadowedSeqs` 同时包含 self-read 与 preview 的源 seq。
 - compaction 后两个源事件仍在 raw log，但不在当前 surface；`deriveMessages()` 不再包含两个旧正文 marker；两个 receipt 均为 `epochMatches=false, surfaceMember=false, current=false`（双失效）。
 
-类型与 lint：
+依赖与类型、lint：
 
 ```bash
+PATH=/tmp/node249/bin:$PATH HOME=<worktree>/.tmp/home pnpm install --frozen-lockfile --store-dir=<worktree>/.tmp/pnpm-store
 PATH=/tmp/node249/bin:$PATH HOME=<worktree>/.tmp/home pnpm --filter @singularity/app typecheck
 PATH=/tmp/node249/bin:$PATH HOME=<worktree>/.tmp/home pnpm --filter @singularity/app lint
 ```
 
-结果：均通过。
+结果：`pnpm install --frozen-lockfile` 通过且 lockfile up to date；typecheck、lint 均通过。`@deepseek-ai/dsh-compaction` 由 app 直接引用公开类型与 `SessionEventMap` augmentation，未保留本地事件形状或 structural service interface。
 
 根门禁：
 
@@ -135,7 +141,7 @@ git diff --check
 
 ### 范围核对
 
-只新增本任务卡、`apps/singularity/test/helpers/context-epoch.ts` 与 `apps/singularity/test/compaction-epoch.test.ts`；未修改现有测试、fixture、app 源码、profile、规范、build-plan、README、conformance、spec-lock 或 lockfile，未新增 fixture 文件。父 checkout 未修改。
+只新增本任务卡、`apps/singularity/test/helpers/context-epoch.ts` 与 `apps/singularity/test/compaction-epoch.test.ts`，并在 `apps/singularity/package.json`/`pnpm-lock.yaml` 增加 `@deepseek-ai/dsh-compaction@0.2.2-alpha.2` 直接依赖；未修改现有测试、fixture、app 源码、profile、规范、build-plan、README、conformance 或 spec-lock，未新增 fixture 文件。父 checkout 未修改。
 
 ### 仍未验证
 
