@@ -7,10 +7,16 @@
     "node": ">=24.9.0"
   },
   "scripts": {
-    "verify": "node scripts/verify-project.mjs"
+    "verify": "pnpm verify:project && pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "verify:project": "node scripts/verify-project.mjs",
+    "typecheck": "pnpm --filter @singularity/app typecheck",
+    "lint": "pnpm --filter @singularity/app lint",
+    "test": "pnpm --filter @singularity/app test",
+    "build": "tsc -b tsconfig.json"
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",
+    "@types/js-yaml": "4.0.9",
     "@types/node": "24.10.1",
     "eslint": "9.39.1",
     "typescript": "5.9.3",

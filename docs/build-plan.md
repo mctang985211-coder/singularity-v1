@@ -11,6 +11,7 @@
 
 ## S1 — DSH 0.2.2-alpha.2 宿主 spike
 
+- **状态**：进行中。S1-A（DSH alpha2 Agent composition）已建立根 TypeScript/验证工具链和宿主组合测试入口；Agent composition、transport、wake、compaction、取消等证据仍以实际运行结果为准，S1 未完成。
 - **规范引用**：§2、§3、§12、§14、§19.1。
 - **实现位置**：优先放在未来 runtime 的真实组合测试和 app profile，不新增独立产品包。
 - **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP `stdio` 与 `streamable-http` 挂载及 disposal、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量；两种 transport 均须通过 server/tool guard，不得只验证连接成功。
@@ -62,7 +63,7 @@
 ## 每片共同出口
 
 - PR 中的 Goal、规范引用、范围和 Done when 完整；
-- 根 `pnpm verify` 通过，包含当前已有全部检查；
+- 根 `pnpm verify` 通过，且已纳入项目门禁、typecheck、lint、test 和 build；
 - 最终 diff 无越界、第二权威或无关重构；
 - 文档、测试、证据等级和未验证项同步更新；
 - 不通过删减验收、跳过测试或缩小交付来结束切片。

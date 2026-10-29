@@ -38,7 +38,30 @@ check(major > 24 || (major === 24 && minor >= 9), `Node >=24.9.0 is required, fo
 const manifest = JSON.parse(await text('package.json'))
 check(manifest.packageManager === 'pnpm@11.18.0', 'packageManager must be pnpm@11.18.0')
 check(manifest.engines?.node === '>=24.9.0', 'package.json must declare Node >=24.9.0')
-check(manifest.scripts?.verify === 'node scripts/verify-project.mjs', 'pnpm verify must use scripts/verify-project.mjs')
+const verifySteps = ['verify:project', 'typecheck', 'lint', 'test', 'build']
+const expectedVerify = verifySteps.map(step => `pnpm ${step}`).join(' && ')
+check(manifest.scripts?.verify === expectedVerify, `pnpm verify must run ${verifySteps.join(', ')} in order`)
+check(manifest.scripts?.['verify:project'] === 'node scripts/verify-project.mjs', 'verify:project must execute scripts/verify-project.mjs')
+check(manifest.scripts?.typecheck === 'pnpm --filter @singularity/app typecheck', 'typecheck must execute the app TypeScript check')
+check(manifest.scripts?.lint === 'pnpm --filter @singularity/app lint', 'lint must execute the app lint command')
+check(manifest.scripts?.test === 'pnpm --filter @singularity/app test', 'test must execute the app test command')
+check(manifest.scripts?.build === 'tsc -b tsconfig.json', 'build must build the referenced TypeScript projects')
+
+const appManifest = JSON.parse(await text('apps/singularity/package.json'))
+for (const step of ['typecheck', 'lint', 'test', 'build']) {
+  check(typeof appManifest.scripts?.[step] === 'string', `@singularity/app must define the ${step} script`)
+}
+const appTsconfig = JSON.parse(await text('apps/singularity/tsconfig.json'))
+check(appTsconfig.compilerOptions?.strict === true, 'app typecheck must enable strict mode')
+check(appTsconfig.compilerOptions?.noEmit === true, 'app typecheck project must not emit')
+check(appTsconfig.include?.includes('src/**/*.ts') && appTsconfig.include?.includes('test/**/*.ts'), 'app typecheck must include src and test')
+const appBuildTsconfig = JSON.parse(await text('apps/singularity/tsconfig.build.json'))
+check(appBuildTsconfig.compilerOptions?.composite === true, 'app build project must be composite')
+check(appBuildTsconfig.compilerOptions?.rootDir === 'src', 'app build rootDir must be src')
+check(appBuildTsconfig.compilerOptions?.outDir === 'dist', 'app build outDir must be dist')
+check(appBuildTsconfig.include?.length === 1 && appBuildTsconfig.include[0] === 'src/**/*.ts', 'app build must include only src')
+const rootTsconfig = JSON.parse(await text('tsconfig.json'))
+check(rootTsconfig.references?.some(reference => reference.path === 'apps/singularity/tsconfig.build.json'), 'root tsconfig must reference the app build project')
 
 const lock = JSON.parse(await text('spec-lock.json'))
 check(lock.version === '1.0', 'spec-lock version must be 1.0')
