@@ -75,6 +75,9 @@ importers:
         specifier: 0.2.2-alpha.2
         version: 0.2.2-alpha.2(d570a50fd9051dfa7084c71da173b036)
     devDependencies:
+      '@modelcontextprotocol/node':
+        specifier: 2.0.0
+        version: 2.0.0(@modelcontextprotocol/server@2.2.0)(hono@4.13.14)
       '@modelcontextprotocol/server':
         specifier: 2.2.0
         version: 2.2.0
@@ -2939,6 +2942,12 @@ packages:
       '@modelcontextprotocol/sdk':
         optional: true
 
+  '@hono/node-server@1.19.17':
+    resolution: {integrity: sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: ^4
+
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
     engines: {node: '>=18.18.0'}
@@ -3216,6 +3225,16 @@ packages:
   '@modelcontextprotocol/core@2.2.0':
     resolution: {integrity: sha512-iLhmprRmWI8EcosOA3wVvww22z02NkgqhV4fBH6f/odQBsi7xnJc0HGmi21yWO+/iKw2yzqVE127Zhna5/+JXw==}
     engines: {node: '>=20'}
+
+  '@modelcontextprotocol/node@2.0.0':
+    resolution: {integrity: sha512-Y4hAC2XdGDUdDOCbLDOCA4+aL3NUldjsOWlDL/YwpAxrPhRm1xHd7lZ+mLacvZ9t3PaH28wgNoaLQGrIk1P2pg==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.0.0
+      hono: ^4.11.4
+    peerDependenciesMeta:
+      hono:
+        optional: true
 
   '@modelcontextprotocol/server@2.2.0':
     resolution: {integrity: sha512-qFnltjus6Gk8Lx6J1w2RXmr3YPN22MNT6qD6zjAkaiWIlFIFxWClz0rXHNuJF/KSUyn5YGhkSvXkWDbQHVLFEQ==}
@@ -3890,6 +3909,10 @@ packages:
   has-flag@4.0.0:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
     engines: {node: '>=8'}
+
+  hono@4.13.14:
+    resolution: {integrity: sha512-yhRLQ21U6qa9Hsu2N7Qcbh8tE+WKEcoErjIo56LeSGiGXGp9sA7UpE86Ui9uexb61KakiGwuHMn2QdV7w6i6kQ==}
+    engines: {node: '>=16.9.0'}
 
   hosted-git-info@9.0.3:
     resolution: {integrity: sha512-Hc+ghLoSt6QaYZUv0WBiIvmMDZuZZ7oaDvdH8MbfOO4lOsxdXLEvuC6ePoGs9H1X9oCLyq6+NVN0MKqD+ydxyg==}
@@ -8572,6 +8595,10 @@ snapshots:
       - supports-color
       - utf-8-validate
 
+  '@hono/node-server@1.19.17(hono@4.13.14)':
+    dependencies:
+      hono: 4.13.14
+
   '@humanfs/core@0.19.2':
     dependencies:
       '@humanfs/types': 0.15.0
@@ -8762,6 +8789,13 @@ snapshots:
   '@modelcontextprotocol/core@2.2.0':
     dependencies:
       zod: 4.6.7
+
+  '@modelcontextprotocol/node@2.0.0(@modelcontextprotocol/server@2.2.0)(hono@4.13.14)':
+    dependencies:
+      '@hono/node-server': 1.19.17(hono@4.13.14)
+      '@modelcontextprotocol/server': 2.2.0
+    optionalDependencies:
+      hono: 4.13.14
 
   '@modelcontextprotocol/server@2.2.0':
     dependencies:
@@ -9481,6 +9515,8 @@ snapshots:
   graphemer@1.4.0: {}
 
   has-flag@4.0.0: {}
+
+  hono@4.13.14: {}
 
   hosted-git-info@9.0.3:
     dependencies:
