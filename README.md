@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1-A（DSH alpha2 宿主 composition）、S1-B（DSH 原生 MCP stdio）与 S1-C（DSH 原生 MCP streamable-http）已完成；S1 其余宿主能力仍在推进，protocol/runtime 业务实现尚未开始。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1-A（DSH alpha2 宿主 composition）、S1-B（DSH 原生 MCP stdio）、S1-C（DSH 原生 MCP streamable-http）与 S1-D（DSH 稳定 wake 去重）已完成；S1 其余宿主能力仍在推进，protocol/runtime 业务实现尚未开始。
 
 ## 权威入口
 
@@ -16,7 +16,7 @@ Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中�
 
 - Node `>=24.9.0`
 - pnpm `11.18.0`
-- DSH `0.2.2-alpha.2`（S1-A/S1-B/S1-C 已完成真实 DSH 组合验证；S1 其余能力进行中）
+- DSH `0.2.2-alpha.2`（S1-A/S1-B/S1-C/S1-D 已完成真实 DSH 组合验证；S1 其余能力进行中）
 
 ## 验证
 
@@ -33,7 +33,7 @@ pnpm verify
 - `pnpm test`：app 宿主组合测试；
 - `pnpm build`：按根 `tsconfig.json` references 构建 app，输出 `apps/singularity/dist`。
 
-CI 只保留一个 `verify` job。S1-A、S1-B 与 S1-C 已完成并通过上述门禁（S1-A fixture/真实模型与 S1-B stdio/S1-C streamable-http fixture 均通过，tests 3/3；S1-B/S1-C 无真实模型请求）；S1 整体仍在进行，resource read/template 成功内容、wake 去重、compaction/context epoch 与 C-16 整体仍未验证（C-12/C-16/C-20 保持 unproven）。领域 RSI 收益需要独立证据，不能由仓库检查推断。
+CI 只保留一个 `verify` job。S1-A、S1-B、S1-C 与 S1-D 已完成并通过上述门禁（S1-A fixture/真实模型与 S1-B stdio/S1-C streamable-http/S1-D wake fixture 均通过，tests 5/5；S1-B/S1-C/S1-D 无真实模型请求，S1-D 仅 test-local helper、无生产 wake authority 或新账本）；S1 整体仍在进行，resource read/template 成功内容、provider exactly-once、pending/removed 成功恢复、compaction/context epoch 与 C-16 整体仍未验证（C-12/C-16/C-20 保持 unproven）。领域 RSI 收益需要独立证据，不能由仓库检查推断。
 
 ## 协作流程
 
