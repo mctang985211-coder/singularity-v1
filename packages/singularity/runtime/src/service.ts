@@ -17,6 +17,7 @@ import type {
   FactPayloadMap,
   FactType,
   NormalizedCommand,
+  Ref,
   UnsealedFact,
 } from '@singularity/protocol'
 
@@ -252,6 +253,36 @@ export class CommandService {
       })
       return fact
     })
+  }
+
+  /**
+   * Writes one supporting CAS object through this single writer's store.
+   * Objects are immutable and content-addressed; this never appends a fact.
+   */
+  putObject(
+    id: string,
+    bytes: Uint8Array,
+    domain: CasDigestDomain = 'object',
+  ): Promise<Ref> {
+    if (this.closed || this.closing) {
+      return Promise.reject(
+        new CommandServiceError('INVALID_ARGUMENT', 'CommandService is closed'),
+      )
+    }
+    return this.store.putObject(id, bytes, domain)
+  }
+
+  /** Reads and re-verifies one CAS object without exposing a writable store. */
+  readObject(
+    ref: Ref,
+    domain: CasDigestDomain = 'object',
+  ): Promise<{ readonly bytes: Uint8Array }> {
+    if (this.closed) {
+      return Promise.reject(
+        new CommandServiceError('INVALID_ARGUMENT', 'CommandService is closed'),
+      )
+    }
+    return this.store.readObject(ref, domain)
   }
 
   /** Waits for queued commits and closes the underlying store. */
