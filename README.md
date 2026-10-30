@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；S2-A（protocol JSON/JCS/digest/schema 基础）、S2-B（Task+Method schema、seal 与 tool errors）、S2-C1（获批闭合 fact payload）、S2-C2（pure command/journal replay）、S2-C3（纯 root/child admission）与 S2-C4（纯 Task/Run reducer）已完成，S2 完成；S3-A（单 writer journal 与 CAS）、PlanningSketch schema、S3-B1 acceptance/submission schema、S3-B2 单 Run 执行闭环与 S3-C runtime fresh retry/resume 恢复已完成。C-02 已由真实 DSH + 真实模型证据标为 proven；C-03/C-11/C-12 保持 unproven。下一真实模型 retry/resume 证据与 S3 其余切片，Task/RSI 业务实现尚未开始。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。S1 与 S2 已完成；S3 已实现单 Run、CAS/journal 和恢复，当前修正覆盖状态、路径、验收身份及单 Agent 预算，但 S3 整体仍未完成。C-02 已有真实 DSH + 真实模型证据；C-03/C-11/C-12 保持 unproven。child、RSI 和领域改进尚未实现。
 
 ## 权威入口
 
@@ -33,7 +33,9 @@ pnpm verify
 - `pnpm lint`（`pnpm --recursive lint`）：所有 workspace 包的 ESLint；
 - `pnpm test`（`pnpm --recursive test`）：所有 workspace 包的测试，包括 app 宿主组合、protocol 单元/负例与 runtime 存储测试。
 
-CI 只保留一个 `verify` job。S1-A–S1-E 与 S2（S2-A–S2-C4）已完成；S3-A、PlanningSketch schema、S3-B1、S3-B2 与 S3-C runtime retry/resume + app 恢复集成已完成。frozen install 与根 `pnpm verify` 全通过（protocol tests 225/225、app tests 15/15、runtime tests 54/54，合计 294），`git diff --check` 通过；spec digest 以 `spec-lock.json` 为准。S3-B2 的 5 个 DSH 场景覆盖 verified、no-submission、invalid criterion、verifier timeout、symlink；真实模型使用 `http://127.0.0.1:16660/v1`、`deepseek-v4.1-flash`、`reasoning=max`，live verified 通过，Evidence digest `sha256:2cf1acd25b5f46ca5289bab9ccb238502b36d52bc195a7944b3c49bfcd059ec4`。verifier 只读 CAS，workspace 被篡改仍读冻结 bytes；self-read/plan/bash/submit、稳定 wake、fact 顺序、manifest/receipt/usage/sessionCut 均验证；无提交与 invalid 不冒充 Evidence。S3-C runtime 增加 fresh retry、完整 Composition 比较的 resume mismatch（零 Agent/模型请求）、真实 `agents.resume` 稳定 wake 去重与提交后同 CAS snapshot/operationId 恢复；app 集成 4 个真实 DSH fixture 场景通过，但未升级 conformance。C-02 已标为 proven；C-03/C-11/C-12 保持 unproven（C-03 尚无真实模型 fresh retry，C-11 尚无完整 replay/CAS domain-aware 证据，C-12 尚无真实模型 composition mismatch 实跑）。下一真实模型 retry/resume 证据。领域 RSI 收益需要独立证据，不能由仓库检查推断。
+CI 只保留一个 `verify` job。S3-C 已有 fresh retry、完整 Composition 比较、稳定 wake 去重及提交后 CAS 恢复的 DSH fixture；CAS domain-aware 校验已有正负例，C-11 完整重放符合性仍未证明。本轮状态/路径/验收身份/预算与 deadline 修正及检查证据见 [`docs/tasks/s3-minimal-corrections.md`](docs/tasks/s3-minimal-corrections.md)。C-02 的既有真实模型证据见 [`docs/tasks/s3-b2-single-run.md`](docs/tasks/s3-b2-single-run.md)；本轮没有购买模型请求或升级 conformance。
+
+当前 profile 关闭自动 compaction，避免尚未预留的独立 summarizer 请求绕过 Task 预算。普通请求使用 DSH 原生 hook，并按 route 声明的完整上下文容量保守预留；缺失容量、剩余不足或 usage 未知时停止购买。模型仅看到预算百分比。自动压缩计量、不可停止作业的 quarantine、完整取消 drain 与实际配置的 Composition 来源核对仍需 S3 后续切片。
 
 ## 协作流程
 

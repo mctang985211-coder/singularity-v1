@@ -42,5 +42,5 @@ pnpm verify
 
 - Both regression tests failed before the fix and passed afterward.
 - Node `24.22.2` frozen install passed; runtime tests passed `56/56`; runtime lint passed.
-- Typecheck reports only the expected missing `checkBudget` at the run owner's construction site. The run owner will wire the callback and run the root `pnpm verify` gate after integration.
+- Integration supplies the exact `checkBudget` callback at the run owner's construction site. Root `pnpm verify` passes build, typecheck, lint and all tests; final totals and remaining S3 boundaries are recorded in `s3-minimal-corrections.md`.
 - These are fixture/unit checks, not real-model or domain RSI evidence.
