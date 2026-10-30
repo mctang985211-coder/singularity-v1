@@ -819,11 +819,11 @@ void test('fact helpers seal a verifiable chain before replay validation', () =>
 void test('replay rejects a sealed manifest whose file or tree leaf is missing', async t => {
   for (const kind of ['file', 'tree'] as const) {
     await t.test(kind, async () => withRoot(async root => {
-    const store = await DomainStore.open({ root })
-    const nestedBytes = encoder.encode('nested output')
-    const nestedRef = await store.putObject('nested-output', nestedBytes)
-    const object = kind === 'file' ? nestedRef : await putSealed(store, 'tree-output', 'object', seal('object', {
-      v: 1, kind: 'tree', files: [{ path: 'leaf.txt', bytes: nestedBytes.byteLength, object: nestedRef }],
+      const store = await DomainStore.open({ root })
+      const nestedBytes = encoder.encode('nested output')
+      const nestedRef = await store.putObject('nested-output', nestedBytes)
+      const object = kind === 'file' ? nestedRef : await putSealed(store, 'tree-output', 'object', seal('object', {
+        v: 1, kind: 'tree', files: [{ path: 'leaf.txt', bytes: nestedBytes.byteLength, object: nestedRef }],
     }))
     const manifest = sealSubmissionManifest({
       v: 1,

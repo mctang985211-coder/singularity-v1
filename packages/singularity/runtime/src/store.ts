@@ -28,8 +28,6 @@ import {
   taskContractPayloadSchema,
   taskContractSchema,
 } from '@singularity/protocol'
-import type { SealedTreeManifest } from './workspace.ts'
-
 import type {
   Composition,
   CompositionPayload,
@@ -46,6 +44,8 @@ import type {
   TaskContractPayload,
   UnsealedFact,
 } from '@singularity/protocol'
+
+import type { SealedTreeManifest } from './workspace.ts'
 
 /** Journal file name inside the store root. */
 export const JOURNAL_FILENAME = 'journal.ndjson'
