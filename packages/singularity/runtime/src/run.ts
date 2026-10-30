@@ -5,11 +5,19 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import {
   canonicalize,
   compositionPayloadSchema,
+  compositionSchema,
   decideRetryPolicy,
+  evidenceSchema,
+  executionRecordSchema,
   parseJsonText,
   parseProtocolValue,
+  publicReceiptSchema,
   refSchema,
   seal,
+  submissionManifestSchema,
+  taskContractSchema,
+  validateSubmissionManifest,
+  verifyDigest,
   verifyTaskContract,
 } from '@singularity/protocol'
 import type {
@@ -27,6 +35,7 @@ import type {
   NormalizedCommand,
   PublicReceipt,
   Ref,
+  RetryDecision,
   RunCloseState,
   RunClosedPayload,
   SessionCut,
@@ -57,11 +66,13 @@ import {
   deliverWakeOnceOrFail,
   startWakeText,
 } from './wake.ts'
+import type { WakeDeliveryOutcome } from './wake.ts'
 import type { CasObjectReader } from './workspace.ts'
 import { prepareWorkspace } from './workspace.ts'
 import type { FrozenSubmission } from './workspace.ts'
 
 const textEncoder = new TextEncoder()
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
 const zeroUsage: UsageRecord = {
   inputTokens: 0,
   outputTokens: 0,
@@ -121,7 +132,14 @@ export type SingleRunErrorCode =
   | 'TOOL_UNAVAILABLE'
   | 'RUN_ALREADY_OPENED'
   | 'RUN_ALREADY_CLOSED'
+  | 'RUN_NOT_FOUND'
+  | 'RUN_NOT_CLOSED'
+  | 'RUN_NOT_SUBMITTED'
+  | 'TASK_ALREADY_CLOSED'
   | 'TASK_CONTRACT_MISMATCH'
+  | 'RETRY_NOT_ALLOWED'
+  | 'SESSION_ALREADY_LIVE'
+  | 'SESSION_MISMATCH'
 
 export class SingleRunError extends Error {
   override readonly name = 'SingleRunError'
@@ -155,9 +173,39 @@ export interface ExecuteSingleRunResult {
   readonly facts: readonly Fact[]
 }
 
+/** How an already-open Run acquires its DSH Agent. */
+export type OpenedRunMode = 'create' | 'resume'
+
+/** Shared continuation result; recovery adds composition/session flags. */
+export interface ContinueOpenedRunResult extends ExecuteSingleRunResult {
+  /** `created` uses the same session intent when persistence is absent. */
+  readonly sessionAction: 'created' | 'resumed'
+  /** Stable wake outcome; `already-admitted` never buys another request. */
+  readonly wakeOutcome?: WakeDeliveryOutcome
+}
+
+/** @internal CAS plus journal view shared by runtime and recovery. */
+export interface JournalCasReader extends CasObjectReader {
+  facts(): readonly Fact[]
+}
+
+/** @internal Frozen journal view for one known Run. */
+export interface RunJournalView {
+  readonly taskId: string
+  readonly contract: TaskContract
+  readonly contractRef: Ref
+  readonly composition: Composition
+  readonly compositionRef: Ref
+  readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
+  readonly runSubmitted?: Extract<Fact, { readonly type: 'run/submitted' }>
+  readonly runClosed?: Extract<Fact, { readonly type: 'run/closed' }>
+  readonly taskClosed?: Extract<Fact, { readonly type: 'task/closed' }>
+  readonly runIds: readonly string[]
+}
+
 interface SessionSnapshot {
   readonly usage: UsageRecord
-  readonly cut: SessionCut
+  readonly sessionCut: SessionCut
 }
 
 interface Settlement {
@@ -192,6 +240,20 @@ interface RuntimeContext {
   readonly verifier: RunVerifier
 }
 
+/** @internal One Run whose admission and `run/opened` fact are already durable. */
+interface PreparedRun {
+  readonly actor: FactActor
+  readonly clock: () => number
+  readonly contract: TaskContract
+  readonly contractRef: Ref
+  readonly composition: Composition
+  readonly compositionRef: Ref
+  readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
+  readonly workspace: string
+  readonly baseToolNames: readonly string[]
+  readonly runtime: RuntimeContext
+}
+
 /**
  * Executes exactly one Run: root admission, `run/opened`, DSH create/setup,
  * one stable wake, one `whenIdle`, then either independent verification of the
@@ -217,7 +279,17 @@ async function executeWithService(
   actor: FactActor,
   clock: () => number,
   service: CommandService,
-): Promise<ExecuteSingleRunResult> {
+): Promise<ContinueOpenedRunResult> {
+  const prepared = await openSingleRun(request, actor, clock, service)
+  return drivePreparedRun(prepared, request, service, 'create')
+}
+
+async function openSingleRun(
+  request: ExecuteSingleRunRequest,
+  actor: FactActor,
+  clock: () => number,
+  service: CommandService,
+): Promise<PreparedRun> {
   const contract = request.admission.contract
   if (!verifyTaskContract(contract)) {
     throw new SingleRunError('CONTRACT_INVALID', 'admission.contract is not a sealed root TaskContract')
@@ -301,9 +373,153 @@ async function executeWithService(
       workspaceSeed: contract.environment.seed,
       budgetReservation: request.admission.budgetReservation,
     },
-  )
+  ) as Extract<Fact, { readonly type: 'run/opened' }>
 
-  const runtime: RuntimeContext = {
+  return buildPreparedRun({
+    actor,
+    clock,
+    contract,
+    contractRef,
+    composition,
+    compositionRef,
+    runOpened,
+    workspace,
+    baseToolNames,
+    request,
+  })
+}
+
+/**
+ * Continues one Run whose `run/opened` fact already exists. The caller owns the
+ * single CommandService and must have loaded the contract from the journal;
+ * `request.composition` is compared against the frozen Composition before any
+ * Agent or workspace side effect.
+ */
+export async function continueOpenedRun(
+  request: ExecuteSingleRunRequest,
+  service: CommandService,
+  mode: OpenedRunMode,
+): Promise<ContinueOpenedRunResult> {
+  const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
+  const clock = request.clock ?? Date.now
+  validateRequest(request, actor, clock)
+  const facts = service.facts()
+  if (findRunClosed(facts, request.runId) !== undefined) {
+    throw new SingleRunError('RUN_ALREADY_CLOSED', `Run ${JSON.stringify(request.runId)} is already closed`)
+  }
+  if (findRunSubmitted(facts, request.runId) !== undefined) {
+    throw new SingleRunError(
+      'RUN_NOT_SUBMITTED',
+      `Run ${JSON.stringify(request.runId)} is already submitted; recover its closure instead`,
+    )
+  }
+  const prepared = await loadPreparedRun(request, actor, clock, service)
+  return drivePreparedRun(prepared, request, service, mode)
+}
+
+async function loadPreparedRun(
+  request: ExecuteSingleRunRequest,
+  actor: FactActor,
+  clock: () => number,
+  service: CommandService,
+): Promise<PreparedRun> {
+  const view = await readRunJournalView(service, request.runId)
+  if (view.taskClosed !== undefined) {
+    throw new SingleRunError('TASK_ALREADY_CLOSED', `Task ${JSON.stringify(view.taskId)} is already closed`)
+  }
+  if (view.runClosed !== undefined) {
+    throw new SingleRunError('RUN_ALREADY_CLOSED', `Run ${JSON.stringify(request.runId)} is already closed`)
+  }
+  const contract = request.admission.contract
+  if (!verifyTaskContract(contract)) {
+    throw new SingleRunError('CONTRACT_INVALID', 'admission.contract is not a sealed root TaskContract')
+  }
+  if (contract.taskId !== view.taskId || contract.digest !== view.contract.digest) {
+    throw new SingleRunError(
+      'TASK_CONTRACT_MISMATCH',
+      'admission.contract does not match the Task contract recorded in the journal',
+    )
+  }
+  if (request.admission.attempt !== view.runOpened.data.attempt) {
+    throw new SingleRunError('INVALID_ARGUMENT', 'admission.attempt does not match run/opened')
+  }
+  if (request.sessionId !== view.runOpened.data.sessionId) {
+    throw new SingleRunError('SESSION_MISMATCH', 'sessionId does not match run/opened')
+  }
+  if (!compareCompositionPayload(view.composition, request.composition)) {
+    throw new SingleRunError(
+      'COMPOSITION_MISMATCH',
+      'actual composition does not equal the frozen run/opened Composition',
+    )
+  }
+  validateComposition(compositionPayloadOf(view.composition), contract)
+  const workspace = await prepareWorkspace(request.workspace, contract.spec.inputs, service)
+  const baseToolNames = await resolveBaseToolNames(contract, service)
+  assertToolsAvailable(baseToolNames, request.ctx)
+  return buildPreparedRun({
+    actor,
+    clock,
+    contract,
+    contractRef: view.contractRef,
+    composition: view.composition,
+    compositionRef: view.compositionRef,
+    runOpened: view.runOpened,
+    workspace,
+    baseToolNames,
+    request,
+  })
+}
+
+function buildPreparedRun(options: {
+  readonly actor: FactActor
+  readonly clock: () => number
+  readonly contract: TaskContract
+  readonly contractRef: Ref
+  readonly composition: Composition
+  readonly compositionRef: Ref
+  readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
+  readonly workspace: string
+  readonly baseToolNames: readonly string[]
+  readonly request: ExecuteSingleRunRequest
+}): PreparedRun {
+  return {
+    actor: options.actor,
+    clock: options.clock,
+    contract: options.contract,
+    contractRef: options.contractRef,
+    composition: options.composition,
+    compositionRef: options.compositionRef,
+    runOpened: options.runOpened,
+    workspace: options.workspace,
+    baseToolNames: options.baseToolNames,
+    runtime: buildRuntimeContext(
+      options.request,
+      options.actor,
+      options.clock,
+      options.contract,
+      options.contractRef,
+      options.composition,
+      options.compositionRef,
+      options.runOpened.at,
+      options.workspace,
+      options.baseToolNames,
+    ),
+  }
+}
+
+function buildRuntimeContext(
+  request: ExecuteSingleRunRequest,
+  actor: FactActor,
+  clock: () => number,
+  contract: TaskContract,
+  contractRef: Ref,
+  composition: Composition,
+  compositionRef: Ref,
+  startedAt: number,
+  workspace: string,
+  baseToolNames: readonly string[],
+): RuntimeContext {
+  return {
     actor,
     clock,
     transientInvalidReasons: request.transientInvalidReasons ?? [],
@@ -313,51 +529,48 @@ async function executeWithService(
     contractRef,
     composition,
     compositionRef,
-    startedAt: runOpened.at,
+    startedAt,
     maxOutputBytes: request.maxOutputBytes,
     agentOptions: request.agentOptions,
     templateBrief: request.templateBrief ?? contract.spec.goal.summary,
     environmentMode: request.environmentMode ?? 'workspace',
     verifier: request.verifier,
   }
+}
 
+async function drivePreparedRun(
+  prepared: PreparedRun,
+  request: ExecuteSingleRunRequest,
+  service: CommandService,
+  mode: OpenedRunMode,
+): Promise<ContinueOpenedRunResult> {
+  const { contract, runtime } = prepared
   const controller = createToolController(runtime, request, service)
   let handle: AgentHandle | undefined
   let snapshot = emptySnapshot(request.sessionId)
   let agentErrorCode: string | undefined
   let agentErrorDetail: string | undefined
+  let sessionAction: 'created' | 'resumed' = 'created'
+  let wakeOutcome: WakeDeliveryOutcome | undefined
 
   try {
-    const setup: AgentSetup = (agentCtx, agent) => {
-      agentCtx.systemPrompt.section({
-        name: 'singularity:worker-card',
-        order: 100,
-        text: renderWorkerCard(false),
-        interpolate: false,
+    const setup = buildAgentSetup(runtime, request, controller)
+    if (mode === 'create') {
+      handle = await request.ctx.agents.create({
+        sessionId: request.sessionId as SessionId,
+        meta: { cwd: prepared.workspace },
+        agentOptions: request.agentOptions,
+        setup,
       })
-      agentCtx.systemPrompt.context({
-        name: 'singularity:node-view',
-        order: 300,
-        required: true,
-        interpolate: false,
-        text: () => renderNodeView(buildNodeView(runtime, request, controller, agent)),
-      })
-      controller.register(agentCtx, agent)
-      const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
-      if (baseToolNames.length > 0) {
-        agentCtx.tools.restrict({ allow: [...baseToolNames] })
-      } else if (globalNames.length > 0) {
-        agentCtx.tools.restrict({ deny: globalNames })
-      }
+    } else {
+      const acquired = await resumeOrCreateAgent(request, prepared.workspace, setup)
+      handle = acquired.handle
+      sessionAction = acquired.action
     }
-    handle = await request.ctx.agents.create({
-      sessionId: request.sessionId as SessionId,
-      meta: { cwd: workspace },
-      agentOptions: request.agentOptions,
-      setup,
-    })
-    const firstBudget = computeBudget(contract, zeroUsage, runtime.startedAt, clock())
-    await deliverWakeOnceOrFail(handle.agent, {
+    // The start wake text is derived from the frozen run/opened boundary, not
+    // from the live clock: resuming must reproduce the same stable message body.
+    const firstBudget = computeBudget(contract, zeroUsage, runtime.startedAt, runtime.startedAt)
+    wakeOutcome = await deliverWakeOnceOrFail(handle.agent, {
       wakeId: `${request.runId}:start`,
       text: startWakeText(contract.taskId, request.runId, firstBudget),
     })
@@ -399,42 +612,570 @@ async function executeWithService(
     ? await settleSubmitted(runtime, request, service, snapshot, tools)
     : await settleExecutionRecord(runtime, request, service, snapshot, tools, agentErrorCode, agentErrorDetail)
 
-  const retry = decideRetry(service.facts(), contract, settlement.runFact, runtime, clock())
-  let taskFact: Fact | undefined
-  if (settlement.classification === 'verified') {
-    taskFact = await commitTaskClosed(runtime, service, settlement, request.runId, 'verified')
-  } else if (!retry.allowed
-    && (settlement.classification === 'failed' || settlement.classification === 'invalid')) {
-    taskFact = await commitTaskClosed(
-      runtime,
-      service,
-      settlement,
-      request.runId,
-      settlement.classification,
+  const { taskFact, retry } = await finalizeSettlement(runtime, request, service, settlement)
+  const result = buildExecutionResult(
+    request,
+    runtime,
+    settlement,
+    taskFact,
+    retry,
+    snapshot,
+    service.facts(),
+  )
+  return {
+    ...result,
+    sessionAction,
+    ...(wakeOutcome === undefined ? {} : { wakeOutcome }),
+  }
+}
+
+async function resumeOrCreateAgent(
+  request: ExecuteSingleRunRequest,
+  workspace: string,
+  setup: AgentSetup,
+): Promise<{ readonly handle: AgentHandle; readonly action: 'created' | 'resumed' }> {
+  const sessionId = request.sessionId as SessionId
+  if (request.ctx.agents.get(sessionId) !== undefined
+    || request.ctx.sessions.get(sessionId) !== undefined) {
+    throw new SingleRunError(
+      'SESSION_ALREADY_LIVE',
+      `Session ${JSON.stringify(request.sessionId)} is already live; refuse to drive a second owner`,
     )
   }
+  try {
+    const handle = await request.ctx.agents.resume({
+      resumeSessionId: sessionId,
+      agentOptions: request.agentOptions,
+      setup,
+    })
+    return { handle, action: 'resumed' }
+  } catch (error) {
+    if (!isSessionNotFoundError(error)) throw error
+  }
+  const handle = await request.ctx.agents.create({
+    sessionId,
+    meta: { cwd: workspace },
+    agentOptions: request.agentOptions,
+    setup,
+  })
+  return { handle, action: 'created' }
+}
 
-  return {
-    taskId: contract.taskId,
-    runId: request.runId,
-    sessionId: request.sessionId,
-    classification: settlement.classification,
-    ...(settlement.manifest === undefined ? {} : { manifest: settlement.manifest }),
-    ...(settlement.manifestRef === undefined ? {} : { manifestRef: settlement.manifestRef }),
-    ...(settlement.receipt === undefined ? {} : { receipt: settlement.receipt }),
-    ...(settlement.receiptRef === undefined ? {} : { receiptRef: settlement.receiptRef }),
-    ...(settlement.evidence === undefined ? {} : { evidence: settlement.evidence }),
-    ...(settlement.evidenceRef === undefined ? {} : { evidenceRef: settlement.evidenceRef }),
-    ...(settlement.executionRecord === undefined ? {} : { executionRecord: settlement.executionRecord }),
-    ...(settlement.executionRecordRef === undefined
-      ? {}
-      : { executionRecordRef: settlement.executionRecordRef }),
-    runFact: settlement.runFact,
-    ...(taskFact === undefined ? {} : { taskFact }),
-    usage: snapshot.usage,
-    sessionCut: snapshot.cut,
+function isSessionNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'name' in error
+    && (error as { readonly name?: unknown }).name === 'SessionPersistenceNotFoundError'
+}
+
+function buildAgentSetup(
+  runtime: RuntimeContext,
+  request: ExecuteSingleRunRequest,
+  controller: RunToolController,
+): AgentSetup {
+  return (agentCtx, agent) => {
+    agentCtx.systemPrompt.section({
+      name: 'singularity:worker-card',
+      order: 100,
+      text: renderWorkerCard(false),
+      interpolate: false,
+    })
+    agentCtx.systemPrompt.context({
+      name: 'singularity:node-view',
+      order: 300,
+      required: true,
+      interpolate: false,
+      text: () => renderNodeView(buildNodeView(runtime, request, controller, agent)),
+    })
+    controller.register(agentCtx, agent)
+    const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
+    if (runtime.baseToolNames.length > 0) {
+      agentCtx.tools.restrict({ allow: [...runtime.baseToolNames] })
+    } else if (globalNames.length > 0) {
+      agentCtx.tools.restrict({ deny: globalNames })
+    }
+  }
+}
+
+/**
+ * Recovers a submitted Run whose closure was not written. It reads the frozen
+ * manifest from CAS, reuses the fixed `operationId`, and re-derives the verdict
+ * from the independent verifier receipt. It never re-drives the model, never
+ * re-freezes the submission, and never reads the activity workspace.
+ */
+export async function completeSubmittedRun(
+  request: ExecuteSingleRunRequest,
+  service: CommandService,
+): Promise<ExecuteSingleRunResult> {
+  const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
+  const clock = request.clock ?? Date.now
+  validateRequest(request, actor, clock)
+  const view = await readRunJournalView(service, request.runId)
+  if (view.taskClosed !== undefined) {
+    throw new SingleRunError('TASK_ALREADY_CLOSED', `Task ${JSON.stringify(view.taskId)} is already closed`)
+  }
+  if (view.runClosed !== undefined) {
+    throw new SingleRunError('RUN_ALREADY_CLOSED', `Run ${JSON.stringify(request.runId)} is already closed`)
+  }
+  const submitted = view.runSubmitted
+  if (submitted === undefined) {
+    throw new SingleRunError('RUN_NOT_SUBMITTED', `Run ${JSON.stringify(request.runId)} has no run/submitted fact`)
+  }
+  if (request.admission.contract.digest !== view.contract.digest) {
+    throw new SingleRunError('TASK_CONTRACT_MISMATCH', 'admission.contract does not match the journal')
+  }
+  if (!compareCompositionPayload(view.composition, request.composition)) {
+    throw new SingleRunError(
+      'COMPOSITION_MISMATCH',
+      'actual composition does not equal the frozen run/opened Composition',
+    )
+  }
+  validateComposition(compositionPayloadOf(view.composition), view.contract)
+
+  const runtime = buildRuntimeContext(
+    request,
+    actor,
+    clock,
+    view.contract,
+    view.contractRef,
+    view.composition,
+    view.compositionRef,
+    view.runOpened.at,
+    request.workspace,
+    [],
+  )
+  const snapshot = recoverSessionSnapshot(request, submitted)
+  let settlement: Settlement
+  try {
+    const frozen = await loadFrozenSubmission(service, view.contract, submitted)
+    settlement = await settleSubmitted(runtime, request, service, snapshot, {
+      readSelf: true,
+      planningSketchRef: submitted.data.planningSketchRef,
+      submission: frozen,
+      submitted: true,
+      contextEpoch: initialContextEpoch(request.sessionId),
+    })
+  } catch (error) {
+    settlement = await settleInvalidRecord(
+      runtime,
+      request,
+      service,
+      snapshot,
+      `submission-invalid: ${errorMessage(error)}`,
+    )
+  }
+  const { taskFact, retry } = await finalizeSettlement(runtime, request, service, settlement)
+  return buildExecutionResult(
+    request,
+    runtime,
+    settlement,
+    taskFact,
     retry,
-    facts: service.facts(),
+    snapshot,
+    service.facts(),
+  )
+}
+
+/**
+ * Closes an open Run with an invalid ExecutionRecord without any Agent,
+ * verifier, or retry attempt. Composition mismatch uses this path.
+ */
+export async function closeOpenedRunInvalid(
+  request: ExecuteSingleRunRequest,
+  service: CommandService,
+  reason: string,
+): Promise<ExecuteSingleRunResult> {
+  const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
+  const clock = request.clock ?? Date.now
+  validateRequest(request, actor, clock)
+  const view = await readRunJournalView(service, request.runId)
+  if (view.taskClosed !== undefined) {
+    throw new SingleRunError('TASK_ALREADY_CLOSED', `Task ${JSON.stringify(view.taskId)} is already closed`)
+  }
+  if (view.runClosed !== undefined) {
+    throw new SingleRunError('RUN_ALREADY_CLOSED', `Run ${JSON.stringify(request.runId)} is already closed`)
+  }
+  if (request.admission.contract.digest !== view.contract.digest) {
+    throw new SingleRunError('TASK_CONTRACT_MISMATCH', 'admission.contract does not match the journal')
+  }
+  const runtime = buildRuntimeContext(
+    request,
+    actor,
+    clock,
+    view.contract,
+    view.contractRef,
+    view.composition,
+    view.compositionRef,
+    view.runOpened.at,
+    request.workspace,
+    [],
+  )
+  const snapshot = recoverySnapshotWithoutAgent(request)
+  const settlement = await settleInvalidRecord(runtime, request, service, snapshot, reason)
+  const taskFact = await commitTaskClosed(runtime, service, settlement, request.runId, 'invalid')
+  const retry: RetryDecision = {
+    allowed: false,
+    reason: 'composition mismatch and invalid closure are not retryable',
+  }
+  return buildExecutionResult(
+    request,
+    runtime,
+    settlement,
+    taskFact,
+    retry,
+    snapshot,
+    service.facts(),
+  )
+}
+
+/**
+ * Idempotent recovery after `run/closed`: never re-verifies or re-drives the
+ * Run. When the Task closure is missing and the fixed retry policy does not
+ * allow another attempt, the missing `task/closed` fact is appended again.
+ */
+export async function reconcileClosedRun(
+  request: ExecuteSingleRunRequest,
+  service: CommandService,
+): Promise<ExecuteSingleRunResult> {
+  const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
+  const clock = request.clock ?? Date.now
+  validateRequest(request, actor, clock)
+  const view = await readRunJournalView(service, request.runId)
+  if (view.runClosed === undefined) {
+    throw new SingleRunError('RUN_NOT_CLOSED', `Run ${JSON.stringify(request.runId)} is not closed`)
+  }
+  if (request.admission.contract.digest !== view.contract.digest) {
+    throw new SingleRunError('TASK_CONTRACT_MISMATCH', 'admission.contract does not match the journal')
+  }
+  const runtime = buildRuntimeContext(
+    request,
+    actor,
+    clock,
+    view.contract,
+    view.contractRef,
+    view.composition,
+    view.compositionRef,
+    view.runOpened.at,
+    request.workspace,
+    [],
+  )
+  const retry = retryDecisionForRun(
+    service.facts(),
+    view.contract,
+    view.runClosed,
+    runtime.transientInvalidReasons,
+    clock(),
+  )
+  let taskFact: Fact | undefined = view.taskClosed
+  const classification = view.runClosed.data.classification
+  if (taskFact === undefined) {
+    if (classification === 'verified') {
+      taskFact = await commitTaskClosed(
+        runtime,
+        service,
+        settlementFromClosedRun(view.runClosed),
+        request.runId,
+        'verified',
+      )
+    } else if (!retry.allowed && (classification === 'failed' || classification === 'invalid')) {
+      taskFact = await commitTaskClosed(
+        runtime,
+        service,
+        settlementFromClosedRun(view.runClosed),
+        request.runId,
+        classification,
+      )
+    }
+  }
+  const details = await loadClosureDetails(service, request, view)
+  const settlement: Settlement = {
+    classification,
+    reason: view.runClosed.data.reason,
+    runFact: view.runClosed,
+    ...details,
+  }
+  return buildExecutionResult(
+    request,
+    runtime,
+    settlement,
+    taskFact,
+    retry,
+    details.snapshot,
+    service.facts(),
+  )
+}
+
+function settlementFromClosedRun(runClosed: Extract<Fact, { readonly type: 'run/closed' }>): Settlement {
+  return {
+    classification: runClosed.data.classification,
+    reason: runClosed.data.reason,
+    runFact: runClosed,
+    ...('evidenceRef' in runClosed.data ? { evidenceRef: runClosed.data.evidenceRef } : {}),
+  }
+}
+
+async function loadClosureDetails(
+  service: CommandService,
+  request: ExecuteSingleRunRequest,
+  view: RunJournalView,
+): Promise<{
+  readonly manifest?: SubmissionManifest
+  readonly manifestRef?: Ref
+  readonly receipt?: PublicReceipt
+  readonly receiptRef?: Ref
+  readonly evidence?: Evidence
+  readonly evidenceRef?: Ref
+  readonly executionRecord?: ExecutionRecord
+  readonly executionRecordRef?: Ref
+  readonly snapshot: SessionSnapshot
+}> {
+  const runClosed = view.runClosed
+  if (runClosed === undefined) throw new SingleRunError('RUN_NOT_CLOSED', 'Run closure is missing')
+  let manifest: SubmissionManifest | undefined
+  let manifestRef: Ref | undefined
+  if (view.runSubmitted !== undefined) {
+    manifestRef = view.runSubmitted.data.outputs
+    manifest = parseProtocolValue(
+      submissionManifestSchema,
+      await readJsonValue(service, manifestRef, 'object'),
+    )
+  }
+  if ('evidenceRef' in runClosed.data) {
+    const evidenceRef = runClosed.data.evidenceRef
+    const evidence = parseProtocolValue(
+      evidenceSchema,
+      await readJsonValue(service, evidenceRef, 'evidence'),
+    )
+    const receiptRef = evidence.verification.publicReceipt
+    const receipt = parseProtocolValue(
+      publicReceiptSchema,
+      await readJsonValue(service, receiptRef, 'object'),
+    )
+    return {
+      ...(manifest === undefined ? {} : { manifest }),
+      ...(manifestRef === undefined ? {} : { manifestRef }),
+      receipt,
+      receiptRef,
+      evidence,
+      evidenceRef,
+      snapshot: { usage: evidence.usage, sessionCut: evidence.sessionCut },
+    }
+  }
+  const executionRecordRef = runClosed.data.executionRecordRef
+  const executionRecord = parseProtocolValue(
+    executionRecordSchema,
+    await readJsonValue(service, executionRecordRef, 'object'),
+  )
+  return {
+    ...(manifest === undefined ? {} : { manifest }),
+    ...(manifestRef === undefined ? {} : { manifestRef }),
+    executionRecord,
+    executionRecordRef,
+    snapshot: { usage: executionRecord.usage, sessionCut: executionRecord.sessionCut },
+  }
+}
+
+/** @internal Reads the frozen contract/composition/Run facts for one runId. */
+export async function readRunJournalView(
+  reader: JournalCasReader,
+  runId: string,
+): Promise<RunJournalView> {
+  const facts = reader.facts()
+  const runOpened = findRunOpened(facts, runId)
+  if (runOpened === undefined) {
+    throw new SingleRunError('RUN_NOT_FOUND', `Run ${JSON.stringify(runId)} has no run/opened fact`)
+  }
+  const taskId = runOpened.data.taskId
+  const admitted = findTaskAdmitted(facts, taskId)
+  if (admitted === undefined) {
+    throw new SingleRunError('RUN_NOT_FOUND', `Task ${JSON.stringify(taskId)} has no task/admitted fact`)
+  }
+  const contractRef = admitted.data.contract
+  const contract = await readFrozenContract(reader, contractRef)
+  if (contract.taskId !== taskId) {
+    throw new SingleRunError('TASK_CONTRACT_MISMATCH', 'task/admitted contract id does not match its fact')
+  }
+  if (contract.origin.kind !== 'root') {
+    throw new SingleRunError('CONTRACT_INVALID', 'single-Run recovery requires a root TaskContract')
+  }
+  const compositionRef = runOpened.data.composition
+  const composition = await readFrozenComposition(reader, compositionRef)
+  if (composition.contract.id !== contract.taskId
+    || composition.contract.digest !== contract.digest) {
+    throw new SingleRunError('COMPOSITION_MISMATCH', 'frozen Composition contract does not match the Task')
+  }
+  if (composition.seed.id !== runOpened.data.workspaceSeed.id
+    || composition.seed.digest !== runOpened.data.workspaceSeed.digest) {
+    throw new SingleRunError('COMPOSITION_MISMATCH', 'frozen Composition seed does not match run/opened')
+  }
+  const runIds: string[] = []
+  for (const fact of facts) {
+    if (fact.type === 'run/opened' && fact.data.taskId === taskId) runIds.push(fact.data.runId)
+  }
+  const runSubmitted = findRunSubmitted(facts, runId)
+  const runClosed = findRunClosed(facts, runId)
+  const taskClosed = findTaskClosed(facts, taskId)
+  return {
+    taskId,
+    contract,
+    contractRef,
+    composition,
+    compositionRef,
+    runOpened,
+    ...(runSubmitted === undefined ? {} : { runSubmitted }),
+    ...(runClosed === undefined ? {} : { runClosed }),
+    ...(taskClosed === undefined ? {} : { taskClosed }),
+    runIds,
+  }
+}
+
+async function readFrozenContract(reader: CasObjectReader, ref: Ref): Promise<TaskContract> {
+  let contract: TaskContract
+  try {
+    contract = parseProtocolValue(taskContractSchema, await readJsonValue(reader, ref, 'contract'))
+  } catch (error) {
+    throw new SingleRunError('CONTRACT_INVALID', 'frozen TaskContract is not strict JSON', { cause: error })
+  }
+  if (!verifyTaskContract(contract)) {
+    throw new SingleRunError('CONTRACT_INVALID', 'frozen TaskContract does not verify')
+  }
+  if (contract.digest !== ref.digest) {
+    throw new SingleRunError('CONTRACT_INVALID', 'frozen TaskContract digest does not match its ref')
+  }
+  return contract
+}
+
+/** @internal Reads and verifies the Composition frozen by `run/opened`. */
+export async function readFrozenComposition(
+  reader: CasObjectReader,
+  ref: Ref,
+): Promise<Composition> {
+  let composition: Composition
+  try {
+    composition = parseProtocolValue(compositionSchema, await readJsonValue(reader, ref, 'composition'))
+  } catch (error) {
+    throw new SingleRunError('COMPOSITION_MISMATCH', 'frozen Composition is not strict JSON', { cause: error })
+  }
+  if (!verifyDigest('composition', composition)) {
+    throw new SingleRunError('COMPOSITION_MISMATCH', 'frozen Composition digest does not verify')
+  }
+  if (composition.digest !== ref.digest) {
+    throw new SingleRunError('COMPOSITION_MISMATCH', 'frozen Composition digest does not match its ref')
+  }
+  return composition
+}
+
+/** @internal Strips the seal from a frozen Composition for comparison. */
+export function compositionPayloadOf(composition: Composition): CompositionPayload {
+  const { digest, ...payload } = composition
+  if (typeof digest !== 'string') {
+    throw new SingleRunError('COMPOSITION_MISMATCH', 'frozen Composition has no digest')
+  }
+  return parseProtocolValue(compositionPayloadSchema, payload)
+}
+
+/** @internal Full canonical comparison of actual versus frozen Composition. */
+export function compareCompositionPayload(
+  frozen: Composition,
+  actual: CompositionPayload,
+): boolean {
+  let parsed: CompositionPayload
+  try {
+    parsed = parseProtocolValue(compositionPayloadSchema, actual)
+  } catch {
+    return false
+  }
+  try {
+    return canonicalize(parsed as unknown as JsonValue)
+      === canonicalize(compositionPayloadOf(frozen) as unknown as JsonValue)
+  } catch {
+    return false
+  }
+}
+
+async function readJsonValue(
+  reader: CasObjectReader,
+  ref: Ref,
+  domain: CasDigestDomain,
+): Promise<JsonValue> {
+  const { bytes } = await reader.readObject(ref, domain)
+  let text: string
+  try {
+    text = strictUtf8.decode(bytes)
+  } catch (error) {
+    throw new SingleRunError('INVALID_ARGUMENT', 'frozen CAS object is not UTF-8', { cause: error })
+  }
+  return parseJsonText(text)
+}
+
+async function loadFrozenSubmission(
+  service: CommandService,
+  contract: TaskContract,
+  submitted: Extract<Fact, { readonly type: 'run/submitted' }>,
+): Promise<FrozenSubmission> {
+  const manifestRef = submitted.data.outputs
+  let manifest: SubmissionManifest
+  try {
+    manifest = parseProtocolValue(
+      submissionManifestSchema,
+      await readJsonValue(service, manifestRef, 'object'),
+    )
+  } catch (error) {
+    throw new SingleRunError('INVALID_ARGUMENT', 'frozen SubmissionManifest is unreadable', { cause: error })
+  }
+  const validation = validateSubmissionManifest(manifest, {
+    contract,
+    runId: submitted.data.runId,
+  })
+  if (!validation.valid) {
+    throw new SingleRunError(
+      'INVALID_ARGUMENT',
+      `frozen SubmissionManifest is invalid: ${validation.reason}`,
+    )
+  }
+  const outputRefs: Ref[] = []
+  for (const output of manifest.outputs) {
+    if (output.object !== undefined) outputRefs.push(output.object)
+  }
+  for (const draft of manifest.learningDrafts) outputRefs.push(draft.object)
+  let bytes = 0
+  for (const check of manifest.checks) bytes += check.bytes
+  return {
+    manifest,
+    manifestRef,
+    inputRefs: contract.spec.inputs.map(input => input.object),
+    outputRefs,
+    checks: manifest.checks,
+    bytes,
+  }
+}
+
+function recoverSessionSnapshot(
+  request: ExecuteSingleRunRequest,
+  submitted: Extract<Fact, { readonly type: 'run/submitted' }>,
+): SessionSnapshot {
+  const live = request.ctx.sessions.get(request.sessionId as SessionId)
+  if (live !== undefined) return snapshotSession(live)
+  return {
+    usage: { inputTokens: 0, outputTokens: 0, steps: 0, unknownRequests: 1 },
+    sessionCut: {
+      sessionId: submitted.data.transcriptOffset.sessionId,
+      from: 0,
+      to: submitted.data.transcriptOffset.seq,
+    },
+  }
+}
+
+/**
+ * A non-Agent recovery path may read a live session but never resume one just
+ * to fabricate usage. Without a live snapshot, usage stays unknown.
+ */
+function recoverySnapshotWithoutAgent(request: ExecuteSingleRunRequest): SessionSnapshot {
+  const live = request.ctx.sessions.get(request.sessionId as SessionId)
+  if (live !== undefined) return snapshotSession(live)
+  return {
+    usage: { ...zeroUsage, unknownRequests: 1 },
+    sessionCut: { sessionId: request.sessionId, from: 0, to: 0 },
   }
 }
 
@@ -528,7 +1269,7 @@ async function resolveBaseToolNames(
     const { bytes } = await reader.readObject(ref, 'object')
     let value: JsonValue
     try {
-      value = parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+      value = parseJsonText(strictUtf8.decode(bytes))
     } catch (error) {
       throw new SingleRunError('TOOL_UNAVAILABLE', 'base tool asset is not strict JSON', { cause: error })
     }
@@ -659,7 +1400,7 @@ async function settleSubmitted(
       receipt: verification.receipt,
       receiptRef: verification.receiptRef,
       usage: snapshot.usage,
-      sessionCut: snapshot.cut,
+      sessionCut: snapshot.sessionCut,
       environmentMode: runtime.environmentMode,
     })
     const evidenceRef = await putSealed(service, `${request.runId}:evidence`, evidence, 'evidence')
@@ -690,7 +1431,7 @@ async function settleSubmitted(
     composition: runtime.compositionRef,
     outputs: frozen.outputRefs,
     usage: snapshot.usage,
-    sessionCut: snapshot.cut,
+    sessionCut: snapshot.sessionCut,
     reason: verification.reason,
   })
   const executionRecordRef = await putSealed(
@@ -743,12 +1484,39 @@ async function settleExecutionRecord(
     reason = NO_SUBMISSION_REASON
     recordReason = NO_SUBMISSION_REASON
   }
+  return settleRecord(runtime, request, service, snapshot, classification, reason, recordReason, tools)
+}
+
+async function settleInvalidRecord(
+  runtime: RuntimeContext,
+  request: ExecuteSingleRunRequest,
+  service: CommandService,
+  snapshot: SessionSnapshot,
+  reason: string,
+): Promise<Settlement> {
+  return settleRecord(runtime, request, service, snapshot, 'invalid', reason, reason, {
+    readSelf: false,
+    submitted: false,
+    contextEpoch: initialContextEpoch(request.sessionId),
+  })
+}
+
+async function settleRecord(
+  runtime: RuntimeContext,
+  request: ExecuteSingleRunRequest,
+  service: CommandService,
+  snapshot: SessionSnapshot,
+  classification: 'failed' | 'invalid',
+  reason: string,
+  recordReason: string,
+  tools: RunToolSnapshot,
+): Promise<Settlement> {
   const executionRecord = buildExecutionRecord({
     contract: runtime.contract,
     runId: request.runId,
     composition: runtime.compositionRef,
     usage: snapshot.usage,
-    sessionCut: snapshot.cut,
+    sessionCut: snapshot.sessionCut,
     reason: recordReason,
   })
   const executionRecordRef = await putSealed(
@@ -829,7 +1597,7 @@ async function commitTaskClosed(
   service: CommandService,
   settlement: Settlement,
   runId: string,
-  outcome: 'verified' | 'failed' | 'invalid',
+  outcome: 'verified' | 'failed' | 'invalid' | 'cancelled',
 ): Promise<Fact> {
   const evidenceRefs = settlement.evidenceRef === undefined ? [] : [settlement.evidenceRef]
   return commitFact(
@@ -850,13 +1618,82 @@ async function commitTaskClosed(
   )
 }
 
-function decideRetry(
+async function finalizeSettlement(
+  runtime: RuntimeContext,
+  request: ExecuteSingleRunRequest,
+  service: CommandService,
+  settlement: Settlement,
+): Promise<{ readonly taskFact?: Fact; readonly retry: RetryDecision }> {
+  const retry = retryDecisionForRun(
+    service.facts(),
+    runtime.contract,
+    settlement.runFact,
+    runtime.transientInvalidReasons,
+    runtime.clock(),
+  )
+  let taskFact: Fact | undefined
+  if (settlement.classification === 'verified') {
+    taskFact = await commitTaskClosed(runtime, service, settlement, request.runId, 'verified')
+  } else if (!retry.allowed
+    && (settlement.classification === 'failed' || settlement.classification === 'invalid')) {
+    taskFact = await commitTaskClosed(
+      runtime,
+      service,
+      settlement,
+      request.runId,
+      settlement.classification,
+    )
+  }
+  return {
+    ...(taskFact === undefined ? {} : { taskFact }),
+    retry,
+  }
+}
+
+function buildExecutionResult(
+  request: ExecuteSingleRunRequest,
+  runtime: RuntimeContext,
+  settlement: Settlement,
+  taskFact: Fact | undefined,
+  retry: RetryDecision,
+  snapshot: SessionSnapshot,
+  facts: readonly Fact[],
+): ExecuteSingleRunResult {
+  return {
+    taskId: runtime.contract.taskId,
+    runId: request.runId,
+    sessionId: request.sessionId,
+    classification: settlement.classification,
+    ...(settlement.manifest === undefined ? {} : { manifest: settlement.manifest }),
+    ...(settlement.manifestRef === undefined ? {} : { manifestRef: settlement.manifestRef }),
+    ...(settlement.receipt === undefined ? {} : { receipt: settlement.receipt }),
+    ...(settlement.receiptRef === undefined ? {} : { receiptRef: settlement.receiptRef }),
+    ...(settlement.evidence === undefined ? {} : { evidence: settlement.evidence }),
+    ...(settlement.evidenceRef === undefined ? {} : { evidenceRef: settlement.evidenceRef }),
+    ...(settlement.executionRecord === undefined ? {} : { executionRecord: settlement.executionRecord }),
+    ...(settlement.executionRecordRef === undefined
+      ? {}
+      : { executionRecordRef: settlement.executionRecordRef }),
+    runFact: settlement.runFact,
+    ...(taskFact === undefined ? {} : { taskFact }),
+    usage: snapshot.usage,
+    sessionCut: snapshot.sessionCut,
+    retry,
+    facts,
+  }
+}
+
+/**
+ * Applies the fixed retry policy from docs/framework.md §9.2 to one closed Run.
+ * Runtime recovery and the reducer share the same pure decision.
+ */
+export function retryDecisionForRun(
   facts: readonly Fact[],
   contract: TaskContract,
   runFact: Fact,
-  runtime: RuntimeContext,
+  transientInvalidReasons: readonly string[],
   now: number,
-): { readonly allowed: boolean; readonly reason: string } {
+): RetryDecision {
   const closed = runFact.type === 'run/closed' ? runFact : undefined
   if (closed === undefined) return { allowed: false, reason: 'Run closure fact missing' }
   const closure: RunCloseState = {
@@ -901,7 +1738,7 @@ function decideRetry(
       usageTokens: tokens,
       usageUnknown: unknown,
     },
-    runtime.transientInvalidReasons,
+    transientInvalidReasons,
   )
 }
 
@@ -1011,7 +1848,7 @@ function snapshotSession(session: Session): SessionSnapshot {
       steps,
       unknownRequests,
     },
-    cut: {
+    sessionCut: {
       sessionId: String(session.id),
       from: 0,
       to: events.length,
@@ -1022,7 +1859,7 @@ function snapshotSession(session: Session): SessionSnapshot {
 function emptySnapshot(sessionId: string): SessionSnapshot {
   return {
     usage: { ...zeroUsage },
-    cut: { sessionId, from: 0, to: 0 },
+    sessionCut: { sessionId, from: 0, to: 0 },
   }
 }
 
@@ -1103,12 +1940,32 @@ function findRunOpened(
   return undefined
 }
 
+function findRunSubmitted(
+  facts: readonly Fact[],
+  runId: string,
+): Extract<Fact, { readonly type: 'run/submitted' }> | undefined {
+  for (const fact of facts) {
+    if (fact.type === 'run/submitted' && fact.data.runId === runId) return fact
+  }
+  return undefined
+}
+
 function findRunClosed(
   facts: readonly Fact[],
   runId: string,
 ): Extract<Fact, { readonly type: 'run/closed' }> | undefined {
   for (const fact of facts) {
     if (fact.type === 'run/closed' && fact.data.runId === runId) return fact
+  }
+  return undefined
+}
+
+function findTaskClosed(
+  facts: readonly Fact[],
+  taskId: string,
+): Extract<Fact, { readonly type: 'task/closed' }> | undefined {
+  for (const fact of facts) {
+    if (fact.type === 'task/closed' && fact.data.taskId === taskId) return fact
   }
   return undefined
 }
