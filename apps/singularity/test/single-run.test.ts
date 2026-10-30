@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
 import {
   admitRootTask,
@@ -52,6 +53,8 @@ const CRITERION_ID = 'declared-output'
 const OUTPUT_ID = 'result'
 const OUTPUT_PATH = 'result.txt'
 const FROZEN_OUTPUT = 'frozen-output-before-verify'
+const LIVE = process.env.SINGULARITY_SPIKE_LIVE === '1'
+const VERIFIED_TEST_TIMEOUT_MS = LIVE ? 900_000 : 240_000
 
 const RUN_FACT_TYPES = new Set<string>([
   'task/admitted',
@@ -365,15 +368,22 @@ async function makeScenario(
       taskId: options.taskId,
       spec: {
         goal: {
-          summary: 'Produce one declared file for the S3-B2 single-Run fixture.',
+          summary: `Use the native bash tool to write exactly ${JSON.stringify(FROZEN_OUTPUT)} to ${OUTPUT_PATH} with no trailing newline, then submit the declared output.`,
           deliverable: OUTPUT_PATH,
           scope: ['single run'],
-          constraints: ['verifier consumes frozen CAS objects only'],
+          constraints: [
+            'verifier consumes frozen CAS objects only',
+            `${OUTPUT_PATH} must contain exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline`,
+          ],
         },
         criteria: [{
           id: CRITERION_ID,
-          statement: 'The declared output exists and contains the frozen fixture bytes.',
+          statement: `The declared output ${OUTPUT_PATH} exists and contains exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline.`,
           required: true,
+        }],
+        localGuidance: [{
+          id: 'exact-output',
+          statement: `Use bash with printf, for example: printf %s ${JSON.stringify(FROZEN_OUTPUT)} > ${OUTPUT_PATH}`,
         }],
         inputs: [{
           id: 'source',
@@ -533,15 +543,54 @@ function submitReply(): ScriptedReply {
 
 interface Harness {
   readonly spike: Awaited<ReturnType<typeof bootSpikeProfile>>
-  readonly fixture: DynamicChatFixture
+  readonly fixture?: DynamicChatFixture
   readonly workspace: string
   readonly home: string
   readonly storeRoot: string
 }
 
+interface FixtureHarness extends Harness {
+  readonly fixture: DynamicChatFixture
+}
+
+interface LiveHarness extends Harness {
+  readonly fixture?: undefined
+}
+
+interface LiveCredentials {
+  readonly baseURL: string
+  readonly apiKey: string
+}
+
+function requireLiveEnv(name: string): string {
+  const value = process.env[name]
+  if (value === undefined || value.length === 0) {
+    throw new Error(`${name} is required when SINGULARITY_SPIKE_LIVE=1`)
+  }
+  return value
+}
+
+async function assertSecretNotPersisted(directory: string, secret: string): Promise<void> {
+  try {
+    await access(directory)
+  } catch {
+    return
+  }
+  const entries = await readdir(directory, { recursive: true, withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    const contents = await readFile(join(entry.parentPath, entry.name), 'utf8')
+    assert.equal(
+      contents.includes(secret),
+      false,
+      `live credential must not be persisted under ${directory}`,
+    )
+  }
+}
+
 async function withHarness(
   script: ReplyScript,
-  run: (harness: Harness) => Promise<void>,
+  run: (harness: FixtureHarness) => Promise<void>,
 ): Promise<void> {
   const workspace = await mkdtemp(join(tmpdir(), 's3b2-work-'))
   const home = await mkdtemp(join(tmpdir(), 's3b2-home-'))
@@ -554,6 +603,29 @@ async function withHarness(
   } finally {
     await spike?.dispose()
     await fixture.close()
+    await rm(workspace, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true })
+    await rm(storeRoot, { recursive: true, force: true })
+  }
+}
+
+async function withLiveHarness(
+  credentials: LiveCredentials,
+  run: (harness: LiveHarness) => Promise<void>,
+): Promise<void> {
+  const workspace = await mkdtemp(join(tmpdir(), 's3b2-work-'))
+  const home = await mkdtemp(join(tmpdir(), 's3b2-home-'))
+  const storeRoot = await mkdtemp(join(tmpdir(), 's3b2-store-'))
+  let spike: Awaited<ReturnType<typeof bootSpikeProfile>> | undefined
+  try {
+    spike = await bootSpikeProfile({
+      home,
+      baseURL: credentials.baseURL,
+      apiKey: credentials.apiKey,
+    })
+    await run({ spike, workspace, home, storeRoot })
+  } finally {
+    await spike?.dispose()
     await rm(workspace, { recursive: true, force: true })
     await rm(home, { recursive: true, force: true })
     await rm(storeRoot, { recursive: true, force: true })
@@ -604,20 +676,119 @@ async function readJson(store: DomainStore, ref: Ref, domain: 'object' | 'eviden
   return parseJsonText(textDecoder.decode(bytes))
 }
 
-void test('single Run verified: self-read, plan, native bash output, independent CAS verifier', { timeout: 240_000 }, async () => {
+interface ObservedToolCall {
+  readonly name: string
+  readonly arguments: JsonValue | undefined
+}
+
+function parseToolArguments(raw: string): JsonValue | undefined {
+  try {
+    return parseJsonText(raw)
+  } catch {
+    return undefined
+  }
+}
+
+function observedToolCalls(events: readonly SessionEvent[]): ObservedToolCall[] {
+  const calls: ObservedToolCall[] = []
+  for (const event of events) {
+    if (event.type !== 'tool/call') continue
+    calls.push({
+      name: event.data.name,
+      arguments: parseToolArguments(event.data.arguments),
+    })
+  }
+  return calls
+}
+
+function isJsonRecord(value: JsonValue | undefined): value is Record<string, JsonValue> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function lastIndexWhere<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]
+    if (item !== undefined && predicate(item)) return index
+  }
+  return -1
+}
+
+function planSketchOf(call: ObservedToolCall): Record<string, JsonValue> | undefined {
+  if (!isJsonRecord(call.arguments)) return undefined
+  const sketch = call.arguments['sketch']
+  return isJsonRecord(sketch) ? sketch : undefined
+}
+
+/**
+ * Assertion by semantics, never by a fixed message/tool id. The runtime
+ * enforces the guard order; this independently proves the persisted DSH trace
+ * recorded one self read, one semantic PlanningSketch, a native bash step, and
+ * a submission in that order. It runs for both fixture and live models.
+ */
+function assertVerifiedToolSemantics(
+  events: readonly SessionEvent[],
+  expected: { readonly taskId: string; readonly runId: string; readonly contractDigest: string },
+): void {
+  assert.equal(
+    events.filter(event => event.type === 'turn/start').length,
+    1,
+    'Run must open exactly one turn from the single stable wake',
+  )
+  const wakeMessages = events.filter(
+    event => event.type === 'user/message'
+      && String(event.data.id) === `${expected.runId}:start`,
+  )
+  assert.equal(wakeMessages.length, 1, 'Run must persist exactly one start wake')
+
+  const calls = observedToolCalls(events)
+  const selfRead = calls.findIndex(call =>
+    call.name === 'singularity_read'
+    && isJsonRecord(call.arguments)
+    && call.arguments['kind'] === 'self'
+  )
+  const plan = calls.findIndex(call => {
+    if (call.name !== 'singularity_plan') return false
+    const sketch = planSketchOf(call)
+    return sketch !== undefined
+      && sketch['taskId'] === expected.taskId
+      && sketch['runId'] === expected.runId
+      && sketch['sourceContract'] === expected.contractDigest
+      && typeof sketch['contextEpoch'] === 'string'
+      && sketch['contextEpoch'].length > 0
+  })
+  const bash = lastIndexWhere(calls, call => call.name === 'bash')
+  const submit = lastIndexWhere(calls, call => call.name === 'singularity_submit')
+
+  assert.ok(selfRead >= 0, 'model must call singularity_read(kind="self")')
+  assert.ok(plan >= 0, 'model must persist a task/run/contract PlanningSketch')
+  assert.ok(bash >= 0, 'model must use the native bash tool for the declared output')
+  assert.ok(submit >= 0, 'model must call singularity_submit')
+  assert.ok(selfRead < plan, 'self read must precede the PlanningSketch')
+  assert.ok(plan < bash, 'PlanningSketch must precede the output-writing bash call')
+  assert.ok(bash < submit, 'the output-writing bash call must precede submission')
+}
+
+void test('single Run verified: self-read, plan, native bash output, independent CAS verifier', { timeout: VERIFIED_TEST_TIMEOUT_MS }, async () => {
   const taskId = `task-s3b2-verified-${String(process.pid)}-${String(Date.now())}`
   const runId = `${taskId}-run-1`
   const sessionId = `${taskId}-session-1`
   let scenario: Scenario | undefined
   const verifierCalls: { readonly inputs: readonly Ref[]; readonly outputs: readonly Ref[] }[] = []
 
-  await withHarness((request, index) => {
+  const fixtureScript: ReplyScript = (request, index) => {
     const base = selfReadAndPlan(request, index, scenario, taskId, runId)
     if (base !== undefined) return base
     if (index === 2) return writeOutputReply()
     if (index === 3) return submitReply()
     return { content: 'unexpected extra model request', usage: fixtureUsage(index) }
-  }, async ({ spike, fixture, workspace, storeRoot }) => {
+  }
+
+  const runVerified = async (
+    harness: Harness,
+    live: boolean,
+    liveApiKey?: string,
+  ): Promise<void> => {
+    const { spike, workspace, home, storeRoot } = harness
     scenario = await makeScenario(storeRoot, { taskId })
     const activeScenario = scenario
     const verifier: RunVerifier = {
@@ -663,29 +834,62 @@ void test('single Run verified: self-read, plan, native bash output, independent
       },
     }
 
-    const result = await executeSingleRun({
-      ctx: spike.ctx,
-      journalRoot: storeRoot,
-      workspace,
-      sessionId,
-      runId,
-      admission: activeScenario.runAdmission,
-      composition: activeScenario.composition,
-      agentOptions: agentOptions(),
-      maxOutputBytes: 1024 * 1024,
-      verifier,
-      transientInvalidReasons: [],
+    const sessionEvents: SessionEvent[] = []
+    const disposeSessionListener = spike.ctx.on('session/event', (session, event) => {
+      if (String(session.id) === sessionId) sessionEvents.push(event)
+      return undefined
     })
 
-    assert.equal(fixture.requests.length, 4, 'one wake must produce exactly four model requests')
-    const declaredTools = toolSchemaNames(fixture.requests[0] ?? {})
-    assert.ok(declaredTools.includes('singularity_read'), 'self-read tool must be visible before the first request')
-    assert.ok(declaredTools.includes('singularity_plan'), 'plan tool must be visible before the first request')
-    assert.ok(declaredTools.includes('singularity_submit'), 'submit tool must be visible before the first request')
-    assert.ok(declaredTools.includes('bash'), 'native bash tool must remain visible for declared outputs')
-    assert.ok(toolNames(fixture.requests[1] ?? {}).includes('singularity_read'))
-    assert.ok(toolNames(fixture.requests[2] ?? {}).includes('singularity_plan'))
-    assert.ok(toolNames(fixture.requests[3] ?? {}).includes('bash'))
+    const result = await (async () => {
+      try {
+        return await executeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          workspace,
+          sessionId,
+          runId,
+          admission: activeScenario.runAdmission,
+          composition: activeScenario.composition,
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024 * 1024,
+          verifier,
+          transientInvalidReasons: [],
+        })
+      } finally {
+        disposeSessionListener()
+      }
+    })()
+
+    if (live) {
+      assert.equal(harness.fixture, undefined, 'live mode must not start the scripted fixture')
+      assert.ok(liveApiKey)
+      // Close DSH before scanning its home so every session/log write is
+      // already durable. The harness dispose is idempotent.
+      await spike.dispose()
+      await assertSecretNotPersisted(home, liveApiKey)
+      assertVerifiedToolSemantics(sessionEvents, {
+        taskId,
+        runId,
+        contractDigest: activeScenario.contract.digest,
+      })
+    } else {
+      const fixture = harness.fixture
+      assert.ok(fixture)
+      assert.equal(fixture.requests.length, 4, 'one wake must produce exactly four model requests')
+      const declaredTools = toolSchemaNames(fixture.requests[0] ?? {})
+      assert.ok(declaredTools.includes('singularity_read'), 'self-read tool must be visible before the first request')
+      assert.ok(declaredTools.includes('singularity_plan'), 'plan tool must be visible before the first request')
+      assert.ok(declaredTools.includes('singularity_submit'), 'submit tool must be visible before the first request')
+      assert.ok(declaredTools.includes('bash'), 'native bash tool must remain visible for declared outputs')
+      assert.ok(toolNames(fixture.requests[1] ?? {}).includes('singularity_read'))
+      assert.ok(toolNames(fixture.requests[2] ?? {}).includes('singularity_plan'))
+      assert.ok(toolNames(fixture.requests[3] ?? {}).includes('bash'))
+      assertVerifiedToolSemantics(sessionEvents, {
+        taskId,
+        runId,
+        contractDigest: activeScenario.contract.digest,
+      })
+    }
 
     const facts = await readRunFacts(storeRoot)
     assert.deepEqual(sequenceOf(facts), [
@@ -833,7 +1037,21 @@ void test('single Run verified: self-read, plan, native bash output, independent
     } finally {
       await store.close()
     }
-  })
+  }
+
+  if (LIVE) {
+    const credentials = {
+      baseURL: requireLiveEnv('SINGULARITY_SPIKE_BASE_URL'),
+      apiKey: requireLiveEnv('SINGULARITY_SPIKE_API_KEY'),
+    }
+    await withLiveHarness(credentials, async harness => {
+      await runVerified(harness, true, credentials.apiKey)
+    })
+  } else {
+    await withHarness(fixtureScript, async harness => {
+      await runVerified(harness, false)
+    })
+  }
 })
 
 void test('single Run no-submission settles failed ExecutionRecord without a receipt', { timeout: 240_000 }, async () => {

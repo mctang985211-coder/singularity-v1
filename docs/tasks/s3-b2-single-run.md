@@ -104,8 +104,25 @@ HOME=/tmp/s3b2-home PNPM_HOME=/tmp/s3b2-pnpm \
 - **verifier timeout**：`timedOut=true`；`run/closed.reason=verifier-timeout`，同样引用 invalid `ExecutionRecord` 而非 Evidence。
 - **symlink**：bash 创建 symlink 后 submit 被 `OUTPUT_SYMLINK` 拒绝，未产生 `run/submitted`；随后普通文本结束，Run 按 no-submission 结算 failed，verifier 未运行。
 
+### Live 模式（默认关闭，真实模型由父代理运行）
+
+- `SINGULARITY_SPIKE_LIVE=1` 时，仅 verified 场景从 `SINGULARITY_SPIKE_BASE_URL`/`SINGULARITY_SPIKE_API_KEY` 读取真实端点，不启动 scripted chat fixture；其余 4 个场景保持 fixture，默认路径不变。
+- 真实模型仍走同一 worker card/guard：必须 `singularity_read(kind=self)` → `singularity_plan`（task/run/sourceContract/contextEpoch 语义有效）→ 原生 bash 写 `result.txt` → `singularity_submit`。断言从 DSH 持久 session 事件按语义关联：恰好 1 个 `turn/start`、恰好 1 个 `${runId}:start` wake、工具名与参数顺序；不依赖固定文本、message id 或 tool call id。该断言同时跑在 fixture verified 路径，已验证 session/event 捕获和语义关联本身；live 路径复用同一断言。
+- required outputs、self-read/plan/submit guard、冻结 CAS、manifest/receipt/Evidence/usage/sessionCut 和 verifier 对 `result.txt` 精确 bytes 的断言均不放宽。新增 `localGuidance` 只提示“用 bash/printf 写 exactly `frozen-output-before-verify`，无尾随换行”，不改变验收。
+- API key 只经 `bootSpikeProfile` launch environment 传入；测试不打印 key，Run 结束后递归扫描临时 DSH home，断言 key 未落盘。
+- 本次未执行真实模型；live 证据由父代理运行形成。fixture 5 场景、typecheck、lint 均通过。
+
+### 本次 live 支持后的局部验证
+
+```bash
+cd apps/singularity
+node --test test/single-run.test.ts   # 5/5 pass
+tsc --noEmit                          # pass
+eslint test/single-run.test.ts        # pass
+```
+
 ### 未覆盖项
 
-- 未使用真实模型；fixture 只证明协议、DSH composition、工具门禁与 CAS 结算路径，不构成真实模型或领域证据。
+- 本次未运行真实模型；fixture 只证明协议、DSH composition、工具门禁与 CAS 结算路径，不构成真实模型或领域证据。live 路径已实现并保持严格验收，但真实模型结果由父代理运行。
 - runtime 自身的未覆盖项保持有效：in-flight resume/恢复、step/token/deadline 硬取消、agent/verifier 宿主 timeout、preview/read receipt、S4 child/replacement/feedback/ancestor、skills/MCP/exploration mount。
 - C-02/C-03/C-11/C-12 及全部 conformance 仍为 `unproven`；本切片不修改 `docs/framework.md`、`spec-lock.json`、`docs/conformance.md`，也不宣称 S3-B 或 S3 完成。
