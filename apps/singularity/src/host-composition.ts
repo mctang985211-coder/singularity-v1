@@ -4,9 +4,15 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { loadProfileDirectory } from '@deepseek-ai/dsh-app-boot'
 import { INSTALL_ANCHOR, runProfile } from '@deepseek-ai/dsh/profile-boot'
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
+import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import type { CompositionPayload, JsonValue } from '@singularity/protocol'
+import { canonicalize, computeDigest } from '@singularity/protocol'
+import { renderWorkerCard } from '@singularity/runtime'
+import type { CasObjectWriter } from '@singularity/runtime'
 
 const REQUIRED_DSH_VERSION = '0.2.2-alpha.2'
 const PROFILE_NAME = 'singularity'
@@ -26,6 +32,86 @@ export interface SpikeProfile {
   readonly ctx: Context
   readonly dshVersion: string
   dispose(): Promise<void>
+}
+
+export interface SingleRunCompositionInput {
+  readonly writer: CasObjectWriter
+  readonly id: string
+  readonly base: Omit<CompositionPayload, 'dsh' | 'platformPrompt' | 'modelRoute' | 'resources'>
+  readonly agentOptions: AgentOptions
+}
+
+function jsonBytes(value: JsonValue): Uint8Array {
+  return new TextEncoder().encode(canonicalize(value))
+}
+
+function publicConfig(value: unknown, path = 'config'): JsonValue {
+  if (value === undefined) return {}
+  if (typeof value === 'object' && value !== null && 'get' in value
+    && typeof (value as { readonly get?: unknown }).get === 'function') {
+    return publicConfig((value as { get(): unknown }).get(), path)
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error(`unsafe DSH ${path}`)
+    return value
+  }
+  if (Array.isArray(value)) return value.map((item, index) => publicConfig(item, `${path}[${String(index)}]`))
+  if (typeof value !== 'object') throw new Error(`unsafe DSH ${path}`)
+  const output: Record<string, JsonValue> = {}
+  for (const key of Object.keys(value)) {
+    if (/^(?:apiKey|headers|secret|token|password|credential|authorization)$/i.test(key)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (descriptor?.value === undefined && descriptor?.get === undefined) continue
+      const field: unknown = descriptor.value
+      if (key === 'headers' && field !== null && typeof field === 'object' && Object.keys(field).length === 0) continue
+      throw new Error(`DSH ${path}.${key} is not public composition data`)
+    }
+    if (key === 'apiKeyEnv') continue
+    const item: unknown = (value as Record<string, unknown>)[key]
+    if (item !== undefined) output[key] = publicConfig(item, `${path}.${key}`)
+  }
+  return output
+}
+
+/** Build the narrow Composition consumed by run-recovery from the booted DSH view. */
+export async function buildSingleRunComposition(
+  ctx: Context,
+  input: SingleRunCompositionInput,
+): Promise<CompositionPayload> {
+  const provider = input.agentOptions.provider
+  const model = input.agentOptions.model
+  if (provider === undefined || model === undefined) throw new Error('composition requires provider and model')
+  const resolved = await ctx.llm.resolveModelInfo(provider, model)
+  const call = await ctx.llm.resolveCallConfig({ provider, model, ...input.agentOptions })
+  const config = [...ctx.loader.entries()]
+    .filter(entry => !entry.disabled && entry.options.name !== 'cordis:include')
+    .map(entry => ({
+      id: entry.id,
+      name: entry.options.name,
+      config: publicConfig(entry.fiber?.effectiveConfig, `loader.${entry.id}`),
+    }))
+  const assembly = await ctx.systemPrompt.assemble()
+  const prompt = `${renderPrompt(assembly)}\n\n${renderWorkerCard(false)}`
+  const dshConfig = await input.writer.putObject(
+    `${input.id}:dsh-config`,
+    jsonBytes({ v: 1, dshVersion: REQUIRED_DSH_VERSION, profile: PROFILE_NAME, entries: config }),
+  )
+  const modelRoute = await input.writer.putObject(
+    `${input.id}:model-route`,
+    jsonBytes(publicConfig({ v: 1, call, resolved })),
+  )
+  const resources = await input.writer.putObject(
+    `${input.id}:resources`,
+    jsonBytes(publicConfig({ v: 1, tools: ctx.tools.schemas() })),
+  )
+  return {
+    ...input.base,
+    dsh: { package: '@deepseek-ai/dsh', version: REQUIRED_DSH_VERSION, config: dshConfig },
+    platformPrompt: computeDigest('object', { v: 1, text: prompt }),
+    modelRoute,
+    resources,
+  }
 }
 
 function required(name: string, value: string | undefined): string {

@@ -59,7 +59,7 @@ import type {
   VerifierRequest,
 } from '@singularity/runtime'
 
-import { bootSpikeProfile } from '../src/host-composition.ts'
+import { bootSpikeProfile, buildSingleRunComposition } from '../src/host-composition.ts'
 
 const PROVIDER_ID = 'verifier:s3-c-fixture'
 const CRITERION_ID = 'declared-output'
@@ -308,6 +308,7 @@ function fixtureUsage(index: number): NonNullable<ScriptedReply['usage']> {
 
 async function makeScenario(
   storeRoot: string,
+  ctx: Context,
   options: { readonly taskId: string; readonly maxRuns: number },
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
@@ -354,9 +355,6 @@ async function makeScenario(
     const seed = await seedObject(store, 'seed:s3c', { v: 1, seed: 's3c-seed' })
     const profile = await seedObject(store, 'profile:s3c', { v: 1, profile: 's3c-profile' })
     const request = await seedObject(store, 'request:s3c', { v: 1, request: 'run recovery fixture' })
-    const dshConfig = await seedObject(store, 'dsh-config:s3c', { v: 1, config: 'profile' })
-    const modelRoute = await seedObject(store, 'model-route:s3c', { v: 1, route: 'singularity-local' })
-    const resources = await seedObject(store, 'resources:s3c', { v: 1, resources: [] })
     const bashTool = await seedObject(store, 'base-tool:bash', { v: 1, name: 'bash' })
 
     const rootAdmission: RootAdmissionInput = {
@@ -412,22 +410,20 @@ async function makeScenario(
     }
 
     const contract = admitRootTask(rootAdmission)
-    const compositionTemplate = await seedObject(store, 'composition-template:s3c', {
-      v: 1,
-      templateId: 'template:s3c',
+    const compositionTemplate = await seedObject(store, 'composition-template:s3c', method.templates[0])
+    const composition = await buildSingleRunComposition(ctx, {
+      writer: store,
+      id: 's3c',
+      agentOptions: agentOptions(),
+      base: {
+        v: 1,
+        contract: { id: contract.taskId, digest: contract.digest },
+        template: compositionTemplate,
+        skills: [],
+        mcpServers: [],
+        seed,
+      },
     })
-    const composition: CompositionPayload = {
-      v: 1,
-      dsh: { package: '@deepseek-ai/dsh', version: '0.2.2-alpha.2', config: dshConfig },
-      platformPrompt: computeDigest('object', { platformPrompt: 's3-c-run-recovery' }),
-      contract: { id: contract.taskId, digest: contract.digest },
-      template: compositionTemplate,
-      skills: [],
-      mcpServers: [],
-      modelRoute,
-      resources,
-      seed,
-    }
     const runAdmission: SingleRunAdmission = {
       contract,
       attempt: 1,
@@ -569,6 +565,15 @@ function agentOptions(): AgentOptions {
     provider: 'singularity-local',
     model: 'deepseek-v4.1-flash',
     reasoningEffort: ReasoningEffortId('max'),
+  }
+}
+
+async function currentComposition(ctx: Context, storeRoot: string, base: CompositionPayload): Promise<CompositionPayload> {
+  const store = await DomainStore.open({ root: storeRoot })
+  try {
+    return await buildSingleRunComposition(ctx, { writer: store, id: 's3c', agentOptions: agentOptions(), base })
+  } finally {
+    await store.close()
   }
 }
 
@@ -938,7 +943,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
   }
 
   await withHarness(fixtureScript, async ({ spike, fixture, workspace, storeRoot }) => {
-    scenario = await makeScenario(storeRoot, { taskId, maxRuns: 2 })
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 2 })
     const active = scenario
 
     const first = await executeSingleRun({
@@ -948,7 +953,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
       sessionId: firstSessionId,
       runId: firstRunId,
       admission: active.runAdmission,
-      composition: active.composition,
+      composition: await currentComposition(spike.ctx, storeRoot, active.composition),
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
       verifier: {
@@ -999,7 +1004,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
         runId: secondRunId,
         sessionId: secondSessionId,
         workspace: secondWorkspace,
-        composition: active.composition,
+        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: passingVerifier(active, secondRunId, secondWorkspace, verifierCalls),
@@ -1122,14 +1127,48 @@ void test('resume with a changed full composition writes invalid without any age
   await withHarness((_request, index) => {
     return { content: 'no model request is allowed', usage: fixtureUsage(index) }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
-    scenario = await makeScenario(storeRoot, { taskId, maxRuns: 1 })
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1 })
     const active = scenario
     await seedOpenRun(storeRoot, active, { runId, sessionId })
 
-    const changedComposition: CompositionPayload = {
-      ...active.composition,
-      platformPrompt: computeDigest('object', { platformPrompt: 's3-c-changed-composition' }),
+    const originalDigest = computeDigest('composition', active.composition)
+    spike.ctx.systemPrompt.section({ name: 's3c:changed-platform', order: 90, text: 'Changed host guidance.' })
+    await spike.ctx.loader.update('include:agent-loop', { config: { maxParallelToolCalls: 1 } })
+    const changedOptions = { ...agentOptions(), maxTokens: 512 }
+    const store = await DomainStore.open({ root: storeRoot })
+    let changedComposition: CompositionPayload
+    try {
+      changedComposition = await buildSingleRunComposition(spike.ctx, {
+        writer: store,
+        id: 's3c',
+        agentOptions: changedOptions,
+        base: active.composition,
+      })
+      const configText = textDecoder.decode((await store.readObject(changedComposition.dsh.config)).bytes)
+      assert.equal(configText.includes('fixture-key'), false)
+      assert.equal(configText.includes('SINGULARITY_SPIKE_API_KEY'), false)
+      const fiber = spike.ctx.loader.resolve('include:agent-loop').fiber
+      assert.ok(fiber)
+      let sensitiveReads = 0
+      Object.defineProperty(fiber, 'effectiveConfig', {
+        configurable: true,
+        value: { get headers() { sensitiveReads += 1; throw new Error('must not read sensitive fields') } },
+      })
+      try {
+        await assert.rejects(buildSingleRunComposition(spike.ctx, {
+          writer: store, id: 's3c', agentOptions: changedOptions, base: active.composition,
+        }), /headers is not public composition data/)
+        assert.equal(sensitiveReads, 0, 'credential-bearing field accessors must not be evaluated')
+      } finally {
+        Reflect.deleteProperty(fiber, 'effectiveConfig')
+      }
+    } finally {
+      await store.close()
     }
+    assert.equal(computeDigest('composition', active.composition), originalDigest, 'the old caller payload stays unchanged')
+    assert.notEqual(changedComposition.platformPrompt, active.composition.platformPrompt)
+    assert.notEqual(changedComposition.dsh.config.digest, active.composition.dsh.config.digest)
+    assert.notEqual(changedComposition.modelRoute.digest, active.composition.modelRoute.digest)
     assert.notEqual(
       computeDigest('composition', changedComposition),
       computeDigest('composition', active.composition),
@@ -1144,7 +1183,7 @@ void test('resume with a changed full composition writes invalid without any age
         runId,
         workspace,
         composition: changedComposition,
-        agentOptions: agentOptions(),
+        agentOptions: changedOptions,
         maxOutputBytes: 1024 * 1024,
         verifier: {
           provider: active.provider,
@@ -1201,7 +1240,7 @@ void test('resume with the original composition reuses the admitted wake without
   await withHarness((_request, index) => {
     return { content: 'seeded wake acknowledged', usage: fixtureUsage(index) }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
-    scenario = await makeScenario(storeRoot, { taskId, maxRuns: 1 })
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1 })
     const active = scenario
     await seedOpenRun(storeRoot, active, { runId, sessionId })
 
@@ -1238,7 +1277,7 @@ void test('resume with the original composition reuses the admitted wake without
         journalRoot: storeRoot,
         runId,
         workspace,
-        composition: active.composition,
+        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: {
@@ -1300,7 +1339,7 @@ void test('resume after submission verifies the same CAS snapshot and operationI
   await withHarness((_request, index) => {
     return { content: 'no model request is allowed', usage: fixtureUsage(index) }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
-    scenario = await makeScenario(storeRoot, { taskId, maxRuns: 1 })
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1 })
     const active = scenario
     await writeFile(join(workspace, OUTPUT_PATH), FROZEN_OUTPUT, 'utf8')
     seeded = await seedSubmittedRun(storeRoot, active, { runId, sessionId, workspace })
@@ -1316,7 +1355,7 @@ void test('resume after submission verifies the same CAS snapshot and operationI
         journalRoot: storeRoot,
         runId,
         workspace,
-        composition: active.composition,
+        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: passingVerifier(active, runId, workspace, verifierCalls),
