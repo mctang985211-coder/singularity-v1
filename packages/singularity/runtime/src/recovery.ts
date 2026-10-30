@@ -9,7 +9,6 @@ import {
 import type {
   BudgetReservation,
   CompositionPayload,
-  Fact,
   FactActor,
   RetryDecision,
 } from '@singularity/protocol'
@@ -33,7 +32,6 @@ import type {
   SingleRunAdmission,
 } from './run.ts'
 import { CommandService } from './service.ts'
-import { DomainStore } from './store.ts'
 import type { RunVerifier } from './verification.ts'
 import type { WakeDeliveryOutcome } from './wake.ts'
 
@@ -107,13 +105,13 @@ export async function retrySingleRun(
   const clock = request.clock ?? Date.now
   validateRetryRequest(request, actor, clock)
 
-  const store = await DomainStore.open({ root: request.journalRoot })
+  const store = await CommandService.open({ root: request.journalRoot, actor, clock })
   let view: RunJournalView
   let admission: SingleRunAdmission
   let composition: CompositionPayload
   let retryPolicy: RetryDecision
   try {
-    view = await readRunJournalView(store, request.previousRunId)
+    view = await readRunJournalView(store, request.previousRunId, request.transientInvalidReasons ?? [])
     const facts = store.facts()
     if (view.runClosed === undefined) {
       throw new SingleRunError(
@@ -133,16 +131,8 @@ export async function retrySingleRun(
         'previousRunId must be the latest Run of the Task',
       )
     }
-    for (const runId of view.runIds) {
-      if (!facts.some(fact => fact.type === 'run/closed' && fact.data.runId === runId)) {
-        throw new SingleRunError(
-          'RUN_NOT_CLOSED',
-          `Run ${JSON.stringify(runId)} is still open; retry requires one closed previous Run`,
-        )
-      }
-    }
     retryPolicy = retryDecisionForRun(
-      facts,
+      view.state,
       view.contract,
       view.runClosed,
       request.transientInvalidReasons ?? [],
@@ -168,7 +158,7 @@ export async function retrySingleRun(
         'retry cannot change the frozen Composition, contract, Method, or seed',
       )
     }
-    const reservation = retryReservation(view, facts)
+    const reservation = retryReservation(view)
     admission = {
       contract: view.contract,
       attempt: view.runIds.length + 1,
@@ -196,7 +186,7 @@ async function executeRetryAttempt(
   admission: SingleRunAdmission,
   composition: CompositionPayload,
 ): Promise<ExecuteSingleRunResult> {
-  // The read-only preflight store is closed before the shared create path opens
+  // The preflight writer is closed before the shared create path opens
   // the one CommandService writer for the fresh attempt.
   return executeSingleRun({
     ctx: request.ctx,
@@ -236,7 +226,7 @@ export async function resumeSingleRun(
     clock,
   })
   try {
-    const view = await readRunJournalView(service, request.runId)
+    const view = await readRunJournalView(service, request.runId, request.transientInvalidReasons ?? [])
     const internal = toExecuteRequest(request, view, actor, clock)
     const compositionMatched = compareCompositionPayload(view.composition, request.composition)
 
@@ -309,14 +299,13 @@ function toExecuteRequest(
 
 function retryReservation(
   view: RunJournalView,
-  facts: readonly Fact[],
 ): BudgetReservation {
   let used = 0
-  for (const fact of facts) {
-    if (fact.type !== 'run/closed') continue
-    if (!view.runIds.includes(fact.data.runId)) continue
-    used += fact.data.usage.inputTokens + fact.data.usage.outputTokens
-    const summary = fact.data.usage.summary
+  for (const runId of view.runIds) {
+    const usage = view.state.runs.get(runId)?.closed?.usage
+    if (usage === undefined) continue
+    used += usage.inputTokens + usage.outputTokens
+    const summary = usage.summary
     if (summary !== undefined) used += summary.inputTokens + summary.outputTokens
   }
   const tokens = view.contract.limits.maxTokens - used

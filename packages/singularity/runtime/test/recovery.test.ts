@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -35,11 +35,13 @@ import type {
 } from '@singularity/protocol'
 
 import { retrySingleRun, resumeSingleRun } from '../src/recovery.ts'
+import { executeSingleRun } from '../src/run.ts'
 import { DomainStore } from '../src/store.ts'
 import { CommandService } from '../src/service.ts'
 import { buildExecutionRecord } from '../src/verification.ts'
 import type { RunVerifier, VerifierRequest } from '../src/verification.ts'
 import { startWakeText } from '../src/wake.ts'
+import { prepareWorkspace } from '../src/workspace.ts'
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder('utf-8', { fatal: true })
@@ -117,6 +119,7 @@ interface BuildScenarioOptions {
   readonly taskId: string
   readonly maxRuns: number
   readonly maxTokens?: number
+  readonly inputAccess?: 'read' | 'copy-to-work'
 }
 
 async function buildScenario(
@@ -178,7 +181,7 @@ async function buildScenario(
         id: 'source',
         object: input,
         path: 'input.txt',
-        access: 'read',
+        access: options.inputAccess ?? 'read',
       }],
       outputs: [{
         id: OUTPUT_ID,
@@ -238,6 +241,7 @@ async function openRun(
     readonly sessionId: string
     readonly attempt: number
     readonly composition?: CompositionPayload
+    readonly tokens?: number
   },
 ): Promise<Ref> {
   const compositionRef = await putValue(
@@ -255,7 +259,7 @@ async function openRun(
     workspaceKey: options.runId,
     workspaceSeed: scenario.contract.environment.seed,
     budgetReservation: {
-      tokens: 10_000,
+      tokens: options.tokens ?? 10_000,
       steps: scenario.contract.limits.maxStepsPerRun,
       deadlineAt: scenario.contract.limits.deadlineAt,
     },
@@ -341,6 +345,7 @@ async function closeRunVerified(
     environment: { seed: scenario.contract.environment.seed.digest, mode: 'workspace' },
   })
   const evidenceRef = await putValue(service, evidence, `${options.runId}:evidence`, 'evidence')
+  await submitRun(service, scenario, options)
   await commitFact(service, 'run/closed', {
     runId: options.runId,
     classification: options.classification ?? 'verified',
@@ -478,6 +483,7 @@ function makeFakeContext(options: FakeContextOptions): {
   }
 
   const agentCtx = {
+    on() {},
     systemPrompt: {
       section() {},
       context() {},
@@ -603,6 +609,71 @@ function usageEvents(
 
 function unchangedFacts(root: string): Promise<readonly Fact[]> {
   return readFacts(root)
+}
+
+for (const mode of ['closed', 'active', 'exhausted', 'reservation', 'corrupt-resume', 'same-run'] as const) {
+  void test(`Task/Run execution rejects ${mode} before driving DSH`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 's3-state-'))
+    const workspace = await mkdtemp(join(tmpdir(), 's3-state-work-'))
+    try {
+      const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+      let scenario: Scenario
+      try {
+        scenario = await buildScenario(service, { taskId: `state-${mode}`, maxRuns: 1 })
+        await admitTask(service, scenario)
+        if (mode !== 'reservation') {
+          const compositionRef = await openRun(service, scenario, {
+            runId: 'old-run', sessionId: 'old-session', attempt: 1,
+            tokens: mode === 'corrupt-resume' ? scenario.contract.limits.maxTokens + 1 : 10_000,
+          })
+          if (mode !== 'active' && mode !== 'corrupt-resume') {
+            await closeRunFailed(service, scenario, {
+              runId: 'old-run', sessionId: 'old-session', compositionRef,
+              reason: 'no-submission', usage: usage(10, 2, 1),
+            })
+            if (mode === 'closed') {
+              await commitFact(service, 'task/closed', {
+                taskId: scenario.taskId, outcome: 'failed', reason: 'maxRuns exhausted',
+                decisiveRunId: 'old-run',
+                evidenceRefs: [],
+              }, 'task:closed')
+            }
+          }
+        }
+      } finally {
+        await service.close()
+      }
+      const before = await readFacts(root)
+      const { ctx, state } = makeFakeContext({ resume: 'ok' })
+      const request = {
+        ctx, journalRoot: root, workspace,
+        runId: mode === 'same-run' || mode === 'corrupt-resume' ? 'old-run' : 'new-run',
+        sessionId: mode === 'same-run' || mode === 'corrupt-resume' ? 'old-session' : 'new-session',
+        admission: {
+          contract: scenario.contract,
+          attempt: mode === 'reservation' ? 1 : 2,
+          budgetReservation: {
+            tokens: mode === 'reservation' ? scenario.contract.limits.maxTokens + 1 : 1000,
+            steps: 4, deadlineAt: scenario.contract.limits.deadlineAt,
+          },
+        },
+        composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+        verifier: { provider: scenario.provider, verify() { throw new Error('must not verify') } },
+        clock: () => FIXED_NOW + 1000,
+      }
+      await assert.rejects(mode === 'corrupt-resume' ? resumeSingleRun(request) : executeSingleRun(request),
+        (error: unknown) => error instanceof Error && 'code' in error && error.code === (
+          mode === 'reservation' || mode === 'corrupt-resume' ? 'BUDGET_EXCEEDED'
+            : mode === 'same-run' ? 'RUN_ALREADY_CLOSED'
+              : mode === 'exhausted' ? 'RETRY_NOT_ALLOWED' : 'TASK_NOT_OPEN'
+        ))
+      assert.deepEqual(await readFacts(root), before)
+      assert.equal(state.createCalls.length + state.resumeCalls.length, 0)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
 }
 
 void test('retrySingleRun allows a failed latest Run and starts a fresh attempt/session/workspace', { timeout: 60_000 }, async () => {
@@ -1309,9 +1380,11 @@ void test('resumeSingleRun resumes the same session and does not resend an admit
     let scenario: Scenario
     let factsBefore: readonly Fact[]
     try {
-      scenario = await buildScenario(service, { taskId, maxRuns: 1 })
+      scenario = await buildScenario(service, { taskId, maxRuns: 1, inputAccess: 'copy-to-work' })
       await admitTask(service, scenario)
       await openRun(service, scenario, { runId, sessionId, attempt: 1 })
+      await prepareWorkspace(workspace, scenario.contract.spec.inputs, service)
+      await writeFile(join(workspace, 'input.txt'), 'work in progress')
       factsBefore = await readFacts(root)
     } finally {
       await service.close()
@@ -1338,6 +1411,7 @@ void test('resumeSingleRun resumes the same session and does not resend an admit
     })
 
     assert.equal(result.compositionMatched, true)
+    assert.equal(await readFile(join(workspace, 'input.txt'), 'utf8'), 'work in progress')
     assert.equal(result.sessionAction, 'resumed')
     assert.equal(result.wakeOutcome, 'already-admitted')
     assert.equal(state.resumeCalls.length, 1)

@@ -1,3 +1,5 @@
+import { mkdir, realpath } from 'node:fs/promises'
+
 import type { AgentHandle, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
@@ -15,7 +17,6 @@ import {
   refSchema,
   seal,
   submissionManifestSchema,
-  taskContractSchema,
   validateSubmissionManifest,
   verifyDigest,
   verifyTaskContract,
@@ -36,11 +37,11 @@ import type {
   PublicReceipt,
   Ref,
   RetryDecision,
-  RunCloseState,
   RunClosedPayload,
   SessionCut,
   SubmissionManifest,
   TaskContract,
+  TaskRunState,
   UsageRecord,
 } from '@singularity/protocol'
 
@@ -184,13 +185,9 @@ export interface ContinueOpenedRunResult extends ExecuteSingleRunResult {
   readonly wakeOutcome?: WakeDeliveryOutcome
 }
 
-/** @internal CAS plus journal view shared by runtime and recovery. */
-export interface JournalCasReader extends CasObjectReader {
-  facts(): readonly Fact[]
-}
-
 /** @internal Frozen journal view for one known Run. */
 export interface RunJournalView {
+  readonly state: TaskRunState
   readonly taskId: string
   readonly contract: TaskContract
   readonly contractRef: Ref
@@ -300,7 +297,6 @@ async function openSingleRun(
   const compositionPayload = parseProtocolValue(compositionPayloadSchema, request.composition)
   validateComposition(compositionPayload, contract)
 
-  const workspace = await prepareWorkspace(request.workspace, contract.spec.inputs, service)
   const baseToolNames = await resolveBaseToolNames(contract, service)
   assertToolsAvailable(baseToolNames, request.ctx)
 
@@ -311,8 +307,9 @@ async function openSingleRun(
   await ensureObject(service, contract.acceptance, request.admission.acceptanceBytes)
   await ensureObject(service, contract.environment.seed, request.admission.workspaceSeedBytes)
 
-  let facts = service.facts()
-  const admitted = findTaskAdmitted(facts, contract.taskId)
+  const facts = service.facts()
+  const admitted = facts.find((fact): fact is Extract<Fact, { type: 'task/admitted' }> =>
+    fact.type === 'task/admitted' && fact.data.taskId === contract.taskId)
   if (admitted === undefined) {
     await commitFact(
       service,
@@ -323,25 +320,19 @@ async function openSingleRun(
       { taskId: contract.taskId, contract: contractRef },
       'task/admitted',
       { taskId: contract.taskId, contract: contractRef },
+      request.transientInvalidReasons ?? [],
     )
-    facts = service.facts()
   } else if (admitted.data.contract.digest !== contract.digest) {
     throw new SingleRunError(
       'TASK_CONTRACT_MISMATCH',
       `Task ${JSON.stringify(contract.taskId)} was admitted with a different contract digest`,
     )
   }
-  if (findRunClosed(facts, request.runId) !== undefined) {
-    throw new SingleRunError('RUN_ALREADY_CLOSED', `Run ${JSON.stringify(request.runId)} is already closed`)
-  }
-  if (findRunOpened(facts, request.runId) !== undefined) {
-    throw new SingleRunError('RUN_ALREADY_OPENED', `Run ${JSON.stringify(request.runId)} is already open`)
-  }
-  const existingRuns = countRuns(facts, contract.taskId)
-  if (request.admission.attempt !== existingRuns + 1) {
+  const existing = (await service.taskRunState(request.transientInvalidReasons ?? [])).runs.get(request.runId)
+  if (existing !== undefined) {
     throw new SingleRunError(
-      'INVALID_ARGUMENT',
-      `attempt must be ${String(existingRuns + 1)}, received ${String(request.admission.attempt)}`,
+      existing.phase === 'closed' ? 'RUN_ALREADY_CLOSED' : 'RUN_ALREADY_OPENED',
+      `Run ${JSON.stringify(request.runId)} already exists`,
     )
   }
 
@@ -373,7 +364,10 @@ async function openSingleRun(
       workspaceSeed: contract.environment.seed,
       budgetReservation: request.admission.budgetReservation,
     },
+    request.transientInvalidReasons ?? [],
   ) as Extract<Fact, { readonly type: 'run/opened' }>
+
+  const workspace = await prepareWorkspace(request.workspace, contract.spec.inputs, service)
 
   return buildPreparedRun({
     actor,
@@ -403,16 +397,6 @@ export async function continueOpenedRun(
   const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
   const clock = request.clock ?? Date.now
   validateRequest(request, actor, clock)
-  const facts = service.facts()
-  if (findRunClosed(facts, request.runId) !== undefined) {
-    throw new SingleRunError('RUN_ALREADY_CLOSED', `Run ${JSON.stringify(request.runId)} is already closed`)
-  }
-  if (findRunSubmitted(facts, request.runId) !== undefined) {
-    throw new SingleRunError(
-      'RUN_NOT_SUBMITTED',
-      `Run ${JSON.stringify(request.runId)} is already submitted; recover its closure instead`,
-    )
-  }
   const prepared = await loadPreparedRun(request, actor, clock, service)
   return drivePreparedRun(prepared, request, service, mode)
 }
@@ -423,12 +407,15 @@ async function loadPreparedRun(
   clock: () => number,
   service: CommandService,
 ): Promise<PreparedRun> {
-  const view = await readRunJournalView(service, request.runId)
+  const view = await readRunJournalView(service, request.runId, request.transientInvalidReasons ?? [])
   if (view.taskClosed !== undefined) {
     throw new SingleRunError('TASK_ALREADY_CLOSED', `Task ${JSON.stringify(view.taskId)} is already closed`)
   }
   if (view.runClosed !== undefined) {
     throw new SingleRunError('RUN_ALREADY_CLOSED', `Run ${JSON.stringify(request.runId)} is already closed`)
+  }
+  if (view.runSubmitted !== undefined) {
+    throw new SingleRunError('RUN_NOT_SUBMITTED', 'Run is already submitted; recover its closure instead')
   }
   const contract = request.admission.contract
   if (!verifyTaskContract(contract)) {
@@ -453,7 +440,8 @@ async function loadPreparedRun(
     )
   }
   validateComposition(compositionPayloadOf(view.composition), contract)
-  const workspace = await prepareWorkspace(request.workspace, contract.spec.inputs, service)
+  await mkdir(request.workspace, { recursive: true })
+  const workspace = await realpath(request.workspace)
   const baseToolNames = await resolveBaseToolNames(contract, service)
   assertToolsAvailable(baseToolNames, request.ctx)
   return buildPreparedRun({
@@ -563,7 +551,7 @@ async function drivePreparedRun(
         setup,
       })
     } else {
-      const acquired = await resumeOrCreateAgent(request, prepared.workspace, setup)
+      const acquired = await resumeOrCreateAgent(request, prepared.workspace, setup, service)
       handle = acquired.handle
       sessionAction = acquired.action
     }
@@ -633,6 +621,7 @@ async function resumeOrCreateAgent(
   request: ExecuteSingleRunRequest,
   workspace: string,
   setup: AgentSetup,
+  service: CommandService,
 ): Promise<{ readonly handle: AgentHandle; readonly action: 'created' | 'resumed' }> {
   const sessionId = request.sessionId as SessionId
   if (request.ctx.agents.get(sessionId) !== undefined
@@ -652,6 +641,7 @@ async function resumeOrCreateAgent(
   } catch (error) {
     if (!isSessionNotFoundError(error)) throw error
   }
+  await prepareWorkspace(workspace, request.admission.contract.spec.inputs, service)
   const handle = await request.ctx.agents.create({
     sessionId,
     meta: { cwd: workspace },
@@ -710,7 +700,7 @@ export async function completeSubmittedRun(
   const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
   const clock = request.clock ?? Date.now
   validateRequest(request, actor, clock)
-  const view = await readRunJournalView(service, request.runId)
+  const view = await readRunJournalView(service, request.runId, request.transientInvalidReasons ?? [])
   if (view.taskClosed !== undefined) {
     throw new SingleRunError('TASK_ALREADY_CLOSED', `Task ${JSON.stringify(view.taskId)} is already closed`)
   }
@@ -788,7 +778,7 @@ export async function closeOpenedRunInvalid(
   const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
   const clock = request.clock ?? Date.now
   validateRequest(request, actor, clock)
-  const view = await readRunJournalView(service, request.runId)
+  const view = await readRunJournalView(service, request.runId, request.transientInvalidReasons ?? [])
   if (view.taskClosed !== undefined) {
     throw new SingleRunError('TASK_ALREADY_CLOSED', `Task ${JSON.stringify(view.taskId)} is already closed`)
   }
@@ -840,7 +830,7 @@ export async function reconcileClosedRun(
   const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
   const clock = request.clock ?? Date.now
   validateRequest(request, actor, clock)
-  const view = await readRunJournalView(service, request.runId)
+  const view = await readRunJournalView(service, request.runId, request.transientInvalidReasons ?? [])
   if (view.runClosed === undefined) {
     throw new SingleRunError('RUN_NOT_CLOSED', `Run ${JSON.stringify(request.runId)} is not closed`)
   }
@@ -860,7 +850,7 @@ export async function reconcileClosedRun(
     [],
   )
   const retry = retryDecisionForRun(
-    service.facts(),
+    view.state,
     view.contract,
     view.runClosed,
     runtime.transientInvalidReasons,
@@ -977,45 +967,40 @@ async function loadClosureDetails(
 
 /** @internal Reads the frozen contract/composition/Run facts for one runId. */
 export async function readRunJournalView(
-  reader: JournalCasReader,
+  reader: CommandService,
   runId: string,
+  transientInvalidReasons: readonly string[],
 ): Promise<RunJournalView> {
   const facts = reader.facts()
-  const runOpened = findRunOpened(facts, runId)
+  const state = await reader.taskRunState(transientInvalidReasons)
+  const runOpened = facts.find((fact): fact is Extract<Fact, { type: 'run/opened' }> =>
+    fact.type === 'run/opened' && fact.data.runId === runId)
   if (runOpened === undefined) {
     throw new SingleRunError('RUN_NOT_FOUND', `Run ${JSON.stringify(runId)} has no run/opened fact`)
   }
   const taskId = runOpened.data.taskId
-  const admitted = findTaskAdmitted(facts, taskId)
+  const admitted = facts.find((fact): fact is Extract<Fact, { type: 'task/admitted' }> =>
+    fact.type === 'task/admitted' && fact.data.taskId === taskId)
   if (admitted === undefined) {
     throw new SingleRunError('RUN_NOT_FOUND', `Task ${JSON.stringify(taskId)} has no task/admitted fact`)
   }
+  const task = state.tasks.get(taskId)
+  if (task === undefined) throw new SingleRunError('RUN_NOT_FOUND', 'Run Task is missing from the projection')
+  const contract = task.contract
   const contractRef = admitted.data.contract
-  const contract = await readFrozenContract(reader, contractRef)
-  if (contract.taskId !== taskId) {
-    throw new SingleRunError('TASK_CONTRACT_MISMATCH', 'task/admitted contract id does not match its fact')
-  }
   if (contract.origin.kind !== 'root') {
     throw new SingleRunError('CONTRACT_INVALID', 'single-Run recovery requires a root TaskContract')
   }
   const compositionRef = runOpened.data.composition
   const composition = await readFrozenComposition(reader, compositionRef)
-  if (composition.contract.id !== contract.taskId
-    || composition.contract.digest !== contract.digest) {
-    throw new SingleRunError('COMPOSITION_MISMATCH', 'frozen Composition contract does not match the Task')
-  }
-  if (composition.seed.id !== runOpened.data.workspaceSeed.id
-    || composition.seed.digest !== runOpened.data.workspaceSeed.digest) {
-    throw new SingleRunError('COMPOSITION_MISMATCH', 'frozen Composition seed does not match run/opened')
-  }
-  const runIds: string[] = []
-  for (const fact of facts) {
-    if (fact.type === 'run/opened' && fact.data.taskId === taskId) runIds.push(fact.data.runId)
-  }
-  const runSubmitted = findRunSubmitted(facts, runId)
-  const runClosed = findRunClosed(facts, runId)
-  const taskClosed = findTaskClosed(facts, taskId)
+  const runSubmitted = facts.find((fact): fact is Extract<Fact, { type: 'run/submitted' }> =>
+    fact.type === 'run/submitted' && fact.data.runId === runId)
+  const runClosed = facts.find((fact): fact is Extract<Fact, { type: 'run/closed' }> =>
+    fact.type === 'run/closed' && fact.data.runId === runId)
+  const taskClosed = facts.find((fact): fact is Extract<Fact, { type: 'task/closed' }> =>
+    fact.type === 'task/closed' && fact.data.taskId === taskId)
   return {
+    state,
     taskId,
     contract,
     contractRef,
@@ -1025,24 +1010,8 @@ export async function readRunJournalView(
     ...(runSubmitted === undefined ? {} : { runSubmitted }),
     ...(runClosed === undefined ? {} : { runClosed }),
     ...(taskClosed === undefined ? {} : { taskClosed }),
-    runIds,
+    runIds: task.runIds,
   }
-}
-
-async function readFrozenContract(reader: CasObjectReader, ref: Ref): Promise<TaskContract> {
-  let contract: TaskContract
-  try {
-    contract = parseProtocolValue(taskContractSchema, await readJsonValue(reader, ref, 'contract'))
-  } catch (error) {
-    throw new SingleRunError('CONTRACT_INVALID', 'frozen TaskContract is not strict JSON', { cause: error })
-  }
-  if (!verifyTaskContract(contract)) {
-    throw new SingleRunError('CONTRACT_INVALID', 'frozen TaskContract does not verify')
-  }
-  if (contract.digest !== ref.digest) {
-    throw new SingleRunError('CONTRACT_INVALID', 'frozen TaskContract digest does not match its ref')
-  }
-  return contract
 }
 
 /** @internal Reads and verifies the Composition frozen by `run/opened`. */
@@ -1368,6 +1337,7 @@ async function commitRunSubmitted(
       planningSketchRef,
       feedbackRefs: [],
     },
+    runtime.transientInvalidReasons,
   )
 }
 
@@ -1589,6 +1559,7 @@ async function commitRunClosed(
     } as unknown as JsonValue,
     'run/closed',
     payload,
+    runtime.transientInvalidReasons,
   )
 }
 
@@ -1615,6 +1586,7 @@ async function commitTaskClosed(
       decisiveRunId: runId,
       evidenceRefs,
     },
+    runtime.transientInvalidReasons,
   )
 }
 
@@ -1625,7 +1597,7 @@ async function finalizeSettlement(
   settlement: Settlement,
 ): Promise<{ readonly taskFact?: Fact; readonly retry: RetryDecision }> {
   const retry = retryDecisionForRun(
-    service.facts(),
+    await service.taskRunState(runtime.transientInvalidReasons),
     runtime.contract,
     settlement.runFact,
     runtime.transientInvalidReasons,
@@ -1688,39 +1660,23 @@ function buildExecutionResult(
  * Runtime recovery and the reducer share the same pure decision.
  */
 export function retryDecisionForRun(
-  facts: readonly Fact[],
+  state: TaskRunState,
   contract: TaskContract,
   runFact: Fact,
   transientInvalidReasons: readonly string[],
   now: number,
 ): RetryDecision {
-  const closed = runFact.type === 'run/closed' ? runFact : undefined
-  if (closed === undefined) return { allowed: false, reason: 'Run closure fact missing' }
-  const closure: RunCloseState = {
-    classification: closed.data.classification,
-    reason: closed.data.reason,
-    source: 'run/closed',
-    factDigest: closed.digest,
-    usage: closed.data.usage,
-    ...('evidenceRef' in closed.data
-      ? { evidenceRef: closed.data.evidenceRef }
-      : { executionRecordRef: closed.data.executionRecordRef }),
-  }
-  const runTask = new Map<string, string>()
-  let runCount = 0
-  for (const fact of facts) {
-    if (fact.type !== 'run/opened') continue
-    runTask.set(fact.data.runId, fact.data.taskId)
-    if (fact.data.taskId === contract.taskId) runCount += 1
-  }
+  const run = runFact.type === 'run/closed' ? state.runs.get(runFact.data.runId) : undefined
+  const task = state.tasks.get(contract.taskId)
+  if (run === undefined || task === undefined) return { allowed: false, reason: 'Run closure fact missing' }
   let tokens = 0
   let unknown = false
-  for (const fact of facts) {
-    if (fact.type !== 'run/closed') continue
-    if (runTask.get(fact.data.runId) !== contract.taskId) continue
-    tokens += fact.data.usage.inputTokens + fact.data.usage.outputTokens
-    if (fact.data.usage.unknownRequests > 0) unknown = true
-    const summary = fact.data.usage.summary
+  for (const attempt of state.runs.values()) {
+    const usage = attempt.closed?.usage
+    if (usage === undefined || state.tasks.get(attempt.taskId)?.rootTaskId !== task.rootTaskId) continue
+    tokens += usage.inputTokens + usage.outputTokens
+    if (usage.unknownRequests > 0) unknown = true
+    const summary = usage.summary
     if (summary !== undefined) {
       tokens += summary.inputTokens + summary.outputTokens
       if (summary.unknownRequests > 0) unknown = true
@@ -1728,9 +1684,9 @@ export function retryDecisionForRun(
   }
   return decideRetryPolicy(
     {
-      runPhase: 'closed',
-      closure,
-      runCount,
+      runPhase: run.phase,
+      ...(run.closed === undefined ? {} : { closure: run.closed }),
+      runCount: task.runIds.length,
       maxRuns: contract.limits.maxRuns,
       maxTokens: contract.limits.maxTokens,
       deadlineAt: contract.limits.deadlineAt,
@@ -1907,6 +1863,7 @@ async function commitFact<Type extends FactType>(
   input: JsonValue,
   type: Type,
   data: FactPayloadMap[Type],
+  transientInvalidReasons: readonly string[],
 ): Promise<Fact> {
   const command: NormalizedCommand = {
     v: 1,
@@ -1917,65 +1874,7 @@ async function commitFact<Type extends FactType>(
     scope,
     input,
   }
-  return service.commit({ command, type, data })
-}
-
-function findTaskAdmitted(
-  facts: readonly Fact[],
-  taskId: string,
-): Extract<Fact, { readonly type: 'task/admitted' }> | undefined {
-  for (const fact of facts) {
-    if (fact.type === 'task/admitted' && fact.data.taskId === taskId) return fact
-  }
-  return undefined
-}
-
-function findRunOpened(
-  facts: readonly Fact[],
-  runId: string,
-): Extract<Fact, { readonly type: 'run/opened' }> | undefined {
-  for (const fact of facts) {
-    if (fact.type === 'run/opened' && fact.data.runId === runId) return fact
-  }
-  return undefined
-}
-
-function findRunSubmitted(
-  facts: readonly Fact[],
-  runId: string,
-): Extract<Fact, { readonly type: 'run/submitted' }> | undefined {
-  for (const fact of facts) {
-    if (fact.type === 'run/submitted' && fact.data.runId === runId) return fact
-  }
-  return undefined
-}
-
-function findRunClosed(
-  facts: readonly Fact[],
-  runId: string,
-): Extract<Fact, { readonly type: 'run/closed' }> | undefined {
-  for (const fact of facts) {
-    if (fact.type === 'run/closed' && fact.data.runId === runId) return fact
-  }
-  return undefined
-}
-
-function findTaskClosed(
-  facts: readonly Fact[],
-  taskId: string,
-): Extract<Fact, { readonly type: 'task/closed' }> | undefined {
-  for (const fact of facts) {
-    if (fact.type === 'task/closed' && fact.data.taskId === taskId) return fact
-  }
-  return undefined
-}
-
-function countRuns(facts: readonly Fact[], taskId: string): number {
-  let count = 0
-  for (const fact of facts) {
-    if (fact.type === 'run/opened' && fact.data.taskId === taskId) count += 1
-  }
-  return count
+  return service.commitTaskRun({ command, type, data }, transientInvalidReasons)
 }
 
 function recordField(value: unknown, key: string): unknown {

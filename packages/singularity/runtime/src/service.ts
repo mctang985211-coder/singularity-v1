@@ -3,21 +3,31 @@ import { resolve } from 'node:path'
 
 import {
   computeCommandDigest,
+  compositionSchema,
   decideCommandIdempotency,
   factActorSchema,
+  methodRevisionSchema,
+  parseJsonText,
   parseNormalizedCommand,
   parseProtocolValue,
   projectCommandFacts,
+  reduceTaskRunFacts,
+  sealFact,
+  taskContractSchema,
   unsealedFactSchema,
 } from '@singularity/protocol'
 import type {
   CommandProjectionEntry,
+  Composition,
   Fact,
   FactActor,
   FactPayloadMap,
   FactType,
+  MethodRevision,
   NormalizedCommand,
   Ref,
+  TaskContract,
+  TaskRunState,
   UnsealedFact,
 } from '@singularity/protocol'
 
@@ -176,6 +186,26 @@ export class CommandService {
    * only after append + fsync.
    */
   async commit<Type extends FactType>(input: CommandCommitInput<Type>): Promise<Fact> {
+    return this.commitCommand(input)
+  }
+
+  /** Production Task/Run commands share this writer and the protocol fold. */
+  commitTaskRun<Type extends FactType>(
+    input: CommandCommitInput<Type>,
+    transientInvalidReasons: readonly string[],
+  ): Promise<Fact> {
+    return this.commitCommand(input, transientInvalidReasons)
+  }
+
+  /** Rebuilds the sole Task/Run projection from verified journal and CAS. */
+  taskRunState(transientInvalidReasons: readonly string[]): Promise<TaskRunState> {
+    return this.projectTaskRuns(this.factsValue, transientInvalidReasons)
+  }
+
+  private async commitCommand<Type extends FactType>(
+    input: CommandCommitInput<Type>,
+    transientInvalidReasons?: readonly string[],
+  ): Promise<Fact> {
     if (this.closed || this.closing) {
       throw new CommandServiceError('INVALID_ARGUMENT', 'CommandService is closed')
     }
@@ -243,6 +273,10 @@ export class CommandService {
         await this.store.putObject(object.id, object.bytes, object.domain ?? 'object')
       }
 
+      if (transientInvalidReasons !== undefined) {
+        await this.projectTaskRuns([...this.factsValue, sealFact(unsealed)], transientInvalidReasons)
+      }
+
       const fact = await this.store.appendFact(unsealed)
       this.factsValue = [...this.factsValue, fact]
       this.projection.set(fact.commandId, {
@@ -253,6 +287,33 @@ export class CommandService {
       })
       return fact
     })
+  }
+
+  private async projectTaskRuns(
+    facts: readonly Fact[],
+    transientInvalidReasons: readonly string[],
+  ): Promise<TaskRunState> {
+    const contracts = new Map<string, TaskContract>()
+    const methods = new Map<string, MethodRevision>()
+    const compositions = new Map<string, Composition>()
+    const load = async (ref: Ref, domain: CasDigestDomain) =>
+      parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode((await this.readObject(ref, domain)).bytes))
+    for (const fact of facts) {
+      const admitted = fact.type === 'task/admitted'
+        ? [parseProtocolValue(taskContractSchema, await load(fact.data.contract, 'contract'))]
+        : fact.type === 'task/children-admitted' ? fact.data.children.map(child => child.contract) : []
+      for (const contract of admitted) {
+        contracts.set(fact.type === 'task/admitted' ? fact.data.contract.id : contract.taskId, contract)
+        methods.set(contract.method.id, parseProtocolValue(methodRevisionSchema, await load(contract.method, 'method')))
+      }
+      if (fact.type === 'run/opened') {
+        compositions.set(fact.data.composition.id, parseProtocolValue(compositionSchema, await load(fact.data.composition, 'composition')))
+      }
+    }
+    return reduceTaskRunFacts(
+      facts.filter(fact => fact.type.startsWith('task/') || fact.type.startsWith('run/')),
+      { contracts, methods, compositions, transientInvalidReasons },
+    )
   }
 
   /**
