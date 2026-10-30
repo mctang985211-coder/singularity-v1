@@ -18,7 +18,7 @@
 - **S1-D 出口证据**：真实 DSH profile + chat fixture 验证稳定 `MessageId`：首次发送 1 请求；完成后与 resume 后 already-admitted 不新增请求/turn；raw DSH 同 ID followup 对照会第二次购买；pending/removed/unknown/corrupt 全部 fail closed；独立子进程 provider 收到 hanging 请求后 SIGKILL，父 resume 为 interrupted、无 assistant settlement/usage unknown、deliver 不重发且外部请求仍为 1。请求数以 chat fixture 实际 HTTP 计数，不用 `request/header`；仅 test-local helper，无生产 wake authority 或新账本。根 `pnpm verify` tests `5/5`；详见 `docs/tasks/s1-d-wake-delivery.md`。
 - **S1-E 出口证据**：真实 DSH profile + chat fixture 验证 self-read/preview tool result 原 receipt 为 current；dispose/resume 后 surface 仍可见，但 `session/end-seed` 改变 epoch 使 receipt stale；真实 `ctx.compaction.compactNow()` 增加恰好一次 summarizer fixture 请求，`compaction/start`/`summary`/`end` 与 `shadowedSeqs` 齐全，surface/`deriveMessages` 不含旧正文，receipt epoch+surface 双失效；`inbox.clear` 不改变 epoch/surface。helper 直接复用 `@deepseek-ai/dsh-compaction` 公开类型，无平行事件声明。根 `pnpm verify` tests `6/6`；详见 `docs/tasks/s1-e-compaction-epoch.md`。
 - **剩余未验证**：自动 pressure compaction/prune、失败/取消 compaction、pending/removed wake 成功恢复、provider exactly-once、resource read/template 成功内容、C-12 composition mismatch、C-16 manifest/capability precheck 与 C-20 等后续场景；这些不阻挡 S1 已完成的范围，但保持 unproven，C-12/C-16/C-20 整体亦未改为 proven；`docs/conformance.md` 与 `spec-lock.json` 未改。
-- **下一步**：S2 protocol 已完成（S2-A–S2-C4）；S3 进行中，S3-A 已完成，下一单 Run 执行闭环。
+- **下一步**：S2 protocol 已完成（S2-A–S2-C4）；S3 进行中，S3-A 与 PlanningSketch schema 已完成；验收 amendment 待用户确认，S3-B 未开始。
 - **规范引用**：§2、§3、§12、§14、§19.1。
 - **实现位置**：优先放在未来 runtime 的真实组合测试和 app profile，不新增独立产品包。
 - **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP `stdio` 与 `streamable-http` 挂载及 disposal、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量；两种 transport 均须通过 server/tool guard，不得只验证连接成功。
@@ -35,7 +35,7 @@
 - **S2-C3 出口证据**：官方 Node `24.9.0`/pnpm `11.18.0`，frozen install 与根 `pnpm verify` 全通过；protocol tests `157/157`、app tests `6/6`（合计 `163`），`git diff --check` 通过。root/child 确定性 output 合并、drafts、host pin、authorized inputs、join 派生、batch/identity guards 已实现；补齐 taskId/criteria/input 去重和 child limits 不放大 parent（deadline/depth/tasks/tokens/steps/batch），`maxRuns` 不臆造继承。历史消耗/全局 reservation、preview/epoch、FS/CAS IO、catalog 内容、verifier、runtime/真实模型未验证；所有 conformance unproven。详见 `docs/tasks/s2-c3-admission.md`。
 - **S2-C4 出口证据**：官方 Node `24.9.0`/pnpm `11.18.0`，frozen install 与根 `pnpm verify` 全通过；protocol tests `178/178`、app tests `6/6`（合计 `184`），`git diff --check` 通过。实现单一 Task/Run fold + `ReplayContext`、root ref/method/template、Composition contract/seed、run/retry、children/replacement/current-Run winner、submit required join、subtree cancellation、batch `parentRunId`+`batchId` 与共享 child limits。集成审查修复了跨 Run replacement、submit required winner、batch 全局误识别、cut 强制和 Composition 校验，不是只写首版。C-01/C-05/C-11 纯协议正负例已覆盖；conformance 整体仍 unproven（CAS 内容/FS/runtime/DSH/真实模型未验证）。详见 `docs/tasks/s2-c4-task-run-reducer.md`。
 - **剩余未验证**：CAS 对象内容、journal FS/command service、preview/receipt、context epoch、catalog 内容、verifier、runtime/DSH、真实模型；Method/RSI reducer 属后续；所有 conformance 场景保持 unproven。
-- **下一步**：S3 单 Task/Run 闭环；S3-A 已完成，下一单 Run 执行闭环；不得把纯 reducer 证据当作 runtime 完成。
+- **下一步**：S3 进行中；S3-A 与 PlanningSketch schema 已完成；验收 amendment 待用户确认，S3-B 未开始。
 - **规范引用**：§4、§5、§9、§10。
 - **工作**：建立 `packages/singularity/protocol`，选择单一 schema 权威源，实现冻结对象、闭合 facts、命令 guard、纯 projection、JCS/digest 和错误 union。
 - **Done when**：C-01、C-05 及 C-11 的纯协议部分有正负例；protocol 不依赖 DSH、FS、网络、进程、时钟或领域包；根 `pnpm verify` 已纳入 typecheck、lint、test、build。
@@ -43,10 +43,12 @@
 
 ## S3 — 单 Task/Run 执行闭环
 
-- **状态**：进行中，S3-A 已完成。
+- **状态**：进行中，S3-A 与 PlanningSketch schema 已完成；acceptance/submission amendment 待用户确认，S3 验收前规范阻断。
 - **S3-A 出口证据**：官方 Node `24.9.0`/pnpm `11.18.0`，frozen install 与根 `pnpm verify` 全通过；protocol tests `178/178`、app tests `6/6`、runtime tests `20/20`（合计 `204`），`git diff --check` 通过。根 verify 顺序为 `project → build → typecheck → lint → test`，先 build 解决干净 checkout 的 `protocol/dist` 缺失，不绕过门禁。实现真实 CAS temp/fsync/atomic rename/read 验证、JCS NDJSON fact append/fsync、单 root writer、重启幂等、并发 seq、torn tail、中间损坏拒绝。未验证 CAS 引用内容的 domain-aware replay 校验、跨进程 OS lock、业务结果重建、Agent/verifier/C-02/C-03/C-12；C-11 不得标 proven。详见 `docs/tasks/s3-a-journal-cas.md`。
-- **剩余未验证**：CAS 引用内容 domain-aware replay 校验、跨进程 OS lock、业务结果重建、Agent/DSH、verifier、Evidence/usage/wake、C-02/C-03/C-12；C-11 仍缺完整场景证据，所有 conformance 保持 unproven。
-- **下一步**：单 Run 执行闭环；不得把存储层证据当作完整 Run/Task 闭环。
+- **PlanningSketch schema 出口证据**：官方 Node `24.9.0`，protocol tests `189/189`、app tests `6/6`、runtime tests `20/20`（合计 `215`），根 `pnpm verify` 与 `git diff --check` 通过。schema 只接受有序 `[0,1]` 或 `[0,1,2]` levels，严格拒绝 authority 字段；仅结构校验，无 host guard、receipt 或 runtime。详见 `docs/tasks/s3-planning-schema.md`。
+- **验收前规范阻断**：acceptance/submission amendment 002 仍为草案，待用户确认，未批准、未实现。Q1–Q11 待用户决定，尤其 `AcceptanceRef` domain、`PublicReceipt` verdict/digests/metric/exit、`SubmissionManifest` 拆分/checks、invalid receipt 去向、privateReceipt opaque、conformance 不变。确认前不得实现 receipt/manifest，S3-B 未开始、未完成。详见 `docs/tasks/s3-acceptance-amendment.md`。
+- **剩余未验证**：CAS 引用内容 domain-aware replay 校验、跨进程 OS lock、业务结果重建、Agent/DSH、verifier、Evidence/usage/wake、C-02/C-03/C-12；acceptance/submission schema 尚未获批，S3-B 未开始；C-11 仍缺完整场景证据，所有 conformance 保持 unproven。
+- **下一步**：等待 amendment 002 用户确认并更新正式规范；确认前不实现 receipt/manifest，也不宣称 S3-B 开始或完成。
 - **规范引用**：§9、§10、§11、§15、§19.1。
 - **工作**：建立 runtime 的单 writer/journal/CAS、workspace、Agent 驱动、submit/stop、独立 verifier、Evidence、usage 和恢复。
 - **Done when**：C-02、C-03、C-12 通过真实 DSH 组合；模型自述和 idle 不会完成 Task；提交只消费冻结 CAS；失败与基础设施 invalid 不混淆。

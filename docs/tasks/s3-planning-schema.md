@@ -1,6 +1,6 @@
 # S3 PlanningSketch schema 任务卡
 
-- **状态**：已完成（纯 protocol strict schema 与 `z.infer` 类型；levels 已按集成审查收紧为 `[0,1]`/`[0,1,2]` schema union）；S3 继续，未实现 host guard、receipt 或 runtime。
+- **状态**：已完成（纯 protocol strict schema 与 `z.infer` 类型；levels 已按集成审查收紧为 `[0,1]`/`[0,1,2]` schema union）；S3 继续，未实现 host guard、receipt 或 runtime。acceptance/submission amendment 仍待用户确认，S3 验收前规范阻断，不宣称 S3-B 开始。
 
 ## Goal
 
@@ -117,3 +117,5 @@ git diff --check                                     # 通过
 - `directPlan.join` 的固定 Method 派生、preview/children-admitted/NodeView 呈现未实现。
 - Task/Workflow/调度 authority、祖先查询、runtime、真实模型场景均未涉及。
 - C-08 及所有 conformance 场景保持 unproven。
+
+结论：PlanningSketch schema 完成；S3-B 未开始，等待 acceptance/submission amendment 用户确认。

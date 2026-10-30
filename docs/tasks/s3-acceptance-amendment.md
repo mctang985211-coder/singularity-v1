@@ -84,13 +84,13 @@ pnpm install --frozen-lockfile --store-dir /tmp/singularity-v1-acceptance-store
 
 pnpm verify
 # project → build → typecheck → lint → test, all passed.
-# protocol 178/178; app 6/6; runtime 20/20 (204 total).
+# protocol 189/189; app 6/6; runtime 20/20 (215 total).
 
 git diff --check
 # Passed.
 ```
 
-注意：`pnpm verify` 只证明仓库在新增文档后仍满足既有门禁；它不证明 acceptance/manifest 语义正确，也不替代 C-02/C-03/C-11 的真实证据。
+注意：本任务卡自身只新增两份文档；同分支随后集成 PlanningSketch schema 后，根 verify 计数为 protocol `189/189`、app `6/6`、runtime `20/20`（合计 `215`）。`pnpm verify` 只证明仓库仍满足既有门禁；它不证明 acceptance/manifest 语义正确，也不替代 C-02/C-03/C-11 的真实证据。
 
 ## 覆盖摘要
 
@@ -100,7 +100,7 @@ git diff --check
 - 明确 manifest/receipt 使用 `object` domain，Evidence 使用 `evidence` domain；不新增 domain、fact 或 writer。
 - 明确 no-submission/stop/invalid/cancelled 走 ExecutionRecord，不伪造 receipt；invalid receipt 不是 acceptance Evidence；retry 不复制旧 verdict。
 - 记录 C-02/C-03/C-11 的增量影响：submit→manifest→external verify→receipt→Evidence（verified/criteria-failed failed）或 ExecutionRecord（invalid）；C-03 的 no-submission/stop/cancelled 无 receipt；C-11 对象先于 fact、幂等重放不重验、固定 operationId 恢复。
-- 列出 11 个待确认问题，未把任何推荐字段写成已批准事实。
+- 列出 Q1–Q11 共 11 个待确认问题，未把任何推荐字段写成已批准事实：AcceptanceRef domain（Q1）、PublicReceipt verdict/digests/metric/exit（Q2–Q5）、SubmissionManifest 拆分/checks（Q6–Q8）、privateReceipt opaque（Q9）、conformance 不变（Q10）、invalid receipt 去向（Q11）。
 
 ## 仍未验证
 
