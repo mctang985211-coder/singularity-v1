@@ -371,6 +371,7 @@ async function freezeFile(options: FreezeFileOptions): Promise<FrozenPath | unde
     throw new SubmissionError('OUTPUT_TOO_LARGE', 'submission size cap is exhausted')
   }
   const absolute = resolveInside(options.workspace, options.path)
+  await assertNoSymlinkAncestors(options.workspace, options.path)
   let stat
   try {
     stat = await lstat(absolute)
@@ -422,6 +423,7 @@ async function freezeTree(options: FreezeTreeOptions): Promise<FrozenPath | unde
     throw new SubmissionError('OUTPUT_TOO_LARGE', 'submission size cap is exhausted')
   }
   const absolute = resolveInside(options.workspace, options.path)
+  await assertNoSymlinkAncestors(options.workspace, options.path)
   let rootStat
   try {
     rootStat = await lstat(absolute)
