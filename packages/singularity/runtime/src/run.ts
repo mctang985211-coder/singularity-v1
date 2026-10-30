@@ -259,20 +259,11 @@ export async function executeSingleRun(
   validateRequest(request, actor, clock)
   const service = await CommandService.open({ root: request.journalRoot, actor, clock })
   try {
-    return await executeWithService(request, actor, clock, service)
+    const prepared = await openSingleRun(request, actor, clock, service)
+    return await drivePreparedRun(prepared, request, service, 'create')
   } finally {
     await service.close()
   }
-}
-
-async function executeWithService(
-  request: ExecuteSingleRunRequest,
-  actor: FactActor,
-  clock: () => number,
-  service: CommandService,
-): Promise<ContinueOpenedRunResult> {
-  const prepared = await openSingleRun(request, actor, clock, service)
-  return drivePreparedRun(prepared, request, service, 'create')
 }
 
 async function openSingleRun(
@@ -513,67 +504,79 @@ async function drivePreparedRun(
   mode: OpenedRunMode,
 ): Promise<ContinueOpenedRunResult> {
   const { contract, runtime } = prepared
-  const { controller, budget, checkBudget, startBudget } = await createToolController(prepared, request, service)
+  const { controller, budget, checkBudget, stopBudget, startBudget } = await createToolController(prepared, request, service)
   let handle: AgentHandle | undefined
   let snapshot = emptySnapshot(request.sessionId)
   let agentErrorCode: string | undefined
   let agentErrorDetail: string | undefined
+  let drainPending = false
   let sessionAction: 'created' | 'resumed' = 'created'
   let wakeOutcome: WakeDeliveryOutcome | undefined
+  const remaining = () => prepared.runOpened.data.budgetReservation.deadlineAt - runtime.clock()
+  const initialRemaining = remaining()
   const deadline = AbortSignal.timeout(Math.min(2_147_483_647,
-    Math.max(0, prepared.runOpened.data.budgetReservation.deadlineAt - runtime.clock())))
+    Math.max(0, Number.isSafeInteger(initialRemaining) ? initialRemaining : 0)))
   const cancel = () => handle?.agent.cancel({ kind: 'hook', reason: 'deadline' })
   deadline.addEventListener('abort', cancel, { once: true })
 
   try {
+    if (!checkBudget()) throw new Error('Run budget unavailable')
     const setup = buildAgentSetup(runtime, request, controller, budget, checkBudget)
-    if (mode === 'create') {
-      handle = await request.ctx.agents.create({
+    const acquiring = mode === 'create'
+      ? request.ctx.agents.create({
         sessionId: request.sessionId as SessionId,
         meta: { cwd: prepared.workspace },
         agentOptions: request.agentOptions,
         signal: deadline,
         setup,
-      })
-    } else {
-      const acquired = await resumeOrCreateAgent(request, prepared.workspace, setup, service, deadline)
+      }).then(handle => ({ handle, action: 'created' as const }))
+      : resumeOrCreateAgent(request, prepared.workspace, setup, service, deadline)
+    let abandoned = false
+    void acquiring.then(({ handle }) => {
+      if (abandoned) return handle.dispose()
+      return undefined
+    }).catch(() => undefined)
+    try {
+      const acquired = await waitWithin(acquiring, remaining())
       handle = acquired.handle
       sessionAction = acquired.action
+    } catch (error) {
+      abandoned = true
+      drainPending = error instanceof DOMException && error.name === 'TimeoutError'
+      throw error
     }
     deadline.throwIfAborted()
+    if (!checkBudget()) throw new Error('Run budget unavailable')
     // The start wake text is derived from the frozen run/opened boundary, not
     // from the live clock: resuming must reproduce the same stable message body.
     wakeOutcome = await deliverWakeOnceOrFail(handle.agent, {
       wakeId: `${request.runId}:start`,
       text: startWakeText(contract.taskId, request.runId, startBudget),
     })
-    await handle.agent.whenIdle()
+    await waitWithin(handle.agent.whenIdle(), remaining())
   } catch (error) {
     agentErrorCode = error instanceof WakeDeliveryRefusedError
       ? WAKE_REFUSED_REASON
       : AGENT_ERROR_REASON
     agentErrorDetail = errorMessage(error)
   } finally {
+    stopBudget()
     deadline.removeEventListener('abort', cancel)
     if (handle !== undefined) {
-      try {
-        await request.ctx.sessions.flush(handle.agent.session)
-      } catch {
-        // The durable log remains readable even when no flush listener exists.
-      }
       snapshot = snapshotSession(handle.agent.session)
       try {
-        await handle.dispose()
+        // Native dispose cancels, drains scoped jobs, and closes persistence.
+        // Cleanup has a host-only grace period; no new work is admitted.
+        await waitWithin(handle.dispose(), 5_000)
       } catch (error) {
-        if (agentErrorCode === undefined) {
-          agentErrorCode = AGENT_ERROR_REASON
-          agentErrorDetail = `dispose failed: ${errorMessage(error)}`
-        }
+        drainPending = true
+        agentErrorCode = AGENT_ERROR_REASON
+        agentErrorDetail = `dispose failed: ${errorMessage(error)}`
       }
       try {
         snapshot = snapshotSession(handle.agent.session)
       } catch {
-        // Keep the pre-dispose snapshot if the session object is detached.
+        // Preserve the pre-dispose cut if the Session is already detached.
       }
     } else {
       const live = request.ctx.sessions.get(request.sessionId as SessionId)
@@ -582,9 +585,19 @@ async function drivePreparedRun(
   }
 
   const tools = controller.snapshot()
-  const settlement = tools.submitted && tools.submission !== undefined
+  const settlement = agentErrorCode === undefined && snapshot.failure === undefined && !drainPending
+    && tools.submitted && tools.submission !== undefined
     ? await settleSubmitted(runtime, request, service, snapshot, tools)
-    : await settleExecutionRecord(runtime, request, service, snapshot, tools, agentErrorCode, agentErrorDetail)
+    : await settleExecutionRecord(
+      runtime,
+      request,
+      service,
+      snapshot,
+      tools,
+      agentErrorCode,
+      agentErrorDetail,
+      drainPending,
+    )
 
   const { taskFact, retry } = await finalizeSettlement(runtime, request, service, settlement)
   const result = buildExecutionResult(
@@ -600,6 +613,20 @@ async function drivePreparedRun(
     ...result,
     sessionAction,
     ...(wakeOutcome === undefined ? {} : { wakeOutcome }),
+  }
+}
+
+/** Host wait bound; DSH retains ownership of the pending operation. */
+async function waitWithin<T>(pending: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([new Promise<never>((_resolve, reject) => {
+      const expire = () => { reject(new DOMException('Run lifecycle deadline', 'TimeoutError')) }
+      if (!Number.isSafeInteger(milliseconds) || milliseconds <= 0) expire()
+      else timer = setTimeout(expire, Math.min(2_147_483_647, milliseconds))
+    }), pending])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
 }
 
@@ -632,7 +659,9 @@ async function resumeOrCreateAgent(
   } catch (error) {
     if (!isSessionNotFoundError(error)) throw error
   }
+  signal.throwIfAborted()
   await prepareWorkspace(workspace, request.admission.contract.spec.inputs, service)
+  signal.throwIfAborted()
   const handle = await request.ctx.agents.create({
     sessionId,
     meta: { cwd: workspace },
@@ -1291,8 +1320,10 @@ async function createToolController(
   let liveAgent: { readonly session: Session } | undefined
   let lastNow = runtime.startedAt
   let clockValid = true
+  let active = true
   const currentUsage = () => liveAgent === undefined ? zeroUsage : snapshotSession(liveAgent.session).usage
   const checkBudget = (tokens = 0, steps = 0): boolean => {
+    if (!active) return false
     const now = runtime.clock()
     clockValid &&= Number.isSafeInteger(now) && now >= lastNow
     lastNow = now
@@ -1319,6 +1350,7 @@ async function createToolController(
       liveAgent = agent
     },
     commitSubmission: async (frozen, sessionId, transcriptSeq) => {
+      if (!checkBudget()) throw new Error('Run budget unavailable')
       const current = controller.snapshot()
       if (current.planningSketchRef === undefined) {
         throw new Error('planning sketch is missing at submit commit')
@@ -1327,7 +1359,7 @@ async function createToolController(
       return frozen.manifestRef
     },
   })
-  return { controller, budget, checkBudget,
+  return { controller, budget, checkBudget, stopBudget: () => { active = false },
     startBudget: computeBudget(limits, zeroUsage, runtime.startedAt, runtime.startedAt, prior.unknown) }
 }
 
@@ -1419,38 +1451,10 @@ async function settleSubmitted(
     }
   }
 
-  const executionRecord = buildExecutionRecord({
-    contract: runtime.contract,
-    runId: request.runId,
-    composition: runtime.compositionRef,
-    outputs: frozen.outputRefs,
-    usage: snapshot.usage,
-    sessionCut: snapshot.sessionCut,
-    reason: verification.reason,
-  })
-  const executionRecordRef = await putSealed(
-    service,
-    `${request.runId}:execution-record`,
-    executionRecord,
-    'object',
+  const settlement = await settleRecord(
+    runtime, request, service, snapshot, 'invalid', verification.code, verification.reason, tools,
   )
-  const runFact = await commitRunClosed(runtime, service, {
-    runId: request.runId,
-    classification: 'invalid',
-    reason: verification.code,
-    executionRecordRef,
-    usage: snapshot.usage,
-    planningSketchRef: tools.planningSketchRef,
-  })
-  return {
-    classification: 'invalid',
-    reason: verification.code,
-    runFact,
-    manifest: frozen.manifest,
-    manifestRef: frozen.manifestRef,
-    executionRecord,
-    executionRecordRef,
-  }
+  return { ...settlement, manifest: frozen.manifest, manifestRef: frozen.manifestRef }
 }
 
 async function settleExecutionRecord(
@@ -1461,6 +1465,7 @@ async function settleExecutionRecord(
   tools: RunToolSnapshot,
   agentErrorCode: string | undefined,
   agentErrorDetail: string | undefined,
+  drainPending: boolean,
 ): Promise<Settlement> {
   let classification: 'failed' | 'invalid'
   let reason: string
@@ -1479,7 +1484,7 @@ async function settleExecutionRecord(
     reason = NO_SUBMISSION_REASON
     recordReason = NO_SUBMISSION_REASON
   }
-  return settleRecord(runtime, request, service, snapshot, classification, reason, recordReason, tools)
+  return settleRecord(runtime, request, service, snapshot, classification, reason, recordReason, tools, drainPending)
 }
 
 async function settleInvalidRecord(
@@ -1505,6 +1510,7 @@ async function settleRecord(
   reason: string,
   recordReason: string,
   tools: RunToolSnapshot,
+  drainPending = false,
 ): Promise<Settlement> {
   const executionRecord = buildExecutionRecord({
     contract: runtime.contract,
@@ -1513,6 +1519,8 @@ async function settleRecord(
     usage: snapshot.usage,
     sessionCut: snapshot.sessionCut,
     reason: recordReason,
+    ...(tools.submission === undefined ? {} : { outputs: tools.submission.outputRefs }),
+    ...(drainPending ? { drainPending: true } : {}),
   })
   const executionRecordRef = await putSealed(
     service,

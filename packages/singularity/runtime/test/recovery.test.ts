@@ -7,6 +7,7 @@ import test from 'node:test'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 
 import {
   admitRootTask,
@@ -41,6 +42,7 @@ import { CommandService } from '../src/service.ts'
 import { buildExecutionRecord } from '../src/verification.ts'
 import type { RunVerifier, VerifierRequest } from '../src/verification.ts'
 import { startWakeText } from '../src/wake.ts'
+import { initialContextEpoch } from '../src/epoch.ts'
 import { prepareWorkspace } from '../src/workspace.ts'
 
 const textEncoder = new TextEncoder()
@@ -447,6 +449,11 @@ interface FakeContextOptions {
   readonly initialEvents?: readonly SessionEvent[]
   /** Live session events exposed through `ctx.sessions.get` for recovery snapshots. */
   readonly liveEvents?: readonly SessionEvent[]
+  readonly dispose?: () => Promise<void>
+  readonly create?: () => Promise<void>
+  readonly work?: (agent: Agent, tools: ReadonlyMap<string, {
+    execute(args: unknown, execution: ToolExecution): unknown
+  }>) => Promise<void>
 }
 
 function makeFakeContext(options: FakeContextOptions): {
@@ -459,6 +466,7 @@ function makeFakeContext(options: FakeContextOptions): {
     followupCalls: 0,
     disposed: 0,
   }
+  const tools = new Map<string, { execute(args: unknown, execution: ToolExecution): unknown }>()
 
   const makeAgent = (sessionId: string): Agent => {
     const events: SessionEvent[] = [...(options.initialEvents ?? [])]
@@ -466,7 +474,7 @@ function makeFakeContext(options: FakeContextOptions): {
       id: sessionId as SessionId,
       snapshotEvents: () => events,
     } as unknown as Session
-    return {
+    const agent = {
       session,
       status: 'idle',
       followup(message: unknown) {
@@ -478,8 +486,10 @@ function makeFakeContext(options: FakeContextOptions): {
           data: message,
         } as unknown as SessionEvent)
       },
-      whenIdle: () => Promise.resolve(),
+      whenIdle: () => options.work?.(agent, tools) ?? Promise.resolve(),
+      cancel() {},
     } as unknown as Agent
+    return agent
   }
 
   const agentCtx = {
@@ -489,7 +499,9 @@ function makeFakeContext(options: FakeContextOptions): {
       context() {},
     },
     tools: {
-      register() {},
+      register(tool: { name: string; execute(args: unknown, execution: ToolExecution): unknown }) {
+        tools.set(tool.name, tool)
+      },
       guard() {},
       restrict() {},
       definitions: () => [],
@@ -512,13 +524,14 @@ function makeFakeContext(options: FakeContextOptions): {
           sessionId: String(createOptions.sessionId),
           cwd: createOptions.meta?.cwd,
         })
+        await options.create?.()
         const agent = makeAgent(String(createOptions.sessionId))
         await runSetup(createOptions.setup, agent)
         return {
           agent,
           dispose() {
             state.disposed += 1
-            return Promise.resolve()
+            return options.dispose?.() ?? Promise.resolve()
           },
         }
       },
@@ -538,7 +551,7 @@ function makeFakeContext(options: FakeContextOptions): {
           agent,
           dispose() {
             state.disposed += 1
-            return Promise.resolve()
+            return options.dispose?.() ?? Promise.resolve()
           },
         }
       },
@@ -609,6 +622,126 @@ function usageEvents(
 
 function unchangedFacts(root: string): Promise<readonly Fact[]> {
   return readFacts(root)
+}
+
+void test('Agent cleanup failure after submission cannot produce Evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's3-drain-root-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's3-drain-work-'))
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId: 'task-drain-failed', maxRuns: 1 })
+    } finally {
+      await service.close()
+    }
+    await writeFile(join(workspace, OUTPUT_PATH), 'frozen output\n')
+    const sessionId = 'session-drain-failed'
+    const runId = 'run-drain-failed'
+    const { ctx, state } = makeFakeContext({
+      resume: 'ok',
+      dispose: () => Promise.reject(new Error('owned process remains active')),
+      async work(agent, tools) {
+        const execution = { agent, concludeTurn() {} } as unknown as ToolExecution
+        await tools.get('singularity_read')?.execute({ kind: 'self' }, execution)
+        await tools.get('singularity_plan')?.execute({ sketch: {
+          v: 1, taskId: scenario.taskId, runId,
+          contextEpoch: initialContextEpoch(sessionId),
+          objective: 'Write the declared output.',
+          levels: [0, 1].map(level => ({ level, purpose: 'Write output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+          directPlan: [], assumptions: [], sourceContract: scenario.contract.digest,
+        } }, execution)
+        await tools.get('singularity_submit')?.execute({ outputIds: [OUTPUT_ID], includeLearningDrafts: false }, execution)
+      },
+    })
+    let verifierCalls = 0
+    const result = await executeSingleRun({
+      ctx, journalRoot: root, workspace, runId, sessionId,
+      admission: { contract: scenario.contract, attempt: 1, budgetReservation: {
+        tokens: 100_000, steps: 4, deadlineAt: scenario.contract.limits.deadlineAt,
+      } },
+      composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify(request) {
+        verifierCalls += 1
+        return Promise.resolve(sealPublicReceipt({
+          v: 1, provider: scenario.provider, operationId: request.operationId,
+          contractDigest: scenario.contract.digest,
+          inputDigests: request.inputs.map(ref => ref.digest),
+          outputDigests: request.outputs.map(ref => ref.digest),
+          criteria: [{ id: CRITERION_ID, verdict: 'pass', reason: 'pass' }],
+          exit: { code: 0, signal: null }, timedOut: false,
+        }))
+      } },
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(factsOfType(result.facts, 'run/submitted').length, 1, result.executionRecord?.reason)
+    assert.equal(result.classification, 'invalid')
+    assert.equal(verifierCalls, 0)
+    assert.equal(result.executionRecord?.drainPending, true)
+    assert.equal(result.evidence, undefined)
+    assert.equal(state.disposed, 1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+for (const phase of ['create', 'idle', 'dispose'] as const) {
+  void test(`Agent ${phase} wait is bounded and late results cannot wake a closed Run`, { timeout: 10_000 }, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 's3-wait-root-'))
+    const workspace = await mkdtemp(join(tmpdir(), 's3-wait-work-'))
+    const release = Promise.withResolvers<undefined>()
+    const entered = Promise.withResolvers<undefined>()
+    try {
+      const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+      let scenario: Scenario
+      try {
+        scenario = await buildScenario(service, { taskId: `task-wait-${phase}`, maxRuns: 1 })
+      } finally {
+        await service.close()
+      }
+      t.mock.timers.enable({ apis: ['setTimeout'] })
+      const pending = () => { entered.resolve(undefined); return release.promise }
+      const { ctx, state } = makeFakeContext({
+        resume: 'ok',
+        ...(phase === 'create' ? { create: pending } : {}),
+        ...(phase === 'idle' ? { work: pending } : {}),
+        ...(phase === 'dispose' ? { dispose: pending } : {}),
+      })
+      const execution = executeSingleRun({
+        ctx, journalRoot: root, workspace, runId: `run-wait-${phase}`, sessionId: `session-wait-${phase}`,
+        admission: { contract: scenario.contract, attempt: 1, budgetReservation: {
+          tokens: 100_000, steps: 4, deadlineAt: FIXED_NOW + 2000,
+        } },
+        composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+        verifier: { provider: scenario.provider, verify() { throw new Error('must not verify unfinished lifecycle') } },
+        clock: () => FIXED_NOW + 1000,
+      })
+      await entered.promise
+      t.mock.timers.tick(phase === 'dispose' ? 5000 : 1000)
+      let guard: ReturnType<typeof setInterval> | undefined
+      const bounded = await Promise.race([
+        execution,
+        new Promise<'hung'>(resolve => { guard = setInterval(() => { resolve('hung') }, 500) }),
+      ])
+      clearInterval(guard)
+      release.resolve(undefined)
+      const result = await execution
+      assert.notEqual(bounded, 'hung', 'uncooperative DSH wait must not stall Run settlement')
+      assert.equal(result.classification, 'invalid')
+      assert.equal(result.executionRecord?.drainPending, phase !== 'idle' ? true : undefined)
+      assert.equal(result.evidence, undefined)
+      await new Promise<void>(resolve => { setImmediate(resolve) })
+      assert.equal(state.disposed, 1)
+      assert.equal(state.followupCalls, phase === 'create' ? 0 : 1)
+      assert.equal(factsOfType(result.facts, 'run/submitted').length, 0)
+    } finally {
+      release.resolve(undefined)
+      t.mock.timers.reset()
+      await rm(root, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
 }
 
 for (const mode of ['closed', 'active', 'exhausted', 'reservation', 'corrupt-resume', 'same-run'] as const) {
