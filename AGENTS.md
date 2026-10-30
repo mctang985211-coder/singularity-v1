@@ -79,13 +79,13 @@ pnpm verify
 
 ```text
 pnpm verify:project   # node scripts/verify-project.mjs：规范、仓库、CI、架构与 protocol 纯度门禁
+pnpm build            # tsc -b tsconfig.json：按 references 先构建 protocol，再构建 runtime 与 app
 pnpm typecheck        # pnpm --recursive typecheck：所有 workspace 包，覆盖 src 与 test
 pnpm lint             # pnpm --recursive lint：所有 workspace 包
 pnpm test             # pnpm --recursive test：所有 workspace 包
-pnpm build            # tsc -b tsconfig.json：经 references 构建 app 与 protocol
 ```
 
-当前根入口已覆盖 app 与 protocol 的 typecheck、lint、test 和 build。不得新增绕过根入口的 CI 检查；交付前必须运行根 `pnpm verify`，不能只运行局部测试。
+当前根入口已覆盖 app、protocol 与 runtime 的 typecheck、lint、test 和 build。先 build 是为了在干净 checkout（`protocol/dist` 不存在）中先生成 references 产物，typecheck 不依赖未提交的 dist。不得新增绕过根入口的 CI 检查；交付前必须运行根 `pnpm verify`，不能只运行局部测试。
 
 证据按以下等级区分：
 

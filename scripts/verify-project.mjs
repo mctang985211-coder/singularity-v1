@@ -51,7 +51,7 @@ check(major > 24 || (major === 24 && minor >= 9), `Node >=24.9.0 is required, fo
 const manifest = JSON.parse(await text('package.json'))
 check(manifest.packageManager === 'pnpm@11.18.0', 'packageManager must be pnpm@11.18.0')
 check(manifest.engines?.node === '>=24.9.0', 'package.json must declare Node >=24.9.0')
-const verifySteps = ['verify:project', 'typecheck', 'lint', 'test', 'build']
+const verifySteps = ['verify:project', 'build', 'typecheck', 'lint', 'test']
 const expectedVerify = verifySteps.map(step => `pnpm ${step}`).join(' && ')
 check(manifest.scripts?.verify === expectedVerify, `pnpm verify must run ${verifySteps.join(', ')} in order`)
 check(manifest.scripts?.['verify:project'] === 'node scripts/verify-project.mjs', 'verify:project must execute scripts/verify-project.mjs')

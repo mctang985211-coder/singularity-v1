@@ -383,6 +383,40 @@ void test('CommandService rejects digest conflicts and keeps idempotency across 
   })
 })
 
+void test('CommandService owns one writer per normalized root and releases it on close', async () => {
+  await withRoot(async (root) => {
+    let tick = 1_800_000_000_000
+    const clock = (): number => tick++
+    const first = await CommandService.open({ root, actor, clock })
+    let reopened: CommandService | undefined
+    try {
+      await assert.rejects(
+        CommandService.open({ root: join(root, '.'), actor, clock }),
+        (error: unknown) => errorCode(error) === 'WRITER_ALREADY_OPEN',
+      )
+
+      const command = normalized('command-owner', { value: 'owner' })
+      const fact = await first.commit({
+        command,
+        type: 'method/registered',
+        data: { revision: ref('method-owner') },
+      })
+      await first.close()
+
+      reopened = await CommandService.open({ root: `${root}/`, actor, clock })
+      const replayed = await reopened.commit({
+        command,
+        type: 'method/registered',
+        data: { revision: ref('method-owner') },
+      })
+      assert.deepEqual(replayed, fact)
+    } finally {
+      await first.close()
+      await reopened?.close()
+    }
+  })
+})
+
 void test('CommandService serializes concurrent commits into one contiguous chain', async () => {
   await withRoot(async (root) => {
     let tick = 1_800_000_000_000

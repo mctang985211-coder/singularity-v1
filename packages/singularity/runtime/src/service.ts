@@ -1,3 +1,6 @@
+import { mkdir, realpath } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
 import {
   computeCommandDigest,
   decideCommandIdempotency,
@@ -19,7 +22,10 @@ import type {
 
 import { DomainStore } from './store.ts'
 
-export type CommandServiceErrorCode = 'IDEMPOTENCY_CONFLICT' | 'INVALID_ARGUMENT'
+export type CommandServiceErrorCode =
+  | 'IDEMPOTENCY_CONFLICT'
+  | 'INVALID_ARGUMENT'
+  | 'WRITER_ALREADY_OPEN'
 
 /** Stable command-service rejection; idempotency conflicts expose `IDEMPOTENCY_CONFLICT`. */
 export class CommandServiceError extends Error {
@@ -61,16 +67,26 @@ export interface CommandCommitInput<Type extends FactType = FactType> {
 }
 
 /**
+ * Process-local writer ownership only. This is not a second business state or
+ * fact ledger; it prevents two live CommandService instances from writing the
+ * same canonical root.
+ */
+const activeWriterRoots = new Set<string>()
+
+/**
  * Single command writer over one DomainStore.
  *
- * `open` rebuilds the in-memory command projection from replay. `commit`
- * serializes every command, writes supporting CAS objects first, then appends
- * exactly one fact after fsync. A repeated commandId with the same
- * commandDigest returns the original fact without appending; a different
- * digest rejects with `IDEMPOTENCY_CONFLICT`.
+ * `open` claims process-local writer ownership for the canonical root, replays
+ * the journal, and rebuilds the in-memory command projection. A second live
+ * service for the same root rejects with `WRITER_ALREADY_OPEN`; a successful
+ * close releases ownership. `commit` serializes every command, writes
+ * supporting CAS objects first, then appends exactly one fact after fsync. A
+ * repeated commandId with the same commandDigest returns the original fact
+ * without appending; a different digest rejects with `IDEMPOTENCY_CONFLICT`.
  */
 export class CommandService {
   private readonly store: DomainStore
+  private readonly root: string
   private readonly actor: FactActor
   private readonly clock: () => number
   private factsValue: readonly Fact[]
@@ -82,12 +98,14 @@ export class CommandService {
 
   private constructor(
     store: DomainStore,
+    root: string,
     actor: FactActor,
     clock: () => number,
     facts: readonly Fact[],
     projection: Map<string, CommandProjectionEntry>,
   ) {
     this.store = store
+    this.root = root
     this.actor = actor
     this.clock = clock
     this.factsValue = facts
@@ -109,18 +127,34 @@ export class CommandService {
       })
     }
 
-    const store = await DomainStore.open({ root: options.root })
+    const requestedRoot = normalizeRoot(options.root)
+    await mkdir(requestedRoot, { recursive: true })
+    const root = await realpath(requestedRoot)
+    if (activeWriterRoots.has(root)) {
+      throw new CommandServiceError(
+        'WRITER_ALREADY_OPEN',
+        `A CommandService is already open for ${root}`,
+      )
+    }
+    activeWriterRoots.add(root)
+
+    let store: DomainStore | undefined
     try {
+      store = await DomainStore.open({ root })
       const facts = await store.replay()
       return new CommandService(
         store,
+        root,
         actor,
         options.clock,
         facts,
         new Map(projectCommandFacts(facts)),
       )
     } catch (error) {
-      await store.close()
+      if (store !== undefined) {
+        await store.close().catch(() => undefined)
+      }
+      activeWriterRoots.delete(root)
       throw error
     }
   }
@@ -224,6 +258,7 @@ export class CommandService {
     this.closePromise = this.enqueue(async () => {
       this.closed = true
       await this.store.close()
+      activeWriterRoots.delete(this.root)
     })
     return this.closePromise
   }
@@ -236,6 +271,13 @@ export class CommandService {
     )
     return result
   }
+}
+
+function normalizeRoot(root: unknown): string {
+  if (typeof root !== 'string' || root.length === 0) {
+    throw new CommandServiceError('INVALID_ARGUMENT', 'CommandService root must be a non-empty path')
+  }
+  return resolve(root)
 }
 
 function commandObjectEntries(objects: CommandObjects | undefined): readonly CommandObject[] {
