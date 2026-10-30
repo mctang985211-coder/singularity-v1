@@ -10,6 +10,7 @@ import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 
 import {
   admitRootTask,
@@ -912,6 +913,48 @@ async function seedSubmittedRun(
   } finally {
     await service.close()
   }
+}
+
+for (const complete of [false, true]) {
+  void test(`composition freezes the actual scoped platform prompt (complete=${String(complete)})`, { timeout: 240_000 }, async () => {
+    const taskId = `task-s3c-prompt-${String(complete)}-${String(process.pid)}-${String(Date.now())}`
+    await withHarness((_request, index) => ({ content: 'Finished without submitting.', usage: fixtureUsage(index) }), async ({ spike, fixture, workspace, storeRoot }) => {
+      if (complete) {
+        spike.ctx.systemPrompt.section({ name: 's3c:complete', order: 50, text: 'Complete host prompt.', complete: true })
+      } else {
+        spike.ctx.systemPrompt.section({ name: 's3c:after-worker', order: 200, text: 'Host guidance after the worker card.' })
+      }
+      const scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1 })
+      let observed: Awaited<ReturnType<typeof spike.ctx.systemPrompt.assemble>> | undefined
+      const dispose = spike.ctx.on('agent/created', async ({ agent }) => {
+        observed = await spike.ctx.systemPrompt.assemble({ scope: agent })
+      })
+      try {
+        await executeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          workspace,
+          sessionId: `${taskId}-session`,
+          runId: `${taskId}-run`,
+          admission: scenario.runAdmission,
+          composition: scenario.composition,
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024,
+          verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+          transientInvalidReasons: [],
+        })
+        assert.ok(observed)
+        const text = renderPrompt(observed)
+        assert.equal(scenario.composition.platformPrompt, computeDigest('object', { v: 1, text }))
+        if (complete) assert.equal(text, 'Complete host prompt.')
+        else assert.ok(observed.sections.findIndex(section => section.name === 'singularity:worker-card')
+          < observed.sections.findIndex(section => section.name === 's3c:after-worker'))
+        assert.equal(fixture.requests.length, 1)
+      } finally {
+        dispose()
+      }
+    })
+  })
 }
 
 void test('fresh retry starts attempt 2 with a new session and workspace and keeps both fact chains', { timeout: 240_000 }, async () => {

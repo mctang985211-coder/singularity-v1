@@ -92,7 +92,7 @@ export async function buildSingleRunComposition(
       config: publicConfig(entry.fiber?.effectiveConfig, `loader.${entry.id}`),
     }))
   const assembly = await ctx.systemPrompt.assemble()
-  const prompt = `${renderPrompt(assembly)}\n\n${renderWorkerCard(false)}`
+  const prompt = renderPrompt(assembly)
   const dshConfig = await input.writer.putObject(
     `${input.id}:dsh-config`,
     jsonBytes({ v: 1, dshVersion: REQUIRED_DSH_VERSION, profile: PROFILE_NAME, entries: config }),
@@ -184,6 +184,15 @@ export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promi
       patchFiles: [],
       args: [],
     })
+    // The runtime adds this same named section in each Agent scope. Keeping a
+    // fixed profile contribution makes an unscoped composition assembly use
+    // alpha2's own ordering; the scoped registration shadows it by name.
+    const disposeWorkerCard = booted.ctx.systemPrompt.section({
+      name: 'singularity:worker-card',
+      order: 100,
+      text: renderWorkerCard(false),
+      interpolate: false,
+    })
 
     let disposal: Promise<void> | undefined
     return {
@@ -194,6 +203,7 @@ export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promi
           try {
             await booted.shutdown.shutdown(0)
           } finally {
+            disposeWorkerCard()
             await releaseHome(home, previousHome, ownedHome)
           }
         })()
