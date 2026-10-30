@@ -1,4 +1,5 @@
-import { mkdir, realpath } from 'node:fs/promises'
+import { realpath } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
 import type { AgentHandle, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
@@ -432,8 +433,7 @@ async function loadPreparedRun(
     )
   }
   validateComposition(compositionPayloadOf(view.composition), contract)
-  await mkdir(request.workspace, { recursive: true })
-  const workspace = await realpath(request.workspace)
+  const workspace = resolve(request.workspace)
   const baseToolNames = await resolveBaseToolNames(contract, service)
   assertToolsAvailable(baseToolNames, request.ctx)
   return buildPreparedRun({
@@ -623,7 +623,10 @@ async function resumeOrCreateAgent(
       resumeSessionId: sessionId,
       agentOptions: request.agentOptions,
       signal,
-      setup,
+      setup: async (agentCtx, agent) => {
+        await realpath(workspace)
+        return setup(agentCtx, agent)
+      },
     })
     return { handle, action: 'resumed' }
   } catch (error) {

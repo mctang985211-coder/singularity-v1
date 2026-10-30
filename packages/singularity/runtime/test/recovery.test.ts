@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -1435,9 +1435,38 @@ void test('resumeSingleRun resumes the same session and does not resend an admit
   }
 })
 
+void test('resumeSingleRun refuses a persisted session with a missing workspace', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's3c-lost-workspace-'))
+  const workspace = join(root, 'missing-workspace')
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId: 'lost-workspace', maxRuns: 1 })
+      await admitTask(service, scenario)
+      await openRun(service, scenario, { runId: 'lost-run', sessionId: 'lost-session', attempt: 1 })
+    } finally {
+      await service.close()
+    }
+    const { ctx, state } = makeFakeContext({ resume: 'ok' })
+    const result = await resumeSingleRun({
+      ctx, journalRoot: root, workspace, runId: 'lost-run',
+      composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('must not verify') } },
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(result.classification, 'invalid')
+    assert.equal(state.createCalls.length, 0)
+    assert.equal(state.followupCalls, 0)
+    await assert.rejects(access(workspace), { code: 'ENOENT' })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 void test('resumeSingleRun creates the same session intent when persistence is absent', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 's3c-create-root-'))
-  const workspace = await mkdtemp(join(tmpdir(), 's3c-create-work-'))
+  const workspace = join(root, 'workspace')
   const taskId = 'task-s3c-create'
   const runId = `${taskId}-run-1`
   const sessionId = `${taskId}-session-1`
@@ -1445,7 +1474,7 @@ void test('resumeSingleRun creates the same session intent when persistence is a
     const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
     let scenario: Scenario
     try {
-      scenario = await buildScenario(service, { taskId, maxRuns: 1 })
+      scenario = await buildScenario(service, { taskId, maxRuns: 1, inputAccess: 'copy-to-work' })
       await admitTask(service, scenario)
       await openRun(service, scenario, { runId, sessionId, attempt: 1 })
     } finally {
@@ -1474,6 +1503,7 @@ void test('resumeSingleRun creates the same session intent when persistence is a
     assert.equal(state.createCalls.length, 1)
     assert.equal(state.createCalls[0]?.sessionId, sessionId)
     assert.equal(state.createCalls[0]?.cwd, workspace)
+    assert.equal(await readFile(join(workspace, 'input.txt'), 'utf8'), 'fixture input bytes\n')
     assert.equal(state.followupCalls, 1)
     assert.equal(result.classification, 'failed')
   } finally {
