@@ -16,8 +16,10 @@ import * as protocol from '../src/index.ts'
 const FACT_UNICODE_VECTOR = 'sha256:7f0c429ff97bae40c7df0bb88064b1956602dd7810d26a5c0343b2a83d921243'
 const RAW_BYTES_VECTOR = 'sha256:14066eba9938ece0885c01078961c83f1df89af4aa4e251494d77bc93ea7d6cc'
 const EMPTY_ROUND_PLAN_VECTOR = 'sha256:977b8124b92c16ffb3b5705245a581f52c6b676b583e7b8979b1cf9e7392c5ac'
+const COMMAND_UNICODE_VECTOR = 'sha256:e052acb8d65c307a4f5609371b10b5b1891f141c22f6a23b87b03b93c9062802'
+const EMPTY_COMMAND_VECTOR = 'sha256:52c8df06a34cb59a72da1f67ff1b21c5e95ca4699ab3f7d0b42840df1ecca4c5'
 
-void test('the eight digest domains are frozen', () => {
+void test('the nine digest domains are frozen with command appended last', () => {
   assert.deepEqual([...DIGEST_DOMAINS], [
     'fact',
     'contract',
@@ -27,7 +29,9 @@ void test('the eight digest domains are frozen', () => {
     'evidence',
     'preview',
     'round-plan',
+    'command',
   ])
+  assert.equal(DIGEST_DOMAINS.at(-1), 'command')
   for (const domain of DIGEST_DOMAINS) {
     assert.equal(digestDomainSchema.parse(domain), domain)
   }
@@ -80,6 +84,14 @@ void test('computeDigestBytes hashes raw bytes after the domain prefix', () => {
     RAW_BYTES_VECTOR,
   )
   assert.equal(computeDigestBytes('round-plan', new Uint8Array()), EMPTY_ROUND_PLAN_VECTOR)
+})
+
+void test('the command domain hashes normalized commands independently of other domains', () => {
+  assert.equal(computeDigest('command', { b: 'é', a: 1 }), COMMAND_UNICODE_VECTOR)
+  assert.equal(computeDigest('command', { a: 1, b: 'é' }), COMMAND_UNICODE_VECTOR)
+  assert.equal(computeDigestBytes('command', new Uint8Array()), EMPTY_COMMAND_VECTOR)
+  assert.notEqual(computeDigest('command', { a: 1 }), computeDigest('fact', { a: 1 }))
+  assert.notEqual(computeDigest('command', { a: 1 }), computeDigest('contract', { a: 1 }))
 })
 
 void test('computeDigestBytes rejects a domain outside the frozen set', () => {

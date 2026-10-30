@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { canonicalize, parseJsonText } from './json.ts'
 import type { JsonObject, JsonValue } from './json.ts'
 
-/** Frozen digest domains from docs/framework.md §10.1. */
+/** Frozen digest domains from docs/framework.md §10.1; order is protocol-significant. */
 export const DIGEST_DOMAINS = [
   'fact',
   'contract',
@@ -15,6 +15,7 @@ export const DIGEST_DOMAINS = [
   'evidence',
   'preview',
   'round-plan',
+  'command',
 ] as const
 
 export type DigestDomain = (typeof DIGEST_DOMAINS)[number]
