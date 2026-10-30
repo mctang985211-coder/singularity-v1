@@ -109,7 +109,7 @@ export async function continueOpenedRun(
     const result = await closeOpenedRunInvalid(
       request,
       service,
-      `resource-invalid: ${error.message}`,
+      `resource-invalid: ${error.resource}: ${error.message}`,
     )
     return { ...result, sessionAction: 'none' }
   }
@@ -229,7 +229,7 @@ export async function completeSubmittedRun(
       request,
       service,
       snapshot,
-      `resource-invalid: ${error.message}`,
+      `resource-invalid: ${error.resource}: ${error.message}`,
     )
   }
   if (settlement === undefined) {

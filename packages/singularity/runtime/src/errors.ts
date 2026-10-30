@@ -25,3 +25,18 @@ export class SingleRunError extends Error {
     this.code = code
   }
 }
+
+/** Explicit frozen-resource failure; recovery closes these as invalid. */
+export class MethodResourceError extends SingleRunError {
+  readonly resource: 'method' | 'composition'
+
+  constructor(
+    resource: 'method' | 'composition',
+    code: 'COMPOSITION_MISMATCH' | 'CONTRACT_INVALID' | 'UNSUPPORTED_RESOURCES',
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(code, message, options)
+    this.resource = resource
+  }
+}

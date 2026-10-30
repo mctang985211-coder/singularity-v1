@@ -42,6 +42,7 @@ import {
   loadMethodResources,
 } from './resources.ts'
 import type { FrozenMethodResources } from './resources.ts'
+import type { FrozenSkillResource } from './skill-resources.ts'
 import {
   buildExecutionResult,
   commitFact,
@@ -378,6 +379,7 @@ export async function drivePreparedRun(
     renderView: () => renderNodeView(buildNodeView(
       runtime,
       prepared.methodResources.template,
+      prepared.methodResources.skills,
       request,
       controller,
       budget(),
@@ -505,20 +507,13 @@ function validateComposition(
       `DSH version must be 0.2.2-alpha.2, received ${JSON.stringify(composition.dsh.version)}`,
     )
   }
-  if (composition.skills.length > 0 || composition.mcpServers.length > 0) {
-    throw new MethodResourceError(
-      'composition',
-      'UNSUPPORTED_RESOURCES',
-      'this single-Run slice does not mount skills or MCP servers',
-    )
-  }
-  if (contract.resources.skills.length > 0
+  if (composition.mcpServers.length > 0
     || contract.resources.mcpServers.length > 0
     || contract.resources.exploration !== undefined) {
     throw new MethodResourceError(
       'composition',
       'UNSUPPORTED_RESOURCES',
-      'contract skills, MCP servers, and exploration resources are not mounted in this slice',
+      'this single-Run slice does not mount MCP servers or exploration resources',
     )
   }
 }
@@ -605,6 +600,7 @@ async function createToolController(
     runId: request.runId,
     sessionId: request.sessionId,
     workspace: runtime.workspace,
+    skillNames: prepared.methodResources.skills.map(skill => skill.name),
     writer: service,
     maxOutputBytes: runtime.maxOutputBytes,
     clock: runtime.clock,
@@ -665,6 +661,7 @@ async function commitRunSubmitted(
 function buildNodeView(
   runtime: RuntimeContext,
   template: TaskTemplate,
+  skills: readonly FrozenSkillResource[],
   request: ExecuteSingleRunRequest,
   controller: RunToolController,
   budget: RemainingBudgetPct,
@@ -672,6 +669,8 @@ function buildNodeView(
   const tools = controller.snapshot()
   const asOf = runtime.clock()
   const obligations = controller.obligations()
+  const toolNames = [...runtime.baseToolNames]
+  if (skills.length > 0 && !toolNames.includes('skill')) toolNames.push('skill')
   return {
     v: 1,
     asOf,
@@ -687,8 +686,8 @@ function buildNodeView(
     method: runtime.contract.method,
     ownTemplate: { id: template.id, brief: template.brief },
     documents: [],
-    skills: [],
-    tools: runtime.baseToolNames.map(name => ({ name })),
+    skills: skills.map(skill => ({ id: skill.id, name: skill.name })),
+    tools: toolNames.map(name => ({ name })),
     childOptions: [],
     requiredObligations: [],
     childBatch: null,

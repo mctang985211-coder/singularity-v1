@@ -48,7 +48,7 @@ export interface SingleRunCompositionInput {
   readonly contract: TaskContract
   readonly base: Omit<
     CompositionPayload,
-    'contract' | 'dsh' | 'guidance' | 'modelRoute' | 'platformPrompt' | 'resources' | 'template'
+    'contract' | 'dsh' | 'guidance' | 'modelRoute' | 'platformPrompt' | 'resources' | 'skills' | 'template'
   >
   readonly agentOptions: AgentOptions
 }
@@ -105,6 +105,7 @@ export async function buildSingleRunComposition(
     contract: { id: input.contract.taskId, digest: input.contract.digest },
     template,
     guidance: methodResources.guidance,
+    skills: methodResources.skills.map(skill => skill.bundle),
   }
   await assertCompositionResources(input.store, methodResources, composition)
   const resolved = await ctx.llm.resolveModelInfo(provider, model)

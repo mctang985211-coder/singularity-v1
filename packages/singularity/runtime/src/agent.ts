@@ -6,6 +6,7 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionCut, UsageRecord } from '@singularity/protocol'
 
 import { SingleRunError } from './errors.ts'
+import { assertSkillDiscovery, assertSkillToolAvailability, registerSkills } from './agent-skills.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
 import { assertPromptBudget, renderWorkerCard } from './prompt.ts'
 import {
@@ -271,6 +272,7 @@ function buildAgentSetup(options: DriveAgentOptions): AgentSetup {
       text: prepared.methodResources.guidanceText,
       interpolate: false,
     })
+    await registerSkills(agentCtx, prepared.methodResources.skills)
     agentCtx.systemPrompt.context({
       name: 'singularity:node-view',
       order: 300,
@@ -292,11 +294,15 @@ function buildAgentSetup(options: DriveAgentOptions): AgentSetup {
     )
     controller.register(agentCtx, agent)
     const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
-    if (runtime.baseToolNames.length > 0) {
-      agentCtx.tools.restrict({ allow: [...runtime.baseToolNames] })
+    const allow = [...runtime.baseToolNames]
+    assertSkillToolAvailability(globalNames, prepared.methodResources.skills)
+    if (prepared.methodResources.skills.length > 0 && !allow.includes('skill')) allow.push('skill')
+    if (allow.length > 0) {
+      agentCtx.tools.restrict({ allow })
     } else if (globalNames.length > 0) {
       agentCtx.tools.restrict({ deny: globalNames })
     }
+    await assertSkillDiscovery(agentCtx, agent, prepared.methodResources.skills, prepared.workspace)
     assertPromptBudget(JSON.stringify(agentCtx.tools.schemas(agent)), 12 * 1024, 'visible tool schemas')
   }
 }

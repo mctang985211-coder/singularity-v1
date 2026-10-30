@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import type { AgentOptions } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { renderSkillContent } from '@deepseek-ai/dsh-skill'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 
@@ -39,6 +40,7 @@ import type {
   NormalizedCommand,
   Ref,
   RootAdmissionInput,
+  SkillAsset,
   SubmissionManifest,
   TaskContract,
   TaskContractPayload,
@@ -46,6 +48,9 @@ import type {
 import {
   CommandService,
   DomainStore,
+  DomainStoreError,
+  JOURNAL_FILENAME,
+  OBJECTS_DIRNAME,
   createWakeMessage,
   executeSingleRun,
   freezeSubmission,
@@ -108,6 +113,14 @@ interface Scenario {
   readonly provider: Ref
 }
 
+interface SkillFixture {
+  readonly id: string
+  readonly name: string
+  readonly description: string
+  readonly content: string
+  readonly extraFiles?: readonly { readonly path: string; readonly content: string }[]
+}
+
 function jsonBytes(value: unknown): Uint8Array {
   return textEncoder.encode(canonicalize(value))
 }
@@ -119,6 +132,55 @@ async function seedObject(
   domain: 'object' | 'method' = 'object',
 ): Promise<Ref> {
   return store.putObject(id, jsonBytes(value), domain)
+}
+
+async function seedRawTree(
+  store: DomainStore,
+  id: string,
+  files: readonly { readonly path: string; readonly content: string }[],
+): Promise<Ref> {
+  const entries = []
+  for (const file of files) {
+    const bytes = textEncoder.encode(file.content)
+    entries.push({
+      path: file.path,
+      bytes: bytes.byteLength,
+      object: await store.putObject(`${id}:file:${file.path}`, bytes, 'object'),
+    })
+  }
+  entries.sort((left, right) => compareBundlePath(left.path, right.path))
+  const manifest = seal('object', { v: 1, kind: 'tree', files: entries })
+  return store.putObject(id, jsonBytes(manifest), 'object')
+}
+
+function compareBundlePath(left: string, right: string): number {
+  const leftSegments = left.split('/')
+  const rightSegments = right.split('/')
+  const length = Math.min(leftSegments.length, rightSegments.length)
+  for (let index = 0; index < length; index += 1) {
+    const a = leftSegments[index]
+    const b = rightSegments[index]
+    if (a !== b) return a < b ? -1 : 1
+  }
+  return leftSegments.length - rightSegments.length
+}
+
+async function seedSkillBundle(store: DomainStore, skill: SkillFixture): Promise<Ref> {
+  const inputs = [
+    { path: 'SKILL.md', bytes: textEncoder.encode(skill.content) },
+    ...(skill.extraFiles ?? []).map(file => ({ path: file.path, bytes: textEncoder.encode(file.content) })),
+  ]
+  const files = []
+  for (const input of inputs) {
+    files.push({
+      path: input.path,
+      bytes: input.bytes.byteLength,
+      object: await store.putObject(`skill-file:${skill.id}:${input.path}`, input.bytes, 'object'),
+    })
+  }
+  files.sort((left, right) => compareBundlePath(left.path, right.path))
+  const manifest = seal('object', { v: 1, kind: 'tree', files })
+  return store.putObject(`skill-bundle:${skill.id}`, jsonBytes(manifest), 'object')
 }
 
 function fixtureUsage(index: number): NonNullable<ScriptedReply['usage']> {
@@ -140,10 +202,23 @@ async function makeScenario(
     readonly maxStepsPerRun?: number
     readonly guidanceText?: string
     readonly otherGuidanceText?: string
+    readonly skills?: readonly SkillFixture[]
   },
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
   try {
+    const skillAssets: SkillAsset[] = []
+    const skillBundles: Ref[] = []
+    for (const skill of options.skills ?? []) {
+      const bundle = await seedSkillBundle(store, skill)
+      skillBundles.push(bundle)
+      skillAssets.push({
+        id: skill.id,
+        name: skill.name,
+        description: skill.description,
+        bundle,
+      })
+    }
     const guidance = await seedObject(store, 'guidance:s3c', {
       v: 1,
       text: options.guidanceText ?? 'Write the declared output.',
@@ -173,7 +248,7 @@ async function makeScenario(
       requiredCriteria: [],
       requiredOutputs: [],
       acceptancePolicy,
-      skills: [],
+      skills: skillAssets.map(skill => skill.id),
       tools: [],
       children: [],
     }
@@ -191,7 +266,7 @@ async function makeScenario(
             guidance: otherGuidance,
           },
         ],
-      skills: [],
+      skills: skillAssets,
       tools: [],
     })
     await store.putObject(method.id, jsonBytes(method), 'method')
@@ -245,7 +320,7 @@ async function makeScenario(
       origin: { kind: 'root', purpose: 'work', requestRef: request },
       method: methodRef,
       template: { id: 'template:s3c', digest: method.digest },
-      resources: { baseTools: [bashTool], skills: [], mcpServers: [] },
+      resources: { baseTools: [bashTool], skills: skillBundles, mcpServers: [] },
       acceptance: provider,
       environment: { seed, profile },
       limits: {
@@ -267,7 +342,6 @@ async function makeScenario(
       agentOptions: agentOptions(),
       base: {
         v: 1,
-        skills: [],
         mcpServers: [],
         seed,
       },
@@ -519,6 +593,22 @@ function captureAgentPrompts(
   })
 }
 
+/** Captures the scoped DSH skill discovery set during Agent setup. */
+function captureAgentSkills(
+  spike: Awaited<ReturnType<typeof bootSpikeProfile>>,
+  sessionId: string,
+  workspace: string,
+  names: string[][],
+  agents: string[],
+): () => void {
+  return spike.ctx.on('agent/created', async ({ agent }) => {
+    if (String(agent.session.id) !== sessionId) return
+    const skills = await spike.ctx.skills.list({ scope: agent, cwd: workspace })
+    names.push(skills.map(skill => skill.name))
+    agents.push(String(agent.session.id))
+  })
+}
+
 function toolCallNames(events: readonly SessionEvent[]): string[] {
   const names: string[] = []
   for (const event of events) {
@@ -543,11 +633,10 @@ function agentOptions(): AgentOptions {
 
 function compositionBase(composition: CompositionPayload): Omit<
   CompositionPayload,
-  'contract' | 'dsh' | 'guidance' | 'modelRoute' | 'platformPrompt' | 'resources' | 'template'
+  'contract' | 'dsh' | 'guidance' | 'modelRoute' | 'platformPrompt' | 'resources' | 'skills' | 'template'
 > {
   return {
     v: composition.v,
-    skills: composition.skills,
     mcpServers: composition.mcpServers,
     seed: composition.seed,
   }
@@ -2799,4 +2888,628 @@ void test('S4-A1 resume rejects an actual scoped platformPrompt mismatch before 
       assert.match(result.executionRecord?.reason ?? '', /^COMPOSITION_MISMATCH:/)
     },
   )
+})
+
+// ---------------------------------------------------------------------------
+// S4-A2 — Method skill binding, native discovery, and read guard
+// ---------------------------------------------------------------------------
+
+const S4A2_SKILL_NAME = 's4a2-bounded-skill'
+const S4A2_SKILL_BODY = '# S4A2 bounded skill body\n\nFollow the frozen instructions.'
+const S4A2_SKILL_DESCRIPTION = 'Use the frozen S4-A2 skill while validating scoped discovery.'
+const S4A2_REFERENCE_BODY = 'S4A2 REFERENCE NOTES'
+const S4A2_RESOURCE_BASE = {
+  kind: 'opaque' as const,
+  description: 'Referenced files are frozen in the skill bundle; this slice exposes only SKILL.md.',
+}
+
+function s4a2Skill(): SkillFixture {
+  return {
+    id: 'skill:s4a2',
+    name: S4A2_SKILL_NAME,
+    description: S4A2_SKILL_DESCRIPTION,
+    content: S4A2_SKILL_BODY,
+    extraFiles: [{ path: 'refs/notes.txt', content: S4A2_REFERENCE_BODY }],
+  }
+}
+
+function s4a2SecondSkill(): SkillFixture {
+  return {
+    id: 'skill:s4a2-b',
+    name: 's4a2-second-skill',
+    description: 'Use the second frozen S4-A2 skill for scoped discovery.',
+    content: '# S4A2 second skill body\n',
+  }
+}
+
+void test('S4-A2 create discovers the bound Method skill and reads it without touching the system prompt', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-create-${String(process.pid)}-${String(Date.now())}`
+  const sessionId = `${taskId}-session`
+  const runId = `${taskId}-run`
+  const skill = s4a2Skill()
+  await withHarness((_request, index) => {
+    if (index === 0) {
+      return {
+        reasoning: 'Read the frozen skill before continuing.',
+        toolCalls: [{
+          id: 's4a2-skill-call',
+          name: 'skill',
+          arguments: JSON.stringify({ name: S4A2_SKILL_NAME }),
+        }],
+        usage: fixtureUsage(index),
+      }
+    }
+    return { content: 'The skill was read without submitting.', usage: fixtureUsage(index) }
+  }, async ({ spike, fixture, workspace, home, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [skill],
+    })
+    assert.equal(scenario.composition.skills.length, 1)
+    const prompts: string[] = []
+    const contexts: string[] = []
+    const discovered: string[][] = []
+    const createdAgents: Agent[] = []
+    const disposePrompts = captureAgentPrompts(spike, sessionId, prompts)
+    const disposeContexts = captureAgentContexts(spike, sessionId, contexts)
+    const disposeSkills = captureAgentSkills(spike, sessionId, workspace, discovered, [])
+    const disposeAgents = spike.ctx.on('agent/created', ({ agent }) => {
+      if (String(agent.session.id) === sessionId) createdAgents.push(agent)
+      return undefined
+    })
+    let result
+    try {
+      result = await executeSingleRun({
+        ctx: spike.ctx,
+        journalRoot: storeRoot,
+        workspace,
+        sessionId,
+        runId,
+        admission: scenario.runAdmission,
+        composition: scenario.composition,
+        agentOptions: agentOptions(),
+        maxOutputBytes: 1024 * 1024,
+        verifier: {
+          provider: scenario.provider,
+          verify() { throw new Error('S4-A2 create must not verify without submission') },
+        },
+        transientInvalidReasons: [],
+      })
+    } finally {
+      disposePrompts()
+      disposeContexts()
+      disposeSkills()
+      disposeAgents()
+    }
+
+    assert.equal(result.classification, 'failed', result.executionRecord?.reason)
+    assert.equal(fixture.requests.length, 2, 'the catalog step and the skill read are two requests')
+    assert.equal(prompts.length, 1)
+    const prompt = prompts[0]
+    assert.ok(prompt)
+    assert.equal(
+      scenario.composition.platformPrompt,
+      computeDigest('object', { v: 1, text: prompt }),
+      'skill binding must not change the A1 platformPrompt',
+    )
+    const firstRequest = fixture.requests[0] ?? {}
+    const systemMessage = firstRequest.messages?.find(message => message.role === 'system')
+    assert.ok(systemMessage)
+    assert.equal(wireText(systemMessage.content), prompt)
+    assert.ok(toolSchemaNames(firstRequest).includes('skill'), 'the native skill tool must be visible')
+    assert.ok(Buffer.byteLength(JSON.stringify(firstRequest.tools ?? [])) <= 12 * 1024)
+    assert.ok(Buffer.byteLength(contexts[0] ?? '') <= 8 * 1024)
+
+    const firstTexts = messageTexts(firstRequest)
+    const catalog = firstTexts.find(text => text.includes('<available_skills>'))
+    assert.ok(catalog, 'the first request must contain the bound skill discovery entry')
+    assert.ok(catalog.includes(S4A2_SKILL_NAME))
+    assert.ok(catalog.includes(S4A2_SKILL_DESCRIPTION))
+    assert.equal(
+      firstTexts.filter(text => text.includes('<available_skills>')).length,
+      1,
+      'the first request must contain exactly one discovery catalog',
+    )
+    assert.equal(
+      firstTexts.some(text => text.includes(S4A2_SKILL_BODY)),
+      false,
+      'skill body must not be injected into system or discovery messages',
+    )
+
+    const secondTexts = messageTexts(fixture.requests[1] ?? {})
+    const expectedSkillResult = renderSkillContent({
+      name: S4A2_SKILL_NAME,
+      provider: 'runtime',
+      resourceBase: S4A2_RESOURCE_BASE,
+      content: S4A2_SKILL_BODY,
+    })
+    const skillResult = secondTexts.find(text => text.startsWith(`<skill_content name="${S4A2_SKILL_NAME}">`))
+    assert.equal(skillResult, expectedSkillResult, 'the native skill result must equal renderSkillContent exactly')
+    assert.ok(skillResult.includes(S4A2_RESOURCE_BASE.description), 'only the opaque resource description is exposed')
+    assert.equal(skillResult.includes(S4A2_REFERENCE_BODY), false, 'referenced files are not inlined into the skill result')
+    assert.equal(skillResult.includes('refs/notes.txt'), false, 'referenced paths are not exposed')
+    assert.ok(Buffer.byteLength(skillResult) <= 16 * 1024)
+    assert.equal(
+      secondTexts.filter(text => text.includes('<available_skills>')).length,
+      1,
+      'the discovery catalog must not be duplicated on the next request',
+    )
+    const evidence = {
+      systemBytes: Buffer.byteLength(prompt),
+      catalogBytes: Buffer.byteLength(catalog),
+      toolSchemaBytes: Buffer.byteLength(JSON.stringify(firstRequest.tools ?? [])),
+      nodeViewBytes: Buffer.byteLength(contexts[0] ?? ''),
+      request0Bytes: Buffer.byteLength(JSON.stringify(firstRequest)),
+      request1Bytes: Buffer.byteLength(JSON.stringify(fixture.requests[1] ?? {})),
+      skillResultBytes: Buffer.byteLength(skillResult),
+    }
+    if (process.env.SINGULARITY_S4A2_EVIDENCE === '1') {
+      console.log('S4-A2 byte evidence:', JSON.stringify(evidence))
+    }
+    assert.ok(evidence.systemBytes > 0 && evidence.catalogBytes > 0)
+    assert.ok(evidence.toolSchemaBytes <= 12 * 1024)
+    assert.ok(evidence.nodeViewBytes <= 8 * 1024)
+    assert.deepEqual(discovered, [[S4A2_SKILL_NAME]])
+    assert.deepEqual(result.usage, {
+      inputTokens: 90,
+      outputTokens: 16,
+      steps: 2,
+      unknownRequests: 0,
+    })
+    assert.equal(createdAgents.length, 1)
+    assert.ok(contexts[0]?.includes('"skills":[{"id":"skill:s4a2","name":"s4a2-bounded-skill"}]'))
+    assert.ok(contexts[0]?.includes('"name":"skill"'))
+
+    const agent = createdAgents[0]
+    assert.ok(agent)
+    assert.equal(spike.ctx.agents.get(sessionId as never), undefined, 'the Run must dispose its Agent')
+    assert.equal(
+      await spike.ctx.skills.get(S4A2_SKILL_NAME, { scope: agent, cwd: workspace }),
+      undefined,
+      'disposal must remove the scoped skill registration',
+    )
+    const workspaceEntries = await readdir(workspace, { recursive: true, withFileTypes: true })
+    const homeEntries = await readdir(home, { recursive: true, withFileTypes: true })
+    for (const entries of [workspaceEntries, homeEntries]) {
+      assert.equal(
+        entries.some(entry => entry.isFile() && (entry.name === 'SKILL.md' || entry.name === 'notes.txt')),
+        false,
+        'the skill bundle and referenced files must not be materialized into workspace or HOME',
+      )
+    }
+  })
+})
+
+void test('S4-A2 unbound skill dispatch is refused before the DSH skill body', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-unbound-${String(process.pid)}-${String(Date.now())}`
+  const sessionId = `${taskId}-session`
+  const runId = `${taskId}-run`
+  await withHarness((_request, index) => {
+    if (index === 0) {
+      return {
+        reasoning: 'Attempt an unbound skill name.',
+        toolCalls: [{
+          id: 's4a2-unbound-call',
+          name: 'skill',
+          arguments: JSON.stringify({ name: 'unbound-skill' }),
+        }],
+        usage: fixtureUsage(index),
+      }
+    }
+    return { content: 'The unbound skill call was refused.', usage: fixtureUsage(index) }
+  }, async ({ spike, fixture, workspace, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [s4a2Skill()],
+    })
+    const result = await executeSingleRun({
+      ctx: spike.ctx,
+      journalRoot: storeRoot,
+      workspace,
+      sessionId,
+      runId,
+      admission: scenario.runAdmission,
+      composition: scenario.composition,
+      agentOptions: agentOptions(),
+      maxOutputBytes: 1024 * 1024,
+      verifier: {
+        provider: scenario.provider,
+        verify() { throw new Error('unbound skill must not verify') },
+      },
+      transientInvalidReasons: [],
+    })
+    assert.equal(result.classification, 'failed', result.executionRecord?.reason)
+    assert.equal(fixture.requests.length, 2)
+    const texts = messageTexts(fixture.requests[1] ?? {})
+    assert.ok(texts.some(text => text.includes('INPUT_NOT_AUTHORIZED')))
+    assert.equal(texts.some(text => text.includes(S4A2_SKILL_BODY)), false, texts.join('\n---\n'))
+  })
+})
+
+void test('S4-A2 inherited global skills fail closed before the first model request', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-global-${String(process.pid)}-${String(Date.now())}`
+  const sessionId = `${taskId}-session`
+  const runId = `${taskId}-run`
+  await withHarness((_request, index) => ({ content: 'global leak must not reach the model', usage: fixtureUsage(index) }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [s4a2Skill()],
+    })
+    const disposeGlobal = spike.ctx.skills.register({
+      name: 'inherited-global-skill',
+      description: 'Unexpected global skill that must not leak into a Task scope.',
+      content: '# global leak\n',
+      source: 'runtime',
+    })
+    let result
+    try {
+      result = await executeSingleRun({
+        ctx: spike.ctx,
+        journalRoot: storeRoot,
+        workspace,
+        sessionId,
+        runId,
+        admission: scenario.runAdmission,
+        composition: scenario.composition,
+        agentOptions: agentOptions(),
+        maxOutputBytes: 1024 * 1024,
+        verifier: {
+          provider: scenario.provider,
+          verify() { throw new Error('global leak must not verify') },
+        },
+        transientInvalidReasons: [],
+      })
+    } finally {
+      disposeGlobal()
+    }
+    assert.equal(fixture.requests.length, 0, 'skill discovery mismatch must not buy a model request')
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.evidence, undefined)
+    assert.match(result.executionRecord?.reason ?? '', /skill|discovery|binding/i)
+  })
+})
+
+void test('S4-A2 resume re-registers the frozen skill with zero new requests', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-resume-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  await withHarness((_request, index) => ({ content: 'seeded wake acknowledged', usage: fixtureUsage(index) }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [s4a2Skill()],
+    })
+    await seedOpenRun(storeRoot, scenario, { runId, sessionId })
+    await seedConsumedStartWake(spike, { taskId, runId, sessionId, workspace, live: false })
+    assert.equal(fixture.requests.length, 1, 'seeding consumes exactly one request')
+    const discovered: string[][] = []
+    const disposeSkills = captureAgentSkills(spike, sessionId, workspace, discovered, [])
+    let result
+    try {
+      result = await resumeSingleRun({
+        ctx: spike.ctx,
+        journalRoot: storeRoot,
+        runId,
+        workspace,
+        composition: scenario.composition,
+        agentOptions: agentOptions(),
+        maxOutputBytes: 1024 * 1024,
+        verifier: {
+          provider: scenario.provider,
+          verify() { throw new Error('resume must not verify without submission') },
+        },
+        transientInvalidReasons: [],
+      })
+    } finally {
+      disposeSkills()
+    }
+    assert.equal(result.classification, 'failed', result.executionRecord?.reason)
+    assert.equal(fixture.requests.length, 1, 'resume must not buy another request')
+    assert.deepEqual(discovered, [[S4A2_SKILL_NAME]])
+  })
+})
+
+void test('S4-A2 changed Composition skills close invalid before Agent or model', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-mismatch-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  await withHarness((_request, index) => ({ content: 'changed skill composition must not reach the model', usage: fixtureUsage(index) }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [s4a2Skill()],
+    })
+    await seedOpenRun(storeRoot, scenario, { runId, sessionId })
+    await seedConsumedStartWake(spike, { taskId, runId, sessionId, workspace, live: false })
+    assert.equal(fixture.requests.length, 1)
+    const changed: CompositionPayload = {
+      ...scenario.composition,
+      skills: [{
+        id: 'skill:other',
+        digest: computeDigest('object', { v: 1, kind: 'other-skill' }),
+      }],
+    }
+    const spy = spyAgents(spike.ctx)
+    let result
+    try {
+      result = await resumeSingleRun({
+        ctx: spike.ctx,
+        journalRoot: storeRoot,
+        runId,
+        workspace,
+        composition: changed,
+        agentOptions: agentOptions(),
+        maxOutputBytes: 1024 * 1024,
+        verifier: {
+          provider: scenario.provider,
+          verify() { throw new Error('changed skill composition must not verify') },
+        },
+        transientInvalidReasons: [],
+      })
+    } finally {
+      spy.restore()
+    }
+    assert.equal(result.compositionMatched, false)
+    assert.equal(result.sessionAction, 'none')
+    assert.equal(spy.create + spy.resume, 0, 'composition mismatch must not create or resume an Agent')
+    assert.equal(fixture.requests.length, 1, 'composition mismatch must not buy a model request')
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.evidence, undefined)
+  })
+})
+
+void test('S4-A2 submitted recovery verifies the frozen snapshot with skill resources and no model request', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-submitted-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  const verifierCalls: { readonly inputs: readonly Ref[]; readonly outputs: readonly Ref[] }[] = []
+  await withHarness((_request, index) => ({ content: 'submitted recovery must not buy a request', usage: fixtureUsage(index) }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [s4a2Skill()],
+    })
+    await writeFile(join(workspace, OUTPUT_PATH), FROZEN_OUTPUT, 'utf8')
+    const seeded = await seedSubmittedRun(storeRoot, scenario, { runId, sessionId, workspace })
+    const spy = spyAgents(spike.ctx)
+    let result
+    try {
+      result = await resumeSingleRun({
+        ctx: spike.ctx,
+        journalRoot: storeRoot,
+        runId,
+        workspace,
+        composition: await currentComposition(spike.ctx, storeRoot, scenario),
+        agentOptions: agentOptions(),
+        maxOutputBytes: 1024 * 1024,
+        verifier: passingVerifier(scenario, runId, workspace, verifierCalls),
+        transientInvalidReasons: [],
+      })
+    } finally {
+      spy.restore()
+    }
+    assert.equal(spy.create + spy.resume, 0)
+    assert.equal(fixture.requests.length, 0)
+    assert.equal(verifierCalls.length, 1)
+    assert.equal(result.sessionAction, 'none')
+    assert.equal(result.compositionMatched, true)
+    assert.equal(result.recoveredSubmission, true)
+    assert.equal(result.classification, 'verified')
+    assert.ok(result.evidence)
+    assert.equal(result.evidence.verification.operationId, `${runId}:verify`)
+    assert.equal(seeded.manifestRef.digest, seeded.manifest.digest)
+    assert.equal(seeded.manifest.runId, runId)
+  })
+})
+
+void test('S4-A2 dual-skill discovery keeps template order in NodeView and guards an unbound call', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-dual-${String(process.pid)}-${String(Date.now())}`
+  const sessionId = `${taskId}-session`
+  const runId = `${taskId}-run`
+  const first = s4a2Skill()
+  const second = s4a2SecondSkill()
+  await withHarness((_request, index) => {
+    if (index === 0) {
+      return {
+        reasoning: 'Read one bound skill and attempt one unbound name.',
+        toolCalls: [
+          { id: 's4a2-bound-call', name: 'skill', arguments: JSON.stringify({ name: first.name }) },
+          { id: 's4a2-unbound-call', name: 'skill', arguments: JSON.stringify({ name: 'unbound-skill' }) },
+        ],
+        usage: fixtureUsage(index),
+      }
+    }
+    return { content: 'Dual skill step finished without submitting.', usage: fixtureUsage(index) }
+  }, async ({ spike, fixture, workspace, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [first, second],
+    })
+    assert.deepEqual(scenario.contract.resources.skills, scenario.composition.skills)
+    assert.equal(scenario.composition.skills.length, 2)
+    const contexts: string[] = []
+    const disposeContexts = captureAgentContexts(spike, sessionId, contexts)
+    let result
+    try {
+      result = await executeSingleRun({
+        ctx: spike.ctx,
+        journalRoot: storeRoot,
+        workspace,
+        sessionId,
+        runId,
+        admission: scenario.runAdmission,
+        composition: scenario.composition,
+        agentOptions: agentOptions(),
+        maxOutputBytes: 1024 * 1024,
+        verifier: {
+          provider: scenario.provider,
+          verify() { throw new Error('dual skill create must not verify') },
+        },
+        transientInvalidReasons: [],
+      })
+    } finally {
+      disposeContexts()
+    }
+    assert.equal(result.classification, 'failed')
+    assert.equal(fixture.requests.length, 2)
+    const firstTexts = messageTexts(fixture.requests[0] ?? {})
+    const catalog = firstTexts.find(text => text.includes('<available_skills>'))
+    assert.ok(catalog)
+    assert.ok(catalog.includes(first.name))
+    assert.ok(catalog.includes(second.name))
+    assert.equal(firstTexts.filter(text => text.includes('<available_skills>')).length, 1)
+    assert.ok(contexts[0]?.includes(
+      '"skills":[{"id":"skill:s4a2","name":"s4a2-bounded-skill"},{"id":"skill:s4a2-b","name":"s4a2-second-skill"}]',
+    ), 'NodeView must keep the template binding order, not the DSH name order')
+    assert.ok(contexts[0]?.includes('"name":"skill"'))
+    const secondTexts = messageTexts(fixture.requests[1] ?? {})
+    assert.ok(secondTexts.some(text => text.includes('<skill_content') && text.includes(first.content)))
+    assert.ok(secondTexts.some(text => text.includes('INPUT_NOT_AUTHORIZED')))
+    assert.equal(secondTexts.some(text => text.includes('<skill_content') && text.includes('unbound-skill')), false)
+  })
+})
+
+void test('S4-A2 resume with a missing frozen skill bundle fails strict store replay with zero Agent/verifier/model', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-missing-bundle-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  await withHarness((_request, index) => ({ content: 'missing bundle must not reach the model', usage: fixtureUsage(index) }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [s4a2Skill()],
+    })
+    await seedOpenRun(storeRoot, scenario, { runId, sessionId })
+    await seedConsumedStartWake(spike, { taskId, runId, sessionId, workspace, live: false })
+    assert.equal(fixture.requests.length, 1)
+    const bundle = scenario.composition.skills[0]
+    assert.ok(bundle)
+    await rm(join(storeRoot, OBJECTS_DIRNAME, bundle.digest.slice('sha256:'.length)), { force: true })
+    const spy = spyAgents(spike.ctx)
+    let verifierCalls = 0
+    try {
+      await assert.rejects(
+        resumeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          runId,
+          workspace,
+          composition: scenario.composition,
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024 * 1024,
+          verifier: {
+            provider: scenario.provider,
+            verify() {
+              verifierCalls += 1
+              throw new Error('missing skill bundle must not verify')
+            },
+          },
+          transientInvalidReasons: [],
+        }),
+        error => {
+          assert.ok(error instanceof DomainStoreError)
+          assert.equal(error.code, 'OBJECT_MISSING')
+          return true
+        },
+      )
+    } finally {
+      spy.restore()
+    }
+    assert.equal(spy.create + spy.resume, 0, 'missing skill bundle must not create or resume an Agent')
+    assert.equal(verifierCalls, 0)
+    assert.equal(fixture.requests.length, 1, 'missing skill bundle must not buy another request')
+    const journalText = await readFile(join(storeRoot, JOURNAL_FILENAME), 'utf8')
+    const journalTypes = journalText.split('\n').filter(line => line.length > 0)
+      .map(line => (JSON.parse(line) as { readonly type: string }).type)
+    assert.equal(journalTypes.includes('run/closed'), false, 'strict replay must not write a closure')
+    assert.equal(journalTypes.includes('task/closed'), false)
+  })
+})
+
+void test('S4-A2 resume with a semantically invalid frozen skill bundle closes invalid with zero Agent or model', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a2-invalid-bundle-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  await withHarness((_request, index) => ({ content: 'invalid bundle must not reach the model', usage: fixtureUsage(index) }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const base = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1 })
+    const store = await DomainStore.open({ root: storeRoot })
+    let contract: TaskContract
+    let composition: CompositionPayload
+    try {
+      const invalidBundle = await seedRawTree(store, 'skill-bundle:semantic-invalid', [
+        { path: 'other.txt', content: 'not SKILL.md' },
+      ])
+      const template = base.method.templates[0]
+      assert.ok(template)
+      const method = sealMethodRevision({
+        ...methodPayload(base.method),
+        id: `method:s4a2-invalid-${String(Date.now())}`,
+        templates: [{
+          ...template,
+          skills: ['skill:semantic-invalid'],
+        }],
+        skills: [{
+          id: 'skill:semantic-invalid',
+          name: 'semantic-invalid-skill',
+          description: 'A valid bundle without SKILL.md.',
+          bundle: invalidBundle,
+        }],
+      })
+      await store.putObject(method.id, jsonBytes(method), 'method')
+      contract = sealTaskContract({
+        ...contractPayload(base.contract),
+        method: { id: method.id, digest: method.digest },
+        template: { id: template.id, digest: method.digest },
+        resources: {
+          ...base.contract.resources,
+          skills: [invalidBundle],
+        },
+      })
+      const compositionTemplate = await seedObject(store, 'semantic-invalid-composition-template', method.templates[0])
+      composition = {
+        ...base.composition,
+        contract: { id: contract.taskId, digest: contract.digest },
+        template: compositionTemplate,
+        guidance: method.templates[0]?.guidance,
+
+        skills: [invalidBundle],
+      }
+    } finally {
+      await store.close()
+    }
+    await seedOpenRun(storeRoot, { ...base, contract, composition }, { runId, sessionId })
+    await seedConsumedStartWake(spike, { taskId, runId, sessionId, workspace, live: false })
+    assert.equal(fixture.requests.length, 1)
+    const spy = spyAgents(spike.ctx)
+    let result
+    try {
+      result = await resumeSingleRun({
+        ctx: spike.ctx,
+        journalRoot: storeRoot,
+        runId,
+        workspace,
+        composition,
+        agentOptions: agentOptions(),
+        maxOutputBytes: 1024 * 1024,
+        verifier: {
+          provider: base.provider,
+          verify() { throw new Error('semantic invalid skill bundle must not verify') },
+        },
+        transientInvalidReasons: [],
+      })
+    } finally {
+      spy.restore()
+    }
+    assert.equal(result.compositionMatched, true)
+    assert.equal(result.sessionAction, 'none')
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.evidence, undefined)
+    assert.equal(spy.create + spy.resume, 0)
+    assert.equal(fixture.requests.length, 1)
+    assert.match(result.executionRecord?.reason ?? '', /^resource-invalid: method:/)
+  })
 })
