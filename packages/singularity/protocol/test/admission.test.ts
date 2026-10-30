@@ -363,6 +363,31 @@ void test('root admission rejects duplicate and reserved output identities witho
   }
 })
 
+void test('root admission rejects duplicate criteria and input ids', () => {
+  const duplicateCriteria = clone(rootInput)
+  const criterion = duplicateCriteria.spec.criteria[0]
+  duplicateCriteria.spec.criteria = [
+    criterion,
+    { ...criterion, statement: 'A second criterion with the same id' },
+  ]
+  assert.throws(() => admitRootTask(duplicateCriteria), admissionError('INVALID_ARGUMENT'))
+  assert.deepEqual(duplicateCriteria.spec.criteria, [
+    criterion,
+    { ...criterion, statement: 'A second criterion with the same id' },
+  ])
+
+  const duplicateInputs = clone(rootInput)
+  duplicateInputs.spec.inputs = [
+    inputA,
+    { ...inputA, path: 'inputs/a-second.txt' },
+  ]
+  assert.throws(() => admitRootTask(duplicateInputs), admissionError('INVALID_ARGUMENT'))
+  assert.deepEqual(duplicateInputs.spec.inputs, [
+    inputA,
+    { ...inputA, path: 'inputs/a-second.txt' },
+  ])
+})
+
 void test('root admission rejects inconsistent method/template refs and unknown fields', () => {
   const mismatchedTemplate = clone(rootInput)
   mismatchedTemplate.template = { ...mismatchedTemplate.template, digest: digestD }
@@ -428,6 +453,86 @@ void test('child admission merges template obligations, proposal guidance, and s
   assert.deepEqual(input, before)
 })
 
+void test('child admission accepts limits at the parent boundary and leaves maxRuns unconstrained', () => {
+  const boundary = childBatchInput()
+  const boundaryRequest = childRequest(boundary)
+  boundaryRequest.limits = {
+    maxRuns: parentLimits.maxRuns + 10,
+    maxStepsPerRun: parentLimits.maxStepsPerRun,
+    maxTokens: parentLimits.maxTokens,
+    deadlineAt: parentLimits.deadlineAt,
+    maxDepth: parentLimits.maxDepth - 1,
+    maxTasks: parentLimits.maxTasks - 1,
+    maxBatchChildren: parentLimits.maxBatchChildren,
+  }
+  const boundaryChild = firstChild(admitChildBatch(boundary))
+  assert.deepEqual(boundaryChild.contract.limits, boundaryRequest.limits)
+
+  const minimal = childBatchInput()
+  const minimalRequest = childRequest(minimal)
+  minimalRequest.limits = {
+    maxRuns: 99,
+    maxStepsPerRun: 0,
+    maxTokens: 0,
+    deadlineAt: 0,
+    maxDepth: 0,
+    maxTasks: 1,
+    maxBatchChildren: 0,
+  }
+  const minimalChild = firstChild(admitChildBatch(minimal))
+  assert.deepEqual(minimalChild.contract.limits, minimalRequest.limits)
+})
+
+void test('child admission rejects limits that exceed the parent without inventing a maxRuns rule', () => {
+  const cases: readonly {
+    readonly label: string
+    readonly limits: TaskLimits
+  }[] = [
+    {
+      label: 'deadline after parent',
+      limits: { ...childLimits, deadlineAt: parentLimits.deadlineAt + 1 },
+    },
+    {
+      label: 'maxDepth equal to parent',
+      limits: { ...childLimits, maxDepth: parentLimits.maxDepth },
+    },
+    {
+      label: 'maxDepth greater than parent',
+      limits: { ...childLimits, maxDepth: parentLimits.maxDepth + 1 },
+    },
+    {
+      label: 'maxTasks below one',
+      limits: { ...childLimits, maxTasks: 0 },
+    },
+    {
+      label: 'maxTasks equal to parent',
+      limits: { ...childLimits, maxTasks: parentLimits.maxTasks },
+    },
+    {
+      label: 'maxTasks greater than parent',
+      limits: { ...childLimits, maxTasks: parentLimits.maxTasks + 1 },
+    },
+    {
+      label: 'maxTokens greater than parent',
+      limits: { ...childLimits, maxTokens: parentLimits.maxTokens + 1 },
+    },
+    {
+      label: 'maxStepsPerRun greater than parent',
+      limits: { ...childLimits, maxStepsPerRun: parentLimits.maxStepsPerRun + 1 },
+    },
+    {
+      label: 'maxBatchChildren greater than parent',
+      limits: { ...childLimits, maxBatchChildren: parentLimits.maxBatchChildren + 1 },
+    },
+  ]
+
+  for (const { label, limits } of cases) {
+    const input = childBatchInput()
+    childRequest(input).limits = limits
+    assert.throws(() => admitChildBatch(input), admissionError('LIMIT_EXCEEDED'), label)
+  }
+})
+
 void test('child admission derives probe join from the fixed binding', () => {
   const input = childBatchInput()
   const request = childRequest(input)
@@ -453,6 +558,14 @@ void test('child admission rejects empty batches, duplicate bindings, oversized 
   const request = childRequest(duplicate)
   duplicate.children = [request, { ...request, taskId: 'task-child-2' }]
   assert.throws(() => admitChildBatch(duplicate), admissionError('INVALID_ARGUMENT'))
+
+  const duplicateTask = childBatchInput()
+  const taskRequest = childRequest(duplicateTask)
+  duplicateTask.children = [
+    { ...taskRequest, bindingId: 'build-part', taskId: 'task-duplicate' },
+    { ...taskRequest, bindingId: 'probe-part', taskId: 'task-duplicate' },
+  ]
+  assert.throws(() => admitChildBatch(duplicateTask), admissionError('INVALID_ARGUMENT'))
 
   const oversized = childBatchInput()
   oversized.children = [
@@ -512,6 +625,46 @@ void test('child admission rejects unauthorized or reordered inputs', () => {
     assert.throws(() => admitChildBatch(input), admissionError('INPUT_NOT_AUTHORIZED'), label)
     assert.deepEqual(input, before)
   }
+})
+
+void test('child admission rejects duplicate criteria and input ids', () => {
+  const duplicateInputs = childBatchInput()
+  const inputRequest = childRequest(duplicateInputs)
+  const authorized = [inputA, { ...inputA, path: 'inputs/a-second.txt' }]
+  inputRequest.authorizedInputs = authorized
+  inputRequest.proposal = { ...inputRequest.proposal, inputs: authorized }
+  assert.throws(() => admitChildBatch(duplicateInputs), admissionError('INVALID_ARGUMENT'))
+  assert.deepEqual(inputRequest.authorizedInputs, authorized)
+
+  const duplicateCriteriaTemplate: TaskTemplate = {
+    ...childTemplate,
+    requiredCriteria: [
+      childTemplate.requiredCriteria[0],
+      { ...childTemplate.requiredCriteria[0], statement: 'A second required criterion with the same id' },
+    ],
+  }
+  const duplicateCriteriaMethod = sealMethodRevision({
+    v: 1,
+    id: 'method-duplicate-criteria',
+    entryTemplateId: rootTemplate.id,
+    templates: [rootTemplate, duplicateCriteriaTemplate],
+    skills: [],
+    tools: [],
+  })
+  const duplicateCriteriaParent = admitRootTask({
+    ...rootInput,
+    method: { id: duplicateCriteriaMethod.id, digest: duplicateCriteriaMethod.digest },
+    template: { id: rootTemplate.id, digest: duplicateCriteriaMethod.digest },
+  })
+  const duplicateCriteriaInput: ChildBatchAdmissionInput = {
+    ...childBatchInput(),
+    parent: duplicateCriteriaParent,
+    method: duplicateCriteriaMethod,
+  }
+  assert.throws(
+    () => admitChildBatch(duplicateCriteriaInput),
+    admissionError('INVALID_ARGUMENT'),
+  )
 })
 
 void test('child admission rejects model-supplied authority fields in proposals', () => {

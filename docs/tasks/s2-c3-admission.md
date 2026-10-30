@@ -46,7 +46,9 @@
 - child inputs 必须与 host 给出的 `authorizedInputs` 逐项、按顺序完全一致；不一致返回 `INPUT_NOT_AUTHORIZED`。
 - child 的 `method` pin `parent.method`；child `template` 为 `{ id: binding.templateId, digest: method.digest }`；parent template 必须属于同一 Method revision。binding 只能来自 parent template 的固定 children。
 - child origin 固定派生为 `{ kind: 'child', parentId: parent.taskId, parentRunId, batchId, bindingId }`；join 从 binding 派生并只出现在 admission 结果，不进入 TaskContract。
-- batch 拒绝空列表、重复 binding、超过 `parent.limits.maxBatchChildren`、已有 active batch（输入 projection 非空）。active batch → `CHILD_BATCH_ACTIVE`；超限 → `LIMIT_EXCEEDED`；重复/空/保留/形状错误 → `INVALID_ARGUMENT`；method/template/binding 固定身份不一致 → `BINDING_FIXED`；inputs 不一致 → `INPUT_NOT_AUTHORIZED`。
+- batch 拒绝空列表、重复 binding、重复 child `taskId`、超过 `parent.limits.maxBatchChildren`、已有 active batch（输入 projection 非空）。active batch → `CHILD_BATCH_ACTIVE`；超限 → `LIMIT_EXCEEDED`；重复/空/保留/形状错误 → `INVALID_ARGUMENT`；method/template/binding 固定身份不一致 → `BINDING_FIXED`；inputs 不一致 → `INPUT_NOT_AUTHORIZED`。
+- root/child 的 `spec.criteria` 与 `spec.inputs` ID 必须唯一；required/local outputs 继续按合并结果检查 ID/path 唯一。
+- child limits 不得放大 parent：`deadlineAt <= parent.deadlineAt`、`maxDepth < parent.maxDepth`、`1 <= maxTasks <= parent.maxTasks - 1`、`maxTokens <= parent.maxTokens`、`maxStepsPerRun <= parent.maxStepsPerRun`、`maxBatchChildren <= parent.maxBatchChildren`，超限统一 `LIMIT_EXCEEDED`；不约束 `maxRuns`，也不声称已处理历史 descendants、已消耗预算或全局 reservation。
 - 所有失败在构造任何可返回 contract 前发生；不修改输入对象或数组。
 
 ## 公共 API
@@ -65,7 +67,7 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
 
 - root/child 正常路径分别 seal 出可 `verifyTaskContract` 的 contract；digest 使用 `contract` domain。
 - root 与 child outputs 顺序、draft 固定末尾、local supporting 转换、criteria/localGuidance/inputs 顺序均有测试。
-- 重复 ID/path、保留 ID/path、template draft role、未知/越权字段、空 batch、重复 binding、超 maxBatchChildren、active batch、inputs 不匹配、parent/method/template/binding 不一致均有负例。
+- 重复 criteria/input/output ID、重复 output path、重复 child taskId、保留 ID/path、template draft role、未知/越权字段、空 batch、重复 binding、超 maxBatchChildren、active batch、inputs 不匹配、parent/method/template/binding 不一致、child limits 放大 parent 均有负例。
 - 失败返回稳定 `AdmissionError` code；失败与成功路径都不修改输入；失败不返回部分 contract。
 - `admission.ts` 保持纯 protocol；`index.ts` 同时保留既有导出并可与另一范围 reducer 导出共存。
 - 包级 typecheck/lint/test/build 与根 `pnpm verify` 通过；`git diff --check` 通过。
@@ -97,6 +99,8 @@ pnpm --filter @singularity/protocol test
 
 结果：protocol tests `139`，`138` pass、`1` fail；失败为 `ERR_MODULE_NOT_FOUND`（`src/admission.ts` 不存在）。失败原因是模块缺失，不是断言放宽或跳过。
 
+集成审查补齐 guard 时，先增加 taskId/criteria/input ID 唯一性与 child limits 正负例，实现前运行同一命令：protocol tests `157`，`153` pass、`4` fail；失败均为新的 guard 缺失（缺少预期异常），不是测试环境或已有行为回归。
+
 ### 绿证据
 
 ```bash
@@ -109,19 +113,21 @@ pnpm verify
 git diff --check
 ```
 
-结果：frozen install 通过；protocol tests `153/153`、app tests `6/6`（合计 `159`）；根 `pnpm verify` 的 project/typecheck/lint/test/build 全部通过；`git diff --check` 通过。
+结果：frozen install 通过；protocol tests `157/157`、app tests `6/6`（合计 `163`）；根 `pnpm verify` 的 project/typecheck/lint/test/build 全部通过；`git diff --check` 通过。
 
 ### 覆盖摘要
 
 - root：host 完整 spec/origin/method/template/resources/acceptance/environment/limits 原样保留，base outputs 顺序不变，固定追加 `__skill-drafts` → `__mcp-drafts`，seal 后可 `verifyTaskContract`；optional `localGuidance`/`resources.exploration` 缺失时不被补默认值。
 - child：template `requiredCriteria` 原序进入 `criteria`，proposal `localCriteria` 只进入 `localGuidance`；template `requiredOutputs` 原序保留，`localOutputs` 原序转 `role='supporting'`, `required=false`，随后固定追加两个 drafts；proposal inputs 与 host `authorizedInputs` 逐项按顺序完全一致，否则 `INPUT_NOT_AUTHORIZED`。
 - 派生：child `origin` 由 parentId/parentRunId/batchId/bindingId 生成；`method` 逐字段 pin `parent.method`；`template` 为 `{ id: binding.templateId, digest: method.digest }`；`acceptance` 来自 template `acceptancePolicy`；`join` 只出现在 admission 结果，TaskContract 无该字段。
-- 拒绝：root/child 合并后重复 ID/path、保留 ID `__skill-drafts`/`__mcp-drafts`、保留路径 `learning-drafts` 前缀、template draft role、未知字段、proposal 越权字段、空 batch、重复 binding、超过 `maxBatchChildren`、active batch、parent/Method 篡改、method pin/template/binding 不一致、binding 指向缺失 template、未授权/重排 inputs；对应错误码为 `INVALID_ARGUMENT`/`BINDING_FIXED`/`INPUT_NOT_AUTHORIZED`/`LIMIT_EXCEEDED`/`CHILD_BATCH_ACTIVE`，未新增错误码。
+- 唯一性：root/child `spec.criteria` 与 `spec.inputs` ID 唯一；batch 内 binding 与 taskId 唯一；required/local outputs 合并后 ID/path 唯一。
+- limits：child 的 deadlineAt/maxDepth/maxTasks/maxTokens/maxStepsPerRun/maxBatchChildren 按 parent 边界收紧，超限 `LIMIT_EXCEEDED`；`maxRuns` 未新增继承规则，正例覆盖 child > parent。
+- 拒绝：root/child 重复 criteria/input/output ID、重复 output path、重复 child taskId/binding、保留 ID `__skill-drafts`/`__mcp-drafts`、保留路径 `learning-drafts` 前缀、template draft role、未知字段、proposal 越权字段、空 batch、超过 `maxBatchChildren`、active batch、parent/Method 篡改、method pin/template/binding 不一致、binding 指向缺失 template、未授权/重排 inputs、child limits 放大 parent；对应错误码为 `INVALID_ARGUMENT`/`BINDING_FIXED`/`INPUT_NOT_AUTHORIZED`/`LIMIT_EXCEEDED`/`CHILD_BATCH_ACTIVE`，未新增错误码。
 - 原子性与不变性：所有测试比较调用前后输入深拷贝；admission 在全部 child 建立并 seal 后才返回，后继 child 失败不会返回先前 contract；`index.ts` 同时保留既有导出并导出 admission surface。
 
 ### 仍未验证
 
 - 未实现 preview/`ackPreview`/receipt、PlanningSketch、context epoch、next-step、模型 step 与 active batch 的真实持久 projection；`activeBatch` 仅由调用方输入表示。
 - 未实现 FS/CAS IO、journal append、fact 写入、budget reservation/reservation accounting、唯一 writer/fold/wake/registry/transcript、taskId/batchId/runId 生成、时钟或 runtime/DSH/真实模型。
-- 未验证 depth/task-count/token/deadline 预算、child limits 相对 parent 的收缩、template/binding catalog 重复、capability/bundle 内容与 verifier 语义。
+- 纯 admission 只比较 child limits 与 parent limits；未处理历史 descendants、已消耗预算、全局 reservation 或真实预算计量，也不证明剩余预算足够。template/binding catalog 重复、capability/bundle 内容与 verifier 语义仍未验证。
 - 本切片只提供纯 protocol 证据；C-01/C-05 等所有 conformance 仍为 `unproven`，不能据此宣称 admission runtime 或 Task/RSI 功能完成。

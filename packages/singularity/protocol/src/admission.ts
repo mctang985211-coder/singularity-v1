@@ -156,6 +156,10 @@ function bindingFixed(message: string): never {
   throw new AdmissionError('BINDING_FIXED', message)
 }
 
+function limitExceeded(message: string): never {
+  throw new AdmissionError('LIMIT_EXCEEDED', message)
+}
+
 function isReservedOutputPath(path: string): boolean {
   return (
     path === RESERVED_OUTPUT_PATH_ROOT ||
@@ -176,6 +180,16 @@ function assertNoReservedOutput(output: Pick<OutputSpec, 'id' | 'path'>, label: 
 function assertNoDraftRole(output: OutputSpec, label: string): void {
   if (output.role === 'skill-draft' || output.role === 'mcp-draft') {
     invalidArgument(`${label} must not use draft role ${JSON.stringify(output.role)}`)
+  }
+}
+
+function assertUniqueIds(items: readonly { readonly id: string }[], label: string): void {
+  const ids = new Set<string>()
+  for (const item of items) {
+    if (ids.has(item.id)) {
+      invalidArgument(`${label} must not contain duplicate id ${JSON.stringify(item.id)}`)
+    }
+    ids.add(item.id)
   }
 }
 
@@ -315,6 +329,8 @@ function assertRootTemplateRef(method: { readonly digest: string }, template: { 
  */
 export function admitRootTask(input: RootAdmissionInput): TaskContract {
   const parsed = parseAdmission(rootAdmissionInputSchema, input, 'Root admission input')
+  assertUniqueIds(parsed.spec.criteria, 'Root spec.criteria')
+  assertUniqueIds(parsed.spec.inputs, 'Root spec.inputs')
   assertRootTemplateRef(parsed.method, parsed.template)
   validateBaseOutputs(parsed.spec.outputs, 'Root spec.outputs')
   const outputs = mergeOutputs(parsed.spec.outputs, [])
@@ -371,6 +387,27 @@ function assertAuthorizedInputs(
   }
 }
 
+function assertChildLimitsWithinParent(parent: TaskLimits, child: TaskLimits): void {
+  if (child.deadlineAt > parent.deadlineAt) {
+    limitExceeded('Child deadlineAt must not exceed the parent deadlineAt')
+  }
+  if (child.maxDepth >= parent.maxDepth) {
+    limitExceeded('Child maxDepth must be less than the parent maxDepth')
+  }
+  if (child.maxTasks < 1 || child.maxTasks > parent.maxTasks - 1) {
+    limitExceeded('Child maxTasks must be between 1 and parent maxTasks - 1')
+  }
+  if (child.maxTokens > parent.maxTokens) {
+    limitExceeded('Child maxTokens must not exceed the parent maxTokens')
+  }
+  if (child.maxStepsPerRun > parent.maxStepsPerRun) {
+    limitExceeded('Child maxStepsPerRun must not exceed the parent maxStepsPerRun')
+  }
+  if (child.maxBatchChildren > parent.maxBatchChildren) {
+    limitExceeded('Child maxBatchChildren must not exceed the parent maxBatchChildren')
+  }
+}
+
 /**
  * Admits a non-empty child batch against a frozen parent contract and its
  * pinned Method revision. Every child contract is built and sealed before the
@@ -413,6 +450,7 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
   }
 
   const seenBindings = new Set<string>()
+  const seenTaskIds = new Set<string>()
   const admitted: AdmittedChildContract[] = []
   for (const request of parsed.children) {
     if (seenBindings.has(request.bindingId)) {
@@ -421,11 +459,23 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
       )
     }
     seenBindings.add(request.bindingId)
+    if (seenTaskIds.has(request.taskId)) {
+      invalidArgument(
+        `Child batch contains duplicate taskId ${JSON.stringify(request.taskId)}`,
+      )
+    }
+    seenTaskIds.add(request.taskId)
 
     const binding = findBinding(parentTemplate, request.bindingId)
     const template = findTemplate(method, binding.templateId)
 
+    assertChildLimitsWithinParent(parent.limits, request.limits)
     assertAuthorizedInputs(request.proposal, request.authorizedInputs)
+    assertUniqueIds(
+      template.requiredCriteria,
+      `Template ${JSON.stringify(template.id)} requiredCriteria`,
+    )
+    assertUniqueIds(request.proposal.inputs, 'Child spec.inputs')
     validateBaseOutputs(template.requiredOutputs, `Template ${JSON.stringify(template.id)} requiredOutputs`)
     const localOutputs = request.proposal.localOutputs ?? []
     validateLocalOutputs(localOutputs)
