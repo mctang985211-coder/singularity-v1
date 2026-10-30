@@ -1,17 +1,19 @@
 # Amendment 001：S2 protocol closure（fact payload、command 与 admission 最小语义）
 
-- **状态：待用户确认，未批准，未实现。**
+- **状态：已批准；K1–K5 已纳入正式规范，实现与证据仍未完成（K6 unproven）。**
+- **批准：** 用户于 2026-10-30 明确回复“确认。请继续”。
 - **日期：** 2026-10-30
-- **基线：** `main` @ `5b5f2584d2572dab83ff97ee5065563feecdb332`；`docs/framework.md` V1 发布规范 1.0；`spec-lock.json` `sha256:06fa0b717eb1ed83ee3e319c809b1b1569263eb84cbe03abc7259ce6347957c2`。
+- **基线：** 提案基线 `main` @ `5b5f2584d2572dab83ff97ee5065563feecdb332`；`docs/framework.md` V1 发布规范 1.0；提案时 `spec-lock.json` `sha256:06fa0b717eb1ed83ee3e319c809b1b1569263eb84cbe03abc7259ce6347957c2`。落地后的规范 digest 以 `spec-lock.json` 为准。
+- **落地：** 本变更在分支 `s2-c1-swarm-spec` 将获批语义写入 `docs/framework.md`、`spec-lock.json` 与 `docs/conformance.md`；未修改 `docs/build-plan.md`、`README.md` 或源码。
 - **证据基线：** S2-A/B 已完成；protocol tests `86/86`。当前没有 fact payload、command guard、journal/FS、reducer 或 runtime 实现。
-- **本文件性质：** 规范 amendment 提案。它合并 fact payload 与 command/admission 两份草案，只保留关闭 S2 所需的最小内容；不实现代码，不修改 `docs/framework.md`、`spec-lock.json`、`docs/conformance.md`、`docs/build-plan.md`、`README.md` 或源码。
+- **本文件性质：** 已批准 amendment 的语义与边界记录。它合并 fact payload 与 command/admission 两份草案，只保留关闭 S2 所需的最小内容；正式规范以 `docs/framework.md` 为准，本文件不替代规范。
 - **非目标：** 不新增 authority、第二 writer、第二 journal、第二 fold、wake 来源、registry、transcript mirror、model loop 或兼容层。
 
-> 本文所有字段、规则、表和类型都是**提案**，不是已批准规范或已实现行为。只有用户明确批准后，才在 framework/spec-lock/protocol/conformance 的同一变更中落地。
+> 本 amendment 已获用户批准。K1–K5 的字段与规则已纳入 `docs/framework.md`；K6 仍是证据规则：在实现并跑出真实证据前，相关 conformance 场景全部保持 `unproven`。本文保留批准依据、失败场景和边界，不新增规范。
 
 ## 1. 规范条目与缺口
 
-| 条目 | 现有文本 | 缺口 |
+| 条目 | 批准前文本 | 缺口 |
 |---|---|---|
 | §4 开头 | 未展开的 Ref 都是 `{ id, digest }`，Digest 为 `sha256:<hex>` | digest 没有 domain 映射；schema 只校验形状 |
 | §4.1–§4.3 | TaskContract、TaskSpec、OutputSpec、`deadlineAt`；localOutputs 转 supporting | output 合并顺序、冲突和保留命名空间未定义；`deadlineAt` 无单位 |
@@ -22,7 +24,9 @@
 | §10.3、§19.1 | append/fsync 是提交点；torn tail；恢复 | journal 编码、行 framing、`seq` 起始/连续性、时间单位未定义 |
 | §15.2 | Evidence、UsageRecord、ExecutionRecord、Composition、receipt | 被 fact 引用的对象没有最小形状 |
 | §20 | C-01/C-05/C-11 等场景 | 当前均为 `unproven`；上述缺口使场景无法形成一致证据 |
-| §21 | 1 journal、1 fold、1 writer、1 wake authority、0 registry/transcript | 本提案必须证明不突破这些预算 |
+| §21 | 1 journal、1 fold、1 writer、1 wake authority、0 registry/transcript | 本 amendment 必须证明不突破这些预算 |
+
+以下缺口描述批准前状态；获批语义已落入 `docs/framework.md` 的 §4、§6、§8、§10、§15 和 §19.1。
 
 ## 2. 最小复现与失败场景
 
@@ -94,7 +98,7 @@ interface NormalizedCommand {
   3. 无记录：走正常 state/budget/guard；成功后 CAS 先写、append 一条带 `commandDigest` 的 fact、fsync、返回结果。
 - 原结果重建：taskId/runId/batchId/child IDs、contract/method/evidence refs、outcome/classification、submission ref 等必须能从 fact 的 `type`/`data` 确定性重建；`remainingBudgetPct`、`asOf` 是可变视图字段，可重新计算。若原结果字段无法从 fact 推导，命令必须在 append 前把它作为 CAS ref 放进 fact；禁止“记不清就重新执行”。fact 引用的 CAS 缺失/损坏时 replay 拒绝启动。
 - 已提交命令在 Run/Task 已 closed 后重放仍返回原结果；幂等匹配不绕过 actor/run 绑定或读取授权。若实现暴露 writer 之外的 in-flight 状态，复用既有 `ACTIVE_JOB`，不新增错误码或持久状态。
-- **备选（不推荐）**：`Fact.commandRef: ObjectRef` + 把 `NormalizedCommand` 存 CAS。它不需要新 domain，但每个命令多一次 CAS 写、多一次 ref 解析，并可能把 tool input 暴露到 CAS；对幂等正确性没有额外收益。本文只保留一个推荐：`commandDigest` + `command` domain。
+- **未采用的备选**：`Fact.commandRef: ObjectRef` + 把 `NormalizedCommand` 存 CAS。它不需要新 domain，但每个命令多一次 CAS 写、多一次 ref 解析，并可能把 tool input 暴露到 CAS；对幂等正确性没有额外收益。获批选择只有 `commandDigest` + `command` domain。
 
 ### 4.2 Journal framing、seq 与时间
 
@@ -235,9 +239,9 @@ interface CancellationCut {
 }
 ```
 
-## 5. 13 种 fact payload 精确提案
+## 5. 13 种 fact payload 精确语义（已批准）
 
-`TaskContract`、`MethodRevision`、`Evidence`、`RoundPlan`、`MethodPatch` 沿用 §4/§5/§15/§17/§18，不在此重定义。字段名尽量沿用 §10.2 散文；`?` 表示既有语义允许缺失，不把 optional 改成 null。Payload 不重复 `v`；版本由 Fact envelope 拥有。未知字段、未知 type、错误 type/data 组合均拒绝。
+`TaskContract`、`MethodRevision`、`Evidence`、`RoundPlan`、`MethodPatch` 沿用 §4/§5/§15/§17/§18，不在此重定义。字段名与可选性已写入 `docs/framework.md` §10.2；`?` 表示既有语义允许缺失，不把 optional 改成 null。Payload 不重复 `v`；版本由 Fact envelope 拥有。未知字段、未知 type、错误 type/data 组合均拒绝。
 
 ```ts
 type FactType =
@@ -415,7 +419,7 @@ type FactPayload = FactPayloadMap[FactType]
 
 ### 6.2 受影响场景
 
-| 场景 | 本提案新增的可验证内容 |
+| 场景 | 本 amendment 新增的可验证内容 |
 |---|---|
 | C-01 | root contract 的 method/template/acceptance/resources refs 按 domain 验证；root outputs = base → drafts；`deadlineAt` 为 epoch ms；合同 digest 确定 |
 | C-05 | localOutputs 只能转 supporting/false；保留 ID/path 和 template draft role 拒绝；完整 child contracts 与 join/budget 来自 host；同命令重试返回同一 child IDs/contract digests |
@@ -424,7 +428,7 @@ type FactPayload = FactPayloadMap[FactType]
 | C-14 | `rsi/trace-sealed` 的 usage/sessionCuts 与 private receipt 边界 |
 | C-19/C-23 | `method/activated` 的 expected/previous/approval CAS；Round fact 不移动 head |
 
-**本提案不修改 `docs/conformance.md`，不把任何场景改为 `proven`。** 实现并跑出真实证据前，C-01/C-05/C-11 及相关场景继续保持 `unproven`。
+本次落地已在 `docs/conformance.md` 补充 amendment 链接与证据边界，不把任何场景改为 `proven`。实现并跑出真实证据前，C-01/C-05/C-11 及相关场景继续保持 `unproven`。
 
 ## 7. 权限、预算与复杂度
 
@@ -465,40 +469,42 @@ type FactPayload = FactPayloadMap[FactType]
 ## 8. 兼容性
 
 - 当前没有 fact/journal 实现或生产数据；新增 required `commandDigest` 不需要迁移。
-- 现有 8 个 digest domain 字符串不变；`command` 追加到枚举末尾。任何硬编码 8 domain 的测试/实现须在批准后更新。
+- 现有 8 个 digest domain 字符串不变；`command` 追加到枚举末尾。硬编码 8 domain 的测试/实现必须按获批语义更新。
 - Ref JSON 线形不变；语义校验更严格。任何预规范 journal 若使用 1-based seq、CRLF、JSON array、缺 commandDigest 或错 domain，均不兼容；不提供 shim 或迁移层。
 - `task/children-admitted` 内联完整 child contracts，符合 §10.2 既有散文；不把 contracts 降为 refs。
-- `run/closed` 保留 `usage` 字段并区分 `evidenceRef`/`executionRecordRef`；`task/closed` 保留 `evidenceRefs` 名称；不把 existing optional 字段统一改 null。
-- Output 合并顺序/保留命名空间会改变预规范实现的 contract digest；当前无生产合同，C-01/C-05 fixture 在批准后更新。
+- `run/closed` 保留 `usage` 字段并区分 `evidenceRef`/`executionRecordRef`；`task/closed` 保留 `evidenceRefs` 名称；不把既有 optional 字段统一改 null。
+- Output 合并顺序/保留命名空间会改变预规范实现的 contract digest；当前无生产合同，C-01/C-05 fixture 在实现时按新语义更新。
 - 不改变 DSH/Node/MCP transport、验收所有者、模型可见性或生产权限。
-- 批准后必须在同一变更更新 `docs/framework.md`、`spec-lock.json`、protocol schema/guard、相关 runtime 和 `docs/conformance.md`；本提案单独不产生规范或代码变更。
+- 本 amendment 的获批语义已在同一变更更新 `docs/framework.md`、`spec-lock.json` 和 `docs/conformance.md`；protocol schema/guard、runtime 与 conformance 证据仍未实现，相关场景保持 `unproven`。
 
 ## 9. 用户确认记录
 
-### 9.1 当前状态
+### 9.1 批准状态
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | **待用户确认，未批准，未实现** |
-| 确认人 | 尚未确认 |
-| 确认日期 | 无（本文创建于 2026-10-30，仅为提案日期） |
-| 本文件效力 | 仅为 amendment 提案；不是已批准规范，不是已实现行为 |
-| 规范/spec-lock/conformance 修改 | 无 |
+| 状态 | **已批准；K1–K5 已纳入正式规范，K6 仍未证明** |
+| 确认人 | 用户 |
+| 确认日期 | 2026-10-30 |
+| 确认原文 | “确认。请继续” |
+| 本文件效力 | 已批准 amendment 的语义与边界记录；正式规范以 `docs/framework.md` 为准 |
+| 规范/spec-lock/conformance 修改 | 已在同一变更完成（分支 `s2-c1-swarm-spec`） |
 | 代码/构建修改 | 无 |
 
-### 9.2 需要用户明确决定的关键点
+### 9.2 获批决定（K1–K5）与证据规则（K6）
 
-| ID | 选择 | 推荐 | 不接受的后果 |
+| ID | 选择 | 获批语义 | 不接受的后果 |
 |---|---|---|---|
-| K1 | command 内容身份 | `Fact.commandDigest` + 新 `command` domain；`commandRef`+CAS 仅作备选 | 无法检测同 ID 不同 payload；C-11 幂等不成立 |
+| K1 | command 内容身份 | `Fact.commandDigest` + 新 `command` domain；未采用 `commandRef`+CAS | 无法检测同 ID 不同 payload；C-11 幂等不成立 |
 | K2 | journal/time | `seq=0` 连续、JCS NDJSON/LF、`at`/`deadlineAt`/`asOf` epoch ms、deadline exclusive | 不同实现的 genesis/torn tail/deadline 不一致 |
 | K3 | ref domain | 采用 §4.3 映射；`TemplateRef` 复用 Method digest；`preview` 使用 preview domain；不新增 ref/template domain | method/template/preview ref 可被错域验证；C-01/C-05 分叉 |
 | K4 | output 合并 | `base → local(supporting) → __skill-drafts → __mcp-drafts`；保留顺序；拒绝重复/保留 ID/path | 同一逻辑合同产生不同 digest |
 | K5 | fact payload | 采用 §5：完整 child contracts、run/closed 独立 usage + evidence/execution 区分、task/closed `evidenceRefs`、保留 optional | 无法形成一致的 13 fact schema；C-11 replay 不确定 |
-| K6 | conformance | C-01/C-05/C-11 及相关场景在实现并跑出真实证据前保持 `unproven` | 把提案或静态向量误写成已证明 |
+| K6 | conformance | C-01/C-05/C-11 及相关场景在实现并跑出真实证据前保持 `unproven` | 把静态向量或未实现提案误写成已证明 |
 
-### 9.3 未确认时的阻塞摘要
+### 9.3 批准后的落地与证据边界
 
-- **阻塞**：`FactType`/`FactPayloadMap`、13 种 fact schema、`commandDigest`/command guard、journal framing/replay、reducer、C-01/C-05/C-11 的纯协议证据、依赖这些 fact 的 runtime 恢复。
-- **不阻塞**：本提案的文档评审；现有 Task/Method schema 的独立修正；不依赖 fact/command 的文档与测试。
-- **不得做**：把本文任何字段或规则写成已批准事实；在实现中先造 payload 再回写规范；修改 framework/spec-lock/conformance 或源码来让测试先绿。
+- **已落地**：`docs/framework.md`、`spec-lock.json` 和 `docs/conformance.md` 已按 K1–K5 更新；amendment 本身不实现代码。
+- **仍阻塞（K6）**：`FactType`/`FactPayloadMap`、13 种 fact schema 的 protocol guard、`commandDigest`/command guard、journal framing/replay、reducer、相关纯协议证据和依赖这些 fact 的 runtime 恢复。真实证据完成前，C-01/C-05/C-11 及相关场景保持 `unproven`。
+- **不阻塞**：不依赖 fact/command 的文档与测试；现有 Task/Method schema 的独立修正。
+- **不得做**：把未实现行为写成已证明；在实现中先造 payload 再回写规范；修改 framework/spec-lock/conformance 或源码来让测试先绿。
