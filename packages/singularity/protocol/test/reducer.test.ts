@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { seal } from '../src/digest.ts'
 import { sealFact } from '../src/fact.ts'
 import type {
   ChildrenAdmittedPayload,
+  Composition,
+  CompositionPayload,
   Fact,
   FactType,
   RunClosedPayload,
@@ -12,9 +15,10 @@ import type {
   TaskClosedPayload,
   UsageRecord,
 } from '../src/fact.ts'
+import * as protocol from '../src/index.ts'
 import { sealMethodRevision } from '../src/method.ts'
 import type { ChildBinding, MethodRevision, TaskTemplate } from '../src/method.ts'
-import { reduceTaskRunFacts, ReducerError } from '../src/reducer.ts'
+import { childBatchKey, reduceTaskRunFacts, ReducerError } from '../src/reducer.ts'
 import type { ReducerErrorCode, ReplayContext } from '../src/reducer.ts'
 import type { Ref } from '../src/refs.ts'
 import { sealTaskContract } from '../src/task.ts'
@@ -77,6 +81,44 @@ const baseMethod = sealMethodRevision({
 
 const baseMethodRef: Ref = { id: baseMethod.id, digest: baseMethod.digest }
 
+const plainMethod = sealMethodRevision({
+  v: 1,
+  id: 'method-plain',
+  templates: [template('plain-root-template')],
+  skills: [],
+  tools: [],
+})
+
+const plainMethodRef: Ref = { id: plainMethod.id, digest: plainMethod.digest }
+
+const probeMethod = sealMethodRevision({
+  v: 1,
+  id: 'method-probe',
+  templates: [
+    template('probe-root-template', [binding('child-probe', 'child-template', 'probe')]),
+    template('child-template'),
+  ],
+  skills: [],
+  tools: [],
+})
+
+const probeMethodRef: Ref = { id: probeMethod.id, digest: probeMethod.digest }
+
+function makeProbeRootContract(): TaskContract {
+  return makeRootContract({
+    method: probeMethodRef,
+    templateId: 'probe-root-template',
+  })
+}
+
+function makePlainRootContract(limits: Partial<TaskLimits> = {}): TaskContract {
+  return makeRootContract({
+    method: plainMethodRef,
+    templateId: 'plain-root-template',
+    limits,
+  })
+}
+
 const defaultLimits: TaskLimits = {
   maxRuns: 2,
   maxStepsPerRun: 10,
@@ -88,6 +130,70 @@ const defaultLimits: TaskLimits = {
 }
 
 const defaultReservation = { tokens: 100, steps: 5, deadlineAt: 1_500 }
+
+const contractRegistry = new Map<string, TaskContract>()
+const compositionCache = new Map<string, Composition>()
+const liveCompositionMaps = new Set<Map<string, Composition>>()
+
+function seedFor(taskId: string): Ref {
+  return ref(`seed-${taskId}`, 31)
+}
+
+function compositionPayloadFor(contract: TaskContract): CompositionPayload {
+  return {
+    v: 1,
+    dsh: {
+      package: 'dsh-test-host',
+      version: '0.2.2-alpha.2',
+      config: ref('dsh-config', 40),
+    },
+    platformPrompt: digestFor(41),
+    contract: { id: contract.taskId, digest: contract.digest },
+    template: { ...contract.template },
+    skills: [],
+    mcpServers: [],
+    modelRoute: ref('model-route', 42),
+    resources: ref('global-resources', 43),
+    seed: seedFor(contract.taskId),
+  }
+}
+
+function makeComposition(
+  taskId: string,
+  overrides: Partial<CompositionPayload> = {},
+): Composition {
+  const contract = contractRegistry.get(taskId)
+  if (contract === undefined) {
+    throw new Error(`Composition requested before contract registration: ${taskId}`)
+  }
+  return seal('composition', { ...compositionPayloadFor(contract), ...overrides })
+}
+
+function compositionFor(taskId: string): Composition {
+  const contract = contractRegistry.get(taskId)
+  if (contract === undefined) {
+    throw new Error(`Composition requested before contract registration: ${taskId}`)
+  }
+  const cached = compositionCache.get(taskId)
+  if (
+    cached !== undefined &&
+    cached.contract.id === contract.taskId &&
+    cached.contract.digest === contract.digest
+  ) {
+    return cached
+  }
+  const composition = makeComposition(taskId)
+  compositionCache.set(taskId, composition)
+  return composition
+}
+
+function registerContract(contract: TaskContract): TaskContract {
+  contractRegistry.set(contract.taskId, contract)
+  for (const compositions of liveCompositionMaps) {
+    compositions.set(`composition-${contract.taskId}`, compositionFor(contract.taskId))
+  }
+  return contract
+}
 
 function goalFor(taskId: string) {
   return {
@@ -121,21 +227,38 @@ function makeRootContract(
   } = {},
 ): TaskContract {
   const method = options.method ?? baseMethodRef
-  return sealTaskContract({
-    v: 1,
-    taskId: 'task-root',
-    spec: { goal: goalFor('task-root'), criteria: [], inputs: [], outputs: [] },
-    origin: options.origin ?? rootOrigin(),
-    method,
-    template: {
-      id: options.templateId ?? 'root-template',
-      digest: options.templateDigest ?? method.digest,
-    },
-    resources: { baseTools: [], skills: [], mcpServers: [] },
-    acceptance: ref('acceptance-root', 21),
-    environment: { seed: ref('seed-root', 22), profile: ref('profile-root', 23) },
-    limits: { ...defaultLimits, ...options.limits },
-  })
+  return registerContract(
+    sealTaskContract({
+      v: 1,
+      taskId: 'task-root',
+      spec: { goal: goalFor('task-root'), criteria: [], inputs: [], outputs: [] },
+      origin: options.origin ?? rootOrigin(),
+      method,
+      template: {
+        id: options.templateId ?? 'root-template',
+        digest: options.templateDigest ?? method.digest,
+      },
+      resources: { baseTools: [], skills: [], mcpServers: [] },
+      acceptance: ref('acceptance-root', 21),
+      environment: { seed: ref('seed-root', 22), profile: ref('profile-root', 23) },
+      limits: { ...defaultLimits, ...options.limits },
+    }),
+  )
+}
+
+function childLimitsFor(parentId: string): TaskLimits {
+  const parent = contractRegistry.get(parentId)
+  if (parent === undefined) return defaultLimits
+  const limits = parent.limits
+  return {
+    ...defaultLimits,
+    maxDepth: Math.max(0, limits.maxDepth - 1),
+    maxTasks: Math.max(1, Math.min(defaultLimits.maxTasks, limits.maxTasks - 1)),
+    maxTokens: Math.min(defaultLimits.maxTokens, limits.maxTokens),
+    maxStepsPerRun: Math.min(defaultLimits.maxStepsPerRun, limits.maxStepsPerRun),
+    maxBatchChildren: Math.min(defaultLimits.maxBatchChildren, limits.maxBatchChildren),
+    deadlineAt: Math.min(defaultLimits.deadlineAt, limits.deadlineAt),
+  }
 }
 
 function makeChildContract(options: {
@@ -149,26 +272,29 @@ function makeChildContract(options: {
   readonly limits?: Partial<TaskLimits>
 }): TaskContract {
   const method = options.method ?? baseMethodRef
-  return sealTaskContract({
-    v: 1,
-    taskId: options.taskId,
-    spec: { goal: goalFor(options.taskId), criteria: [], inputs: [], outputs: [] },
-    origin: childOrigin(
-      options.parentId ?? 'task-root',
-      options.parentRunId ?? 'run-root-1',
-      options.batchId ?? 'batch-1',
-      options.bindingId ?? 'child-required',
-    ),
-    method,
-    template: {
-      id: options.templateId ?? 'child-template',
-      digest: method.digest,
-    },
-    resources: { baseTools: [], skills: [], mcpServers: [] },
-    acceptance: ref(`acceptance-${options.taskId}`, 24),
-    environment: { seed: ref('seed-child', 25), profile: ref('profile-child', 26) },
-    limits: { ...defaultLimits, ...options.limits },
-  })
+  const parentId = options.parentId ?? 'task-root'
+  return registerContract(
+    sealTaskContract({
+      v: 1,
+      taskId: options.taskId,
+      spec: { goal: goalFor(options.taskId), criteria: [], inputs: [], outputs: [] },
+      origin: childOrigin(
+        parentId,
+        options.parentRunId ?? 'run-root-1',
+        options.batchId ?? 'batch-1',
+        options.bindingId ?? 'child-required',
+      ),
+      method,
+      template: {
+        id: options.templateId ?? 'child-template',
+        digest: method.digest,
+      },
+      resources: { baseTools: [], skills: [], mcpServers: [] },
+      acceptance: ref(`acceptance-${options.taskId}`, 24),
+      environment: { seed: ref('seed-child', 25), profile: ref('profile-child', 26) },
+      limits: { ...childLimitsFor(parentId), ...options.limits },
+    }),
+  )
 }
 
 function contractRef(contract: TaskContract): Ref {
@@ -179,12 +305,34 @@ function makeContext(
   contracts: readonly TaskContract[],
   methods: readonly MethodRevision[] = [baseMethod],
   transientInvalidReasons: readonly string[] = [],
+  compositionOverrides?: ReadonlyMap<string, Composition>,
 ): ReplayContext {
+  const compositions = new Map<string, Composition>(compositionOverrides)
+  if (compositionOverrides === undefined) {
+    for (const contract of contractRegistry.values()) {
+      compositions.set(`composition-${contract.taskId}`, compositionFor(contract.taskId))
+    }
+    liveCompositionMaps.add(compositions)
+  }
   return {
     contracts: new Map(contracts.map(contract => [`contract-${contract.taskId}`, contract])),
     methods: new Map(methods.map(method => [method.id, method])),
     transientInvalidReasons,
+    compositions,
   }
+}
+
+function contextWithComposition(
+  contract: TaskContract,
+  composition: Composition,
+  method: MethodRevision = plainMethod,
+): ReplayContext {
+  return makeContext(
+    [contract],
+    [method],
+    [],
+    new Map([[`composition-${contract.taskId}`, composition]]),
+  )
 }
 
 class Journal {
@@ -248,14 +396,15 @@ function runOpened(
   attempt: number,
   overrides: Partial<RunOpenedPayload> = {},
 ): RunOpenedPayload {
+  const composition = compositionFor(taskId)
   return {
     taskId,
     runId,
     attempt,
     sessionId: `session-${runId}`,
-    composition: ref(`composition-${runId}`, 30),
+    composition: { id: `composition-${taskId}`, digest: composition.digest },
     workspaceKey: `workspace-${runId}`,
-    workspaceSeed: ref(`seed-${runId}`, 31),
+    workspaceSeed: { ...composition.seed },
     budgetReservation: defaultReservation,
     ...overrides,
   }
@@ -462,7 +611,7 @@ void test('folds a root Task whose required child is verified before the parent 
   const child = mustGet(state.tasks, 'task-child')
   const rootRun = mustGet(state.runs, 'run-root-1')
   const childRun = mustGet(state.runs, 'run-child-1')
-  const batch = mustGet(state.batches, 'batch-1')
+  const batch = mustGet(state.batches, childBatchKey('run-root-1', 'batch-1'))
 
   assert.equal(root.phase, 'closed')
   assert.equal(root.closed?.outcome, 'verified')
@@ -485,6 +634,77 @@ void test('folds a root Task whose required child is verified before the parent 
   assert.deepEqual(batch.childIds, ['task-child'])
 })
 
+void test('batch identity is parentRunId plus batchId, not a global batchId', () => {
+  const root = makeRootContract()
+  const child = makeChildContract({ taskId: 'task-child', batchId: 'shared-batch' })
+  const grandchild = makeChildContract({
+    taskId: 'task-grandchild',
+    parentId: 'task-child',
+    parentRunId: 'run-child-1',
+    batchId: 'shared-batch',
+    bindingId: 'grandchild-probe',
+    templateId: 'grand-template',
+  })
+  const context = makeContext([root])
+  const journal = new Journal()
+
+  journal.add('task/admitted', { taskId: 'task-root', contract: contractRef(root) })
+  journal.add('run/opened', runOpened('task-root', 'run-root-1', 1))
+  journal.add(
+    'task/children-admitted',
+    admission('run-root-1', 'shared-batch', [admittedChild(child, 'required')]),
+  )
+  journal.add('run/opened', runOpened('task-child', 'run-child-1', 1))
+  journal.add(
+    'task/children-admitted',
+    admission('run-child-1', 'shared-batch', [admittedChild(grandchild, 'probe')]),
+  )
+
+  const state = reduceTaskRunFacts(journal.facts, context)
+  assert.equal(state.batches.size, 2)
+  assert.equal(
+    mustGet(state.batches, childBatchKey('run-root-1', 'shared-batch')).parentTaskId,
+    'task-root',
+  )
+  assert.equal(
+    mustGet(state.batches, childBatchKey('run-child-1', 'shared-batch')).parentTaskId,
+    'task-child',
+  )
+
+  const duplicateSameRun = appendFact(
+    journal.facts,
+    'task/children-admitted',
+    admission('run-root-1', 'shared-batch', [
+      admittedChild(
+        makeChildContract({
+          taskId: 'task-duplicate',
+          parentRunId: 'run-root-1',
+          batchId: 'shared-batch',
+          bindingId: 'child-probe',
+        }),
+        'probe',
+      ),
+    ]),
+  )
+  expectReducerError(
+    () => reduceTaskRunFacts([...journal.facts, duplicateSameRun], context),
+    'CHILD_BATCH_EXISTS',
+  )
+})
+
+void test('probe bindings do not block submit without a child', () => {
+  const root = makeProbeRootContract()
+  const context = makeContext([root], [probeMethod])
+  const journal = new Journal()
+  journal.add('task/admitted', { taskId: 'task-root', contract: contractRef(root) })
+  journal.add('run/opened', runOpened('task-root', 'run-root-1', 1))
+  journal.add('run/submitted', submitted('run-root-1'))
+
+  const state = reduceTaskRunFacts(journal.facts, context)
+  assert.equal(mustGet(state.runs, 'run-root-1').phase, 'submitted')
+  assert.equal(mustGet(state.tasks, 'task-root').phase, 'active')
+})
+
 void test('root admission checks contract ref, contract digest, method and template', () => {
   const root = makeRootContract()
   const admitted = { taskId: 'task-root', contract: contractRef(root) }
@@ -500,6 +720,7 @@ void test('root admission checks contract ref, contract digest, method and templ
   const tamperedContext: ReplayContext = {
     contracts: new Map([['contract-task-root', tampered]]),
     methods: new Map([[baseMethod.id, baseMethod]]),
+    compositions: new Map(),
     transientInvalidReasons: [],
   }
   expectReducerError(
@@ -618,9 +839,135 @@ void test('run/opened requires an open Task, ordered attempts, and bounded reser
   )
 })
 
+void test('run/opened resolves a frozen Composition and checks contract id, digest, and seed', () => {
+  const root = makePlainRootContract()
+  const context = makeContext([root], [plainMethod])
+  const prefix = [
+    new Journal().add('task/admitted', { taskId: 'task-root', contract: contractRef(root) }),
+  ]
+
+  const validRun = appendFact(
+    prefix,
+    'run/opened',
+    runOpened('task-root', 'run-root-1', 1),
+  )
+  assert.doesNotThrow(() => reduceTaskRunFacts([...prefix, validRun], context))
+
+  const missingComposition = appendFact(
+    prefix,
+    'run/opened',
+    runOpened('task-root', 'run-root-1', 1),
+  )
+  expectReducerError(
+    () =>
+      reduceTaskRunFacts(
+        [...prefix, missingComposition],
+        makeContext([root], [plainMethod], [], new Map()),
+      ),
+    'CAS_REF_MISSING',
+  )
+
+  const wrongCompositionRef = appendFact(
+    prefix,
+    'run/opened',
+    runOpened('task-root', 'run-root-1', 1, {
+      composition: { id: 'composition-task-root', digest: digestFor(123) },
+    }),
+  )
+  expectReducerError(
+    () => reduceTaskRunFacts([...prefix, wrongCompositionRef], context),
+    'CAS_REF_MISSING',
+  )
+
+  const validComposition = compositionFor('task-root')
+  const tamperedComposition = { ...validComposition, seed: ref('seed-tampered', 94) }
+  const tamperedRun = appendFact(
+    prefix,
+    'run/opened',
+    runOpened('task-root', 'run-root-1', 1, {
+      composition: { id: 'composition-task-root', digest: tamperedComposition.digest },
+    }),
+  )
+  expectReducerError(
+    () =>
+      reduceTaskRunFacts(
+        [...prefix, tamperedRun],
+        contextWithComposition(root, tamperedComposition),
+      ),
+    'COMPOSITION_INVALID',
+  )
+
+  const wrongContractId = makeComposition('task-root', {
+    contract: { id: 'wrong-contract', digest: root.digest },
+  })
+  const wrongContractIdRun = appendFact(
+    prefix,
+    'run/opened',
+    runOpened('task-root', 'run-root-1', 1, {
+      composition: { id: 'composition-task-root', digest: wrongContractId.digest },
+    }),
+  )
+  expectReducerError(
+    () =>
+      reduceTaskRunFacts(
+        [...prefix, wrongContractIdRun],
+        contextWithComposition(root, wrongContractId),
+      ),
+    'COMPOSITION_MISMATCH',
+  )
+
+  const wrongContractDigest = makeComposition('task-root', {
+    contract: { id: root.taskId, digest: digestFor(95) },
+  })
+  const wrongContractDigestRun = appendFact(
+    prefix,
+    'run/opened',
+    runOpened('task-root', 'run-root-1', 1, {
+      composition: { id: 'composition-task-root', digest: wrongContractDigest.digest },
+    }),
+  )
+  expectReducerError(
+    () =>
+      reduceTaskRunFacts(
+        [...prefix, wrongContractDigestRun],
+        contextWithComposition(root, wrongContractDigest),
+      ),
+    'COMPOSITION_MISMATCH',
+  )
+
+  const wrongSeed = makeComposition('task-root', { seed: ref('seed-wrong', 96) })
+  const wrongSeedRun = appendFact(
+    prefix,
+    'run/opened',
+    runOpened('task-root', 'run-root-1', 1, {
+      composition: { id: 'composition-task-root', digest: wrongSeed.digest },
+    }),
+  )
+  expectReducerError(
+    () =>
+      reduceTaskRunFacts(
+        [...prefix, wrongSeedRun],
+        contextWithComposition(root, wrongSeed),
+      ),
+    'COMPOSITION_MISMATCH',
+  )
+
+  const wrongWorkspaceSeedRun = appendFact(
+    prefix,
+    'run/opened',
+    runOpened('task-root', 'run-root-1', 1, {
+      workspaceSeed: ref('workspace-seed-wrong', 97),
+    }),
+  )
+  expectReducerError(
+    () => reduceTaskRunFacts([...prefix, wrongWorkspaceSeedRun], context),
+    'COMPOSITION_MISMATCH',
+  )
+})
+
 void test('failed retry is allowed only while maxRuns, deadline, tokens, and unknown usage permit', () => {
-  const root = makeRootContract()
-  const context = makeContext([root])
+  const root = makePlainRootContract()
+  const context = makeContext([root], [plainMethod])
   const journal = new Journal()
   journal.add('task/admitted', { taskId: 'task-root', contract: contractRef(root) })
   journal.add('run/opened', runOpened('task-root', 'run-root-1', 1))
@@ -679,8 +1026,8 @@ void test('a retry Run cannot open while an earlier child is still active', () =
 })
 
 void test('deadline, token exhaustion, and unknown usage stop retry but permit task closure', () => {
-  const deadlineRoot = makeRootContract()
-  const deadlineContext = makeContext([deadlineRoot])
+  const deadlineRoot = makePlainRootContract()
+  const deadlineContext = makeContext([deadlineRoot], [plainMethod])
   const deadlineJournal = new Journal()
   deadlineJournal.add('task/admitted', {
     taskId: 'task-root',
@@ -714,8 +1061,8 @@ void test('deadline, token exhaustion, and unknown usage stop retry but permit t
   )
   assert.equal(mustGet(deadlineClosed.tasks, 'task-root').closed?.outcome, 'failed')
 
-  const tokenRoot = makeRootContract({ limits: { maxTokens: 100 } })
-  const tokenContext = makeContext([tokenRoot])
+  const tokenRoot = makePlainRootContract({ maxTokens: 100 })
+  const tokenContext = makeContext([tokenRoot], [plainMethod])
   const tokenJournal = new Journal()
   tokenJournal.add('task/admitted', { taskId: 'task-root', contract: contractRef(tokenRoot) })
   tokenJournal.add('run/opened', runOpened('task-root', 'run-root-1', 1))
@@ -747,8 +1094,8 @@ void test('deadline, token exhaustion, and unknown usage stop retry but permit t
     'failed',
   )
 
-  const unknownRoot = makeRootContract()
-  const unknownContext = makeContext([unknownRoot])
+  const unknownRoot = makePlainRootContract()
+  const unknownContext = makeContext([unknownRoot], [plainMethod])
   const unknownJournal = new Journal()
   unknownJournal.add('task/admitted', {
     taskId: 'task-root',
@@ -934,6 +1281,62 @@ void test('child admission guards origin, method, template, binding, join, and b
   }
 })
 
+void test('child admission shares the admission child-limits guard', () => {
+  const root = makeRootContract()
+  const context = makeContext([root])
+  const prefix = [
+    new Journal().add('task/admitted', { taskId: 'task-root', contract: contractRef(root) }),
+    new Journal().add('run/opened', runOpened('task-root', 'run-root-1', 1)),
+  ]
+
+  const cases: readonly (readonly [string, Partial<TaskLimits>])[] = [
+    ['deadline', { deadlineAt: root.limits.deadlineAt + 1 }],
+    ['depth', { maxDepth: root.limits.maxDepth }],
+    ['tasks-zero', { maxTasks: 0 }],
+    ['tasks-large', { maxTasks: root.limits.maxTasks }],
+    ['tokens', { maxTokens: root.limits.maxTokens + 1 }],
+    ['steps', { maxStepsPerRun: root.limits.maxStepsPerRun + 1 }],
+    ['batch', { maxBatchChildren: root.limits.maxBatchChildren + 1 }],
+  ]
+
+  for (const [label, limits] of cases) {
+    const child = makeChildContract({
+      taskId: `task-limit-${label}`,
+      batchId: 'batch-limits',
+      limits,
+    })
+    const fact = appendFact(
+      prefix,
+      'task/children-admitted',
+      admission('run-root-1', 'batch-limits', [admittedChild(child, 'required')]),
+    )
+    expectReducerError(
+      () => reduceTaskRunFacts([...prefix, fact], context),
+      'CHILD_LIMIT_EXCEEDED',
+    )
+  }
+
+  const boundaryChild = makeChildContract({
+    taskId: 'task-child-boundary',
+    batchId: 'batch-boundary',
+    limits: {
+      deadlineAt: root.limits.deadlineAt,
+      maxDepth: root.limits.maxDepth - 1,
+      maxTasks: root.limits.maxTasks - 1,
+      maxTokens: root.limits.maxTokens,
+      maxStepsPerRun: root.limits.maxStepsPerRun,
+      maxBatchChildren: root.limits.maxBatchChildren,
+    },
+  })
+  const boundaryFact = appendFact(
+    prefix,
+    'task/children-admitted',
+    admission('run-root-1', 'batch-boundary', [admittedChild(boundaryChild, 'required')]),
+  )
+  const boundaryState = reduceTaskRunFacts([...prefix, boundaryFact], context)
+  assert.equal(mustGet(boundaryState.tasks, 'task-child-boundary').phase, 'open')
+})
+
 void test('child admission enforces batch limits, budgets, active batches, and satisfied bindings', () => {
   const root = makeRootContract({ limits: { maxBatchChildren: 2 } })
   const context = makeContext([root])
@@ -962,7 +1365,10 @@ void test('child admission enforces batch limits, budgets, active batches, and s
   const child = makeChildContract({ taskId: 'task-child' })
   const overBudget = admission('run-root-1', 'batch-budget', [
     {
-      contract: makeChildContract({ taskId: 'task-child', batchId: 'batch-budget' }),
+      contract: makeChildContract({
+        taskId: 'task-child-over-budget',
+        batchId: 'batch-budget',
+      }),
       join: 'required',
       budgetReservation: { tokens: 2_000, steps: 1, deadlineAt: 1_500 },
     },
@@ -1030,8 +1436,12 @@ void test('child admission enforces batch limits, budgets, active batches, and s
     'BINDING_ALREADY_SATISFIED',
   )
 
-  const submittedRoot = appendFact(prefix, 'run/submitted', submitted('run-root-1'))
-  const afterSubmit = [...prefix, submittedRoot]
+  const submittedRoot = appendFact(
+    afterChildVerified,
+    'run/submitted',
+    submitted('run-root-1'),
+  )
+  const afterSubmit = [...afterChildVerified, submittedRoot]
   const admissionAfterSubmit = appendFact(
     afterSubmit,
     'task/children-admitted',
@@ -1142,6 +1552,59 @@ void test('replacement supersedes only terminal nonverified children and becomes
   assert.equal(mustGet(state.tasks, 'task-child-new').closed?.outcome, 'verified')
 })
 
+void test('replacement cannot supersede a child from an earlier parent Run', () => {
+  const root = makeRootContract()
+  const context = makeContext([root])
+  const oldChild = makeChildContract({ taskId: 'task-child-old', limits: { maxRuns: 1 } })
+  const currentChild = makeChildContract({
+    taskId: 'task-child-current',
+    parentRunId: 'run-root-2',
+    batchId: 'batch-2',
+  })
+  const journal = new Journal()
+
+  journal.add('task/admitted', { taskId: 'task-root', contract: contractRef(root) })
+  journal.add('run/opened', runOpened('task-root', 'run-root-1', 1))
+  journal.add(
+    'task/children-admitted',
+    admission('run-root-1', 'batch-1', [admittedChild(oldChild, 'required')]),
+  )
+  journal.add('run/opened', runOpened('task-child-old', 'run-old-1', 1))
+  journal.add('run/closed', failedExecutionClosed('run-old-1'))
+  journal.add('task/closed', failedTask('task-child-old', 'run-old-1'))
+  journal.add('run/closed', failedExecutionClosed('run-root-1'))
+  journal.add('run/opened', runOpened('task-root', 'run-root-2', 2))
+
+  const staleReplacement = appendFact(
+    journal.facts,
+    'task/children-admitted',
+    admission('run-root-2', 'batch-2', [
+      admittedChild(
+        makeChildContract({
+          taskId: 'task-child-stale',
+          parentRunId: 'run-root-2',
+          batchId: 'batch-2',
+        }),
+        'required',
+        { feedbackRef: ref('feedback-1', 40), supersedesChildIds: ['task-child-old'] },
+      ),
+    ]),
+  )
+  expectReducerError(
+    () => reduceTaskRunFacts([...journal.facts, staleReplacement], context),
+    'REPLACEMENT_TARGET_INVALID',
+  )
+
+  journal.add(
+    'task/children-admitted',
+    admission('run-root-2', 'batch-2', [admittedChild(currentChild, 'required')]),
+  )
+  const state = reduceTaskRunFacts(journal.facts, context)
+  assert.equal(mustGet(state.tasks, 'task-child-old').supersededBy, undefined)
+  assert.equal(mustGet(state.tasks, 'task-child-old').closed?.outcome, 'failed')
+  assert.equal(mustGet(state.tasks, 'task-child-current').phase, 'open')
+})
+
 void test('a new parent Run must re-establish required winners instead of reusing old children', () => {
   const root = makeRootContract()
   const context = makeContext([root])
@@ -1182,16 +1645,13 @@ void test('a new parent Run must re-establish required winners instead of reusin
     'REPLACEMENT_TARGET_INVALID',
   )
 
-  journal.add('run/submitted', submitted('run-root-2'))
-  journal.add('run/closed', verifiedClosed('run-root-2'))
-
-  const closesWithoutNewChild = appendFact(
+  const submitWithoutNewChild = appendFact(
     journal.facts,
-    'task/closed',
-    verifiedTask('task-root', 'run-root-2'),
+    'run/submitted',
+    submitted('run-root-2'),
   )
   expectReducerError(
-    () => reduceTaskRunFacts([...journal.facts, closesWithoutNewChild], context),
+    () => reduceTaskRunFacts([...journal.facts, submitWithoutNewChild], context),
     'JOIN_UNSATISFIED',
   )
 
@@ -1327,24 +1787,64 @@ void test('subtree cancellation closes nonterminal descendants and runs without 
     'TASK_ALREADY_CLOSED',
   )
 
-  const invalidSubtreeOutcome = appendFact(
-    journal.facts.slice(0, -1),
-    'task/closed',
-    { ...failedTask('task-root'), scope: 'subtree' },
+  const baseFacts = journal.facts.slice(0, -1)
+
+  const failedSubtree = appendFact(baseFacts, 'task/closed', {
+    ...failedTask('task-root'),
+    scope: 'subtree',
+    cancellationCutRef: ref('cancellation-cut-failed', 91),
+  })
+  const failedSubtreeState = reduceTaskRunFacts([...baseFacts, failedSubtree], context)
+  assert.equal(mustGet(failedSubtreeState.tasks, 'task-root').closed?.outcome, 'failed')
+  assert.equal(mustGet(failedSubtreeState.tasks, 'task-root').closed?.source, 'task/closed')
+  assert.equal(
+    mustGet(failedSubtreeState.tasks, 'task-active').closed?.outcome,
+    'cancelled',
   )
+  assert.equal(
+    mustGet(failedSubtreeState.tasks, 'task-terminal').closed?.outcome,
+    'verified',
+  )
+  assert.equal(
+    mustGet(failedSubtreeState.runs, 'run-root-1').closed?.source,
+    'subtree-cancellation',
+  )
+
+  const missingCutSubtree = appendFact(baseFacts, 'task/closed', {
+    taskId: 'task-root',
+    outcome: 'cancelled',
+    reason: 'Subtree cancellation without a cut',
+    evidenceRefs: [],
+    scope: 'subtree',
+  })
   expectReducerError(
-    () =>
-      reduceTaskRunFacts(
-        [...journal.facts.slice(0, -1), invalidSubtreeOutcome],
-        context,
-      ),
+    () => reduceTaskRunFacts([...baseFacts, missingCutSubtree], context),
+    'CANCELLATION_INVALID',
+  )
+
+  const cutWithoutScope = appendFact(baseFacts, 'task/closed', {
+    ...cancelledTask('task-root'),
+    cancellationCutRef: ref('cancellation-cut-direct', 92),
+  })
+  expectReducerError(
+    () => reduceTaskRunFacts([...baseFacts, cutWithoutScope], context),
+    'CANCELLATION_INVALID',
+  )
+
+  const verifiedSubtree = appendFact(baseFacts, 'task/closed', {
+    ...verifiedTask('task-root', 'run-root-1'),
+    scope: 'subtree',
+    cancellationCutRef: ref('cancellation-cut-verified', 93),
+  })
+  expectReducerError(
+    () => reduceTaskRunFacts([...baseFacts, verifiedSubtree], context),
     'CANCELLATION_INVALID',
   )
 })
 
 void test('rejects unsupported fact types and illegal lifecycle transitions', () => {
-  const root = makeRootContract()
-  const context = makeContext([root])
+  const root = makePlainRootContract()
+  const context = makeContext([root], [plainMethod])
   const methodFact = new Journal().add('method/registered', { revision: baseMethodRef })
   expectReducerError(
     () => reduceTaskRunFacts([methodFact], context),
@@ -1464,4 +1964,10 @@ void test('submit requires no active child batch', () => {
     () => reduceTaskRunFacts([...journal.facts, earlySubmit], context),
     'CHILD_ACTIVE',
   )
+})
+
+void test('index exports both admission and the Task/Run reducer', () => {
+  assert.equal(protocol.reduceTaskRunFacts, reduceTaskRunFacts)
+  assert.equal(protocol.childBatchKey, childBatchKey)
+  assert.equal(typeof protocol.admitChildBatch, 'function')
 })

@@ -1,8 +1,11 @@
+import { AdmissionError, assertChildLimitsWithinParent } from './admission.ts'
+import { verifyDigest } from './digest.ts'
 import type { Digest } from './digest.ts'
-import { verifyFact } from './fact.ts'
+import { compositionSchema, verifyFact } from './fact.ts'
 import type {
   AdmittedChild,
   ChildrenAdmittedPayload,
+  Composition,
   Fact,
   RunClosedPayload,
   RunOpenedPayload,
@@ -14,6 +17,7 @@ import type {
 import { verifyMethodRevision } from './method.ts'
 import type { ChildBinding, MethodRevision, TaskTemplate } from './method.ts'
 import type { Ref } from './refs.ts'
+import { parseProtocolValue } from './schema.ts'
 import { verifyTaskContract } from './task.ts'
 import type { TaskChildOrigin, TaskContract, TaskLimits } from './task.ts'
 
@@ -22,6 +26,8 @@ export const REDUCER_ERROR_CODES = [
   'UNSUPPORTED_FACT_TYPE',
   'FACT_INVALID',
   'CAS_REF_MISSING',
+  'COMPOSITION_INVALID',
+  'COMPOSITION_MISMATCH',
   'CONTRACT_INVALID',
   'METHOD_INVALID',
   'METHOD_TEMPLATE_MISMATCH',
@@ -95,6 +101,8 @@ export interface ReplayContext {
   readonly contracts: ReadonlyMap<string, TaskContract>
   /** Method revision id -> complete frozen revision. */
   readonly methods: ReadonlyMap<string, MethodRevision>
+  /** CAS object id -> frozen Composition used by run/opened. */
+  readonly compositions: ReadonlyMap<string, Composition>
   /** Deployment pre-listed transient infrastructure reasons for invalid retry. */
   readonly transientInvalidReasons: readonly string[]
 }
@@ -169,6 +177,7 @@ export interface ChildBatchState {
 export interface TaskRunState {
   readonly tasks: ReadonlyMap<string, TaskState>
   readonly runs: ReadonlyMap<string, RunState>
+  /** Keyed by `childBatchKey(parentRunId, batchId)`, not by batchId alone. */
   readonly batches: ReadonlyMap<string, ChildBatchState>
 }
 
@@ -228,6 +237,11 @@ interface UsageTotals {
 }
 
 type FactOf<Type extends Fact['type']> = Extract<Fact, { readonly type: Type }>
+
+/** Authority identity for one child batch inside a parent Run. */
+export function childBatchKey(parentRunId: string, batchId: string): string {
+  return `${parentRunId}\u0000${batchId}`
+}
 
 /**
  * Folds journal facts into the single Task/Run projection. Only the six
@@ -364,6 +378,8 @@ function applyRunOpened(runtime: ReducerRuntime, fact: FactOf<'run/opened'>): vo
     )
   }
   assertReservation(payload.budgetReservation, task.contract.limits, fact)
+  const composition = resolveComposition(payload.composition, runtime, fact)
+  assertCompositionIdentity(composition, task, payload, fact)
 
   runtime.runs.set(payload.runId, {
     runId: payload.runId,
@@ -393,8 +409,12 @@ function applyChildrenAdmitted(
   if (parent.phase !== 'active' || parent.activeRunId !== parentRun.runId) {
     fail('TASK_NOT_ACTIVE', fact, 'Parent Run is not the active Run of its Task')
   }
-  if (runtime.batches.has(payload.batchId)) {
-    fail('CHILD_BATCH_EXISTS', fact, `Batch ${JSON.stringify(payload.batchId)} already exists`)
+  if (runtime.batches.has(childBatchKey(parentRun.runId, payload.batchId))) {
+    fail(
+      'CHILD_BATCH_EXISTS',
+      fact,
+      `Batch ${JSON.stringify(payload.batchId)} already exists in parent Run ${JSON.stringify(parentRun.runId)}`,
+    )
   }
   if (payload.children.length === 0) {
     fail('CHILD_BATCH_EMPTY', fact, 'Child admissions must not be empty')
@@ -481,14 +501,15 @@ function applyChildrenAdmitted(
       fail('CHILD_LIMIT_EXCEEDED', fact, 'Admission exceeds the root maxDepth budget')
     }
 
-    assertChildLimits(parent, child)
+    try {
+      assertChildLimitsWithinParent(parent.contract.limits, child.limits)
+    } catch (error) {
+      if (error instanceof AdmissionError) {
+        fail('CHILD_LIMIT_EXCEEDED', fact, error.message)
+      }
+      throw error
+    }
     assertReservation(admitted.budgetReservation, child.limits, fact)
-    if (admitted.budgetReservation.tokens > parent.contract.limits.maxTokens) {
-      fail('BUDGET_EXCEEDED', fact, 'Child token reservation exceeds the parent budget')
-    }
-    if (admitted.budgetReservation.deadlineAt > parent.contract.limits.deadlineAt) {
-      fail('BUDGET_EXCEEDED', fact, 'Child deadline exceeds the parent deadline')
-    }
 
     if (hasBindingWinner(runtime, parent, parentRun.runId, binding.bindingId)) {
       fail(
@@ -498,9 +519,17 @@ function applyChildrenAdmitted(
       )
     }
 
-    const eligible = eligiblePredecessors(runtime, parent, binding.bindingId)
+    const eligible = eligiblePredecessors(runtime, parent, parentRun.runId, binding.bindingId)
     if (admitted.replacement !== undefined) {
-      assertReplacementTargets(runtime, parent, binding.bindingId, admitted, eligible, fact)
+      assertReplacementTargets(
+        runtime,
+        parent,
+        parentRun.runId,
+        binding.bindingId,
+        admitted,
+        eligible,
+        fact,
+      )
     } else if (binding.join === 'required' && eligible.length > 0) {
       fail(
         'REPLACEMENT_REQUIRED',
@@ -541,7 +570,7 @@ function applyChildrenAdmitted(
     }
   }
 
-  runtime.batches.set(payload.batchId, {
+  runtime.batches.set(childBatchKey(parentRun.runId, payload.batchId), {
     batchId: payload.batchId,
     parentTaskId: parent.taskId,
     parentRunId: parentRun.runId,
@@ -582,6 +611,18 @@ function applyRunSubmitted(runtime: ReducerRuntime, fact: FactOf<'run/submitted'
       )
     }
   }
+  const method = resolveMethod(task.contract.method, runtime, fact)
+  const template = resolveTemplate(method, task.contract.template, fact)
+  for (const binding of template.children) {
+    if (binding.join !== 'required') continue
+    if (!hasBindingWinner(runtime, task, run.runId, binding.bindingId)) {
+      fail(
+        'JOIN_UNSATISFIED',
+        fact,
+        `Required binding ${JSON.stringify(binding.bindingId)} has no verified winner in the current Run`,
+      )
+    }
+  }
   run.phase = 'submitted'
   run.submitted = payload
 }
@@ -618,11 +659,29 @@ function applyTaskClosed(runtime: ReducerRuntime, fact: FactOf<'task/closed'>): 
   }
 
   if (payload.scope === 'subtree') {
-    if (payload.outcome !== 'cancelled') {
-      fail('CANCELLATION_INVALID', fact, 'Only cancelled Task closure may use scope=subtree')
+    if (payload.cancellationCutRef === undefined) {
+      fail(
+        'CANCELLATION_INVALID',
+        fact,
+        'scope=subtree requires cancellationCutRef',
+      )
+    }
+    if (payload.outcome !== 'failed' && payload.outcome !== 'cancelled') {
+      fail(
+        'CANCELLATION_INVALID',
+        fact,
+        'Subtree closure target outcome must be failed or cancelled',
+      )
     }
     closeSubtree(runtime, task, payload, fact)
     return
+  }
+  if (payload.cancellationCutRef !== undefined) {
+    fail(
+      'CANCELLATION_INVALID',
+      fact,
+      'cancellationCutRef is only valid with scope=subtree',
+    )
   }
 
   switch (payload.outcome) {
@@ -949,12 +1008,14 @@ function hasBindingWinner(
 function eligiblePredecessors(
   runtime: ReducerRuntime,
   task: MutableTaskRecord,
+  parentRunId: string,
   bindingId: string,
 ): MutableTaskRecord[] {
   const eligible: MutableTaskRecord[] = []
   for (const childId of task.childIds) {
     const child = runtime.tasks.get(childId)
     if (child === undefined) continue
+    if (child.parentRunId !== parentRunId) continue
     if (child.bindingId !== bindingId) continue
     if (child.phase !== 'closed') continue
     if (child.closed?.outcome === 'verified') continue
@@ -967,6 +1028,7 @@ function eligiblePredecessors(
 function assertReplacementTargets(
   runtime: ReducerRuntime,
   parent: MutableTaskRecord,
+  parentRunId: string,
   bindingId: string,
   admitted: AdmittedChild,
   eligible: readonly MutableTaskRecord[],
@@ -993,6 +1055,13 @@ function assertReplacementTargets(
     const target = requireTask(runtime, targetId, fact)
     if (target.parentTaskId !== parent.taskId) {
       fail('REPLACEMENT_TARGET_INVALID', fact, 'Replacement target must be a direct child')
+    }
+    if (target.parentRunId !== parentRunId) {
+      fail(
+        'REPLACEMENT_TARGET_INVALID',
+        fact,
+        'Replacement target must belong to the current parent Run',
+      )
     }
     if (target.phase !== 'closed' || target.closed?.outcome === 'verified') {
       fail(
@@ -1028,15 +1097,6 @@ function childOriginOf(
     fail('CHILD_ORIGIN_MISMATCH', fact, 'Admitted child contract must have a child origin')
   }
   return contract.origin
-}
-
-function assertChildLimits(parent: MutableTaskRecord, child: TaskContract): void {
-  if (child.limits.deadlineAt > parent.contract.limits.deadlineAt) {
-    fail('BUDGET_EXCEEDED', undefined, 'Child deadline exceeds the parent deadline')
-  }
-  if (child.limits.maxTokens > parent.contract.limits.maxTokens) {
-    fail('BUDGET_EXCEEDED', undefined, 'Child token limit exceeds the parent token budget')
-  }
 }
 
 function assertReservation(
@@ -1077,6 +1137,63 @@ function resolveContract(
     )
   }
   return contract
+}
+
+function resolveComposition(
+  ref: Ref,
+  runtime: ReducerRuntime,
+  fact: Fact,
+): Composition {
+  const candidate = runtime.context.compositions.get(ref.id)
+  if (candidate === undefined) {
+    fail(
+      'CAS_REF_MISSING',
+      fact,
+      `Frozen Composition ${JSON.stringify(ref.id)} is missing`,
+    )
+  }
+  let composition: Composition
+  try {
+    composition = parseProtocolValue(compositionSchema, candidate)
+  } catch {
+    fail('COMPOSITION_INVALID', fact, 'Frozen Composition does not satisfy its strict schema')
+  }
+  if (!verifyDigest('composition', composition)) {
+    fail('COMPOSITION_INVALID', fact, 'Frozen Composition digest does not verify')
+  }
+  if (composition.digest !== ref.digest) {
+    fail(
+      'CAS_REF_MISSING',
+      fact,
+      `Frozen Composition ${JSON.stringify(ref.id)} has a different digest`,
+    )
+  }
+  return composition
+}
+
+function assertCompositionIdentity(
+  composition: Composition,
+  task: MutableTaskRecord,
+  opened: RunOpenedPayload,
+  fact: FactOf<'run/opened'>,
+): void {
+  if (
+    composition.contract.id !== task.contract.taskId ||
+    composition.contract.digest !== task.contract.digest
+  ) {
+    fail(
+      'COMPOSITION_MISMATCH',
+      fact,
+      'Composition contract id/digest does not match the frozen TaskContract',
+    )
+  }
+  if (!sameRef(composition.seed, opened.workspaceSeed)) {
+    fail(
+      'COMPOSITION_MISMATCH',
+      fact,
+      'Composition seed does not match run/opened workspaceSeed',
+    )
+  }
 }
 
 function resolveMethod(

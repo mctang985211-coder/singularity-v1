@@ -387,7 +387,7 @@ function assertAuthorizedInputs(
   }
 }
 
-function assertChildLimitsWithinParent(parent: TaskLimits, child: TaskLimits): void {
+export function assertChildLimitsWithinParent(parent: TaskLimits, child: TaskLimits): void {
   if (child.deadlineAt > parent.deadlineAt) {
     limitExceeded('Child deadlineAt must not exceed the parent deadlineAt')
   }
