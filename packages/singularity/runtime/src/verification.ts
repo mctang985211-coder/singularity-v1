@@ -56,7 +56,7 @@ export interface VerifierRequest extends VerifyRequest {
 
 /** Independent domain verifier from docs/framework.md §19. */
 export interface RunVerifier {
-  /** Frozen acceptance provider identity; must equal the receipt provider. */
+  /** This host uses the frozen acceptance object itself as provider identity. */
   readonly provider: Ref
   verify(request: VerifierRequest): Promise<PublicReceipt>
 }
@@ -95,6 +95,14 @@ export type RunVerification =
 export async function verifyRunSubmission(
   input: RunVerificationInput,
 ): Promise<RunVerification> {
+  if (input.verifier.provider.id !== input.contract.acceptance.id
+    || input.verifier.provider.digest !== input.contract.acceptance.digest) {
+    return {
+      verdict: 'invalid',
+      code: 'verification-invalid',
+      reason: `${VERIFICATION_INVALID_REASON}: verifier provider does not match the frozen acceptance`,
+    }
+  }
   const operationId = `${input.runId}:verify`
   const requiredCriteria = input.contract.spec.criteria
     .filter(criterion => criterion.required)
@@ -118,7 +126,7 @@ export async function verifyRunSubmission(
   }
 
   const validation = validatePublicReceipt(receipt, {
-    provider: input.verifier.provider,
+    provider: input.contract.acceptance,
     operationId,
     contractDigest: input.contract.digest,
     inputDigests: input.inputs.map(ref => ref.digest),

@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
+
 import {
   sealPublicReceipt,
   sealSubmissionManifest,
@@ -17,6 +21,8 @@ import type {
 } from '@singularity/protocol'
 
 import { DomainStore } from '../src/store.ts'
+import { initialContextEpoch } from '../src/epoch.ts'
+import { RunToolController } from '../src/tools.ts'
 import {
   VERIFIER_ERROR_REASON,
   VERIFIER_TIMEOUT_REASON,
@@ -158,7 +164,7 @@ void test('host classifies verified and failed receipts and writes the receipt t
     const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
     const manifest = makeManifest(contract, outputRef)
-    const provider = { id: 'provider', digest: digestA }
+    const provider = contract.acceptance
 
     let readBack = ''
     const verified = await run(store, {
@@ -203,7 +209,7 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
     const outputRef = await store.putObject('output-invalid', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
     const manifest = makeManifest(contract, outputRef)
-    const provider = { id: 'provider', digest: digestA }
+    const provider = contract.acceptance
 
     const selfVerdict = await run(store, {
       contract,
@@ -303,7 +309,7 @@ void test('timeout reason is stable for transient retry policy matching', async 
     const outputRef = await store.putObject('output-timeout', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
     const manifest = makeManifest(contract, outputRef)
-    const provider = { id: 'provider', digest: digestA }
+    const provider = contract.acceptance
     const result = await run(store, {
       contract,
       manifest,
@@ -316,5 +322,83 @@ void test('timeout reason is stable for transient retry policy matching', async 
     if (result.verdict !== 'invalid') assert.fail('expected invalid timeout')
     assert.ok(result.reason.startsWith(VERIFIER_TIMEOUT_REASON))
     assert.equal(result.code, VERIFIER_TIMEOUT_REASON)
+  })
+})
+
+void test('frozen acceptance rejects a substituted verifier before it receives CAS access', async () => {
+  await withStore(async store => {
+    const outputRef = await store.putObject('output-provider', new TextEncoder().encode('out!!'), 'object')
+    const contract = makeContract()
+    const manifest = makeManifest(contract, outputRef)
+    for (const provider of [
+      { ...contract.acceptance, id: 'other-provider' },
+      { ...contract.acceptance, digest: digestB },
+    ]) {
+      let called = false
+      const result = await run(store, {
+        contract,
+        manifest,
+        outputRef,
+        verifier: {
+          provider,
+          verify() {
+            called = true
+            return Promise.resolve(receipt(contract, provider, { outputDigest: outputRef.digest }))
+          },
+        },
+      })
+      assert.equal(result.verdict, 'invalid')
+      assert.equal(called, false)
+    }
+  })
+})
+
+void test('tool dispatch uses the exact host budget check while preserving read and stop', async () => {
+  await withStore(async store => {
+    const contract = makeContract()
+    const contextEpoch = initialContextEpoch('session-guard')
+    const definitions = new Map<string, ToolDefinition>()
+    let allowed = true
+    const controller = new RunToolController({
+      contract,
+      runId: 'run-guard',
+      sessionId: 'session-guard',
+      workspace: '/workspace',
+      writer: store,
+      maxOutputBytes: 1024,
+      clock: () => contract.limits.deadlineAt + 1,
+      budget: () => ({ tokensPct: null, stepsPct: 0, wallClockPct: 0, depthPct: 100, taskSlotsPct: 100 }),
+      checkBudget: () => allowed,
+      epoch: () => contextEpoch,
+      commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+    })
+    const agent = { session: { id: 'session-guard', snapshotEvents: () => [] } } as unknown as Agent
+    controller.register({ tools: {
+      register: (definition: ToolDefinition) => definitions.set(definition.name, definition),
+      guard() {},
+    } } as unknown as Context, agent)
+    const callId = 'guard-call' as ToolRunContext['callId']
+    const execution = (name: string): ToolRunContext => ({
+      name, agent, arguments: {}, callId, rootCallId: callId,
+      token: Symbol() as ToolRunContext['token'], signal: new AbortController().signal,
+      deferContext() {}, concludeTurn() {},
+    })
+    const readTool = definitions.get('singularity_read')
+    const planTool = definitions.get('singularity_plan')
+    assert.ok(readTool && planTool)
+    await readTool.execute({ kind: 'self' }, execution('singularity_read'))
+    await planTool.execute({ sketch: {
+      v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch,
+      objective: 'complete current task', sourceContract: contract.digest,
+      levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+      directPlan: [], assumptions: [],
+    } }, execution('singularity_plan'))
+    assert.equal(controller.checkGuard(execution('bash')), undefined)
+    allowed = false
+    const refusal = controller.checkGuard(execution('bash'))
+    assert.ok(refusal)
+    assert.equal((JSON.parse(refusal) as { readonly code: string }).code, 'LIMIT_EXCEEDED')
+    assert.equal(controller.checkGuard(execution('singularity_read')), undefined)
+    assert.equal(controller.checkGuard(execution('singularity_stop')), undefined)
   })
 })

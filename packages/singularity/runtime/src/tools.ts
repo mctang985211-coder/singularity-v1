@@ -37,6 +37,8 @@ export interface RunToolControllerOptions {
   readonly maxOutputBytes: number
   readonly clock: () => number
   readonly budget: () => RemainingBudgetPct
+  /** Exact host budget/deadline check; percentages are presentation only. */
+  readonly checkBudget: () => boolean
   readonly epoch: () => ContextEpoch
   /** Called once when DSH hands the composed Agent to setup. */
   readonly onAgent?: (agent: Agent) => void
@@ -113,6 +115,7 @@ export class RunToolController {
     if (execution.name === 'singularity_read' || execution.name === 'singularity_stop') {
       return undefined
     }
+    if (!this.options.checkBudget()) return this.refusal('LIMIT_EXCEEDED')
     if (!this.state.readSelf) return this.refusal('READ_SELF_FIRST')
     if (execution.name === 'singularity_plan') return undefined
     if (this.state.planningSketchRef === undefined) return this.refusal('PLAN_FIRST')
