@@ -60,7 +60,7 @@ check(manifest.scripts?.lint === 'pnpm --recursive lint', 'lint must execute eve
 check(manifest.scripts?.test === 'pnpm --recursive test', 'test must execute every workspace test command')
 check(manifest.scripts?.build === 'tsc -b tsconfig.json', 'build must build the referenced TypeScript projects')
 
-for (const packageDirectory of ['apps/singularity', 'packages/singularity/protocol']) {
+for (const packageDirectory of ['apps/singularity', 'packages/singularity/protocol', 'packages/singularity/runtime']) {
   const packageManifest = JSON.parse(await text(`${packageDirectory}/package.json`))
   for (const step of ['typecheck', 'lint', 'test', 'build']) {
     check(typeof packageManifest.scripts?.[step] === 'string', `${packageDirectory} must define the ${step} script`)
@@ -86,7 +86,7 @@ check(
 )
 
 const rootTsconfig = JSON.parse(await text('tsconfig.json'))
-for (const buildPath of ['apps/singularity/tsconfig.build.json', 'packages/singularity/protocol/tsconfig.build.json']) {
+for (const buildPath of ['apps/singularity/tsconfig.build.json', 'packages/singularity/protocol/tsconfig.build.json', 'packages/singularity/runtime/tsconfig.build.json']) {
   check(rootTsconfig.references?.some(reference => reference.path === buildPath), `root tsconfig must reference ${buildPath}`)
 }
 
