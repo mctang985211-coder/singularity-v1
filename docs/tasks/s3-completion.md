@@ -18,10 +18,11 @@
 | 生命周期与提交 | 原生 create/whenIdle/dispose 有界；失败或 drain 未完成不调用 verifier；私有预算 latch 拒绝晚到提交 | 删掉重复 flush、转发和 invalid 结算分支 |
 | NodeView/dispatch | controller 的同一 denialCode 决定实际提交与 canSubmit；读取 DSH 原生 jobs 的 running/stopping | 不建立自己的作业 registry；仅新增固定 alpha2 的直接类型依赖，无新安装包或版本升级 |
 | Prompt 上限 | worker/NodeView 既有 2/8 KiB；实际 scoped tool schemas 12 KiB；self-read 使用既有 cursor/nextCursor 连续分页，完整覆盖后才开启计划 | 未读页不能跳过；重读不推进覆盖；每个完整编码响应 <=16 KiB；仅保留当次 epoch 的前缀覆盖位置 |
-| Composition | app 从真实 loader、route、prompt 和 tool schemas 写入既有 CAS；恢复前重建；变更拒绝恢复 | 不增加 runtime wrapper/callback 或第二配置系统 |
+| Composition | app 从真实 loader、route、prompt 和 tool schemas 写入既有 CAS；普通 scoped/complete prompt 的实际 digest 一致；恢复前重建，变更拒绝恢复 | 使用 DSH 原生 order/shadow/complete，不手拼 prompt，不增加 runtime wrapper/callback 或第二配置系统 |
 | 干净构建 | build 配置显式声明 app → runtime/protocol、runtime → protocol references；TS extends 不继承 references | 修复独立 worktree 首次 build 缺 dist 失败，不新增构建入口 |
+| 无消费者接口 | 全库搜索后删除 SeedObject/seedObjects、templateBrief/environmentMode 可选覆盖及 recovery 转发、validateRunVerification 别名、manifestOutputRefs 死导出 | 保持实际默认行为；没有引入替代抽象或兼容层 |
 
-新增生产逻辑均在既有文件内：没有新生产文件、循环、公共协议字段、工具名或 registry。self 的大对象沿既有 `data` 返回可拼接 JSON 文本页；小对象仍直接返回结构化值。cursor 绑定合同和 context epoch，只接受已覆盖前缀内的页；context 更新清空读取覆盖。状态/计划通过既有 status/NodeView 查询，self 页面只包含稳定合同视图。
+新增生产逻辑均在既有文件内：没有新生产文件、模型 loop、公共协议字段、工具名或 registry。self 的大对象沿既有 `data` 返回可拼接 JSON 文本页；小对象仍直接返回结构化值。cursor 绑定合同和 context epoch，只接受已覆盖前缀内的页；context 更新清空读取覆盖。状态/计划通过既有 status/NodeView 查询，self 页面只包含稳定合同视图。
 
 先红后绿：native ACTIVE_JOB 门禁（此前允许提交）、大 self-read（此前 >16 KiB 且立即授予 readSelf）、超限 visible tool schemas（此前实际购买一次 fixture 请求）。既有 malformed-manifest 恢复测试同步为提交前拒绝，再对合法提交删除 supporting CAS，验证恢复零 Agent/wake/verifier、journal 无新闭合或 Evidence。
 
@@ -32,3 +33,12 @@
 - S4 的 Method 资源挂载、guidance/example/skill 上限与分页、preview/read receipts、child 和祖先摘要不在本轮实现；不得把当前单 Task 子集描述成完整 V1。
 
 因此本轮可修复并验证已定义的 S3 子集，但尚不能确认 S4 前全部代码完全满足框架，也不进入 S4。
+
+## 最终检查与规模
+
+- Node `24.22.2`、pnpm `11.18.0`、DSH `0.2.2-alpha.2`；`pnpm install --frozen-lockfile` 与最终根 `pnpm verify` 通过：protocol **225/225**、runtime **82/82**、app **28/28**，共 **335/335**。日志：`/tmp/singularity-v1-s3-completion-final-verify.log`。
+- 独立干净 worktree（初始无三包 dist）的 build references 修正已通过首次 app build 和根 verify；日志：`/tmp/singularity-v1-s3-clean-verify.log`。最终新增 scoped/complete prompt 证据来自实际 runtime setup，不包括动态 NodeView；两项先红后绿，见 `s3-prompt-order-minimal.md`。
+- 相对本轮起点 `c5957d6`：生产 TS **+299/-159，净 +140 行**；runtime `run.ts` 自身净减少 25 行。无新生产文件或新依赖版本；唯一 manifest/lock 变化是把已安装的 alpha2 jobs 列为 runtime 直接类型依赖。
+- `git diff --check` 通过；framework/spec-lock 未改，framework sha256 仍为 `5f33aa339f21496c375de637ef447656fc66d98d3054a5b6e0a1d3c8dc612b6f`。不升级任何 conformance 状态；本轮没有真实模型消费。
+
+“最薄”结论限于当前消费者和已审查 diff：已删除可确认的无消费者接口及重复分支；不宣称数学意义的全局最小，也不以行数或测试全绿代替完整框架符合性。

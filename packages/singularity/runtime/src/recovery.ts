@@ -53,8 +53,6 @@ export interface RetrySingleRunRequest {
   readonly composition?: CompositionPayload
   readonly actor?: FactActor
   readonly clock?: () => number
-  readonly templateBrief?: string
-  readonly environmentMode?: string
 }
 
 /** Fresh attempt result plus the preflight policy decision. */
@@ -78,8 +76,6 @@ export interface ResumeSingleRunRequest {
   readonly transientInvalidReasons?: readonly string[]
   readonly actor?: FactActor
   readonly clock?: () => number
-  readonly templateBrief?: string
-  readonly environmentMode?: string
 }
 
 /** Resume result; exactly one recovery path ran. */
@@ -202,8 +198,6 @@ async function executeRetryAttempt(
     transientInvalidReasons: request.transientInvalidReasons ?? [],
     actor,
     clock,
-    ...(request.templateBrief === undefined ? {} : { templateBrief: request.templateBrief }),
-    ...(request.environmentMode === undefined ? {} : { environmentMode: request.environmentMode }),
   })
 }
 
@@ -292,8 +286,6 @@ function toExecuteRequest(
     transientInvalidReasons: request.transientInvalidReasons ?? [],
     actor,
     clock,
-    ...(request.templateBrief === undefined ? {} : { templateBrief: request.templateBrief }),
-    ...(request.environmentMode === undefined ? {} : { environmentMode: request.environmentMode }),
   }
 }
 

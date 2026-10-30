@@ -172,9 +172,6 @@ export async function verifyRunSubmission(
   }
 }
 
-/** Alias used by app-level conformance checks. */
-export const validateRunVerification = verifyRunSubmission
-
 function invalidFromValidation(
   validation: Extract<PublicReceiptValidation, { readonly verdict: 'invalid' }>,
   receipt: unknown,
@@ -273,16 +270,6 @@ export function buildExecutionRecord(
     ...(options.drainPending === undefined ? {} : { drainPending: options.drainPending }),
   })
   return seal('object', payload)
-}
-
-/** Evidence outputs must exactly mirror the frozen manifest order. */
-export function manifestOutputRefs(manifest: SubmissionManifest): readonly Ref[] {
-  const refs: Ref[] = []
-  for (const output of manifest.outputs) {
-    if (output.object !== undefined) refs.push(output.object)
-  }
-  for (const draft of manifest.learningDrafts) refs.push(draft.object)
-  return refs
 }
 
 function errorMessage(error: unknown): string {

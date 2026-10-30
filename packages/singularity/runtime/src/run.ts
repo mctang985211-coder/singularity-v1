@@ -98,13 +98,6 @@ export interface SingleRunAdmission {
   readonly workspaceSeedBytes?: Uint8Array
 }
 
-/** One CAS object the host wants published before admission. */
-export interface SeedObject {
-  readonly id: string
-  readonly bytes: Uint8Array
-  readonly domain?: CasDigestDomain
-}
-
 /** Shared single-Run execution request. */
 export interface ExecuteSingleRunRequest {
   readonly ctx: Context
@@ -120,9 +113,6 @@ export interface ExecuteSingleRunRequest {
   readonly transientInvalidReasons?: readonly string[]
   readonly actor?: FactActor
   readonly clock?: () => number
-  readonly seedObjects?: readonly SeedObject[]
-  readonly templateBrief?: string
-  readonly environmentMode?: string
 }
 
 /** Stable request/flow rejection. */
@@ -232,8 +222,6 @@ interface RuntimeContext {
   readonly compositionRef: Ref
   readonly startedAt: number
   readonly maxOutputBytes: number
-  readonly templateBrief: string
-  readonly environmentMode: string
   readonly verifier: RunVerifier
 }
 
@@ -285,9 +273,6 @@ async function openSingleRun(
   const baseToolNames = await resolveBaseToolNames(contract, service)
   assertToolsAvailable(baseToolNames, request.ctx)
 
-  for (const object of request.seedObjects ?? []) {
-    await service.putObject(object.id, object.bytes, object.domain ?? 'object')
-  }
   const contractRef = await putSealed(service, contract.taskId, contract, 'contract')
   await ensureObject(service, contract.acceptance, request.admission.acceptanceBytes)
   await ensureObject(service, contract.environment.seed, request.admission.workspaceSeedBytes)
@@ -491,8 +476,6 @@ function buildRuntimeContext(
     compositionRef,
     startedAt,
     maxOutputBytes: request.maxOutputBytes,
-    templateBrief: request.templateBrief ?? contract.spec.goal.summary,
-    environmentMode: request.environmentMode ?? 'workspace',
     verifier: request.verifier,
   }
 }
@@ -1428,7 +1411,7 @@ async function settleSubmitted(
       receiptRef: verification.receiptRef,
       usage: snapshot.usage,
       sessionCut: snapshot.sessionCut,
-      environmentMode: runtime.environmentMode,
+      environmentMode: 'workspace',
     })
     const evidenceRef = await putSealed(service, `${request.runId}:evidence`, evidence, 'evidence')
     const runFact = await commitRunClosed(runtime, service, {
@@ -1744,7 +1727,7 @@ function buildNodeView(
       mode: 'guided',
     },
     method: runtime.contract.method,
-    ownTemplate: { id: runtime.contract.template.id, brief: runtime.templateBrief },
+    ownTemplate: { id: runtime.contract.template.id, brief: runtime.contract.spec.goal.summary },
     documents: [],
     skills: [],
     tools: runtime.baseToolNames.map(name => ({ name })),

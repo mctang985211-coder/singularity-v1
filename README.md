@@ -33,9 +33,9 @@ pnpm verify
 - `pnpm lint`（`pnpm --recursive lint`）：所有 workspace 包的 ESLint；
 - `pnpm test`（`pnpm --recursive test`）：所有 workspace 包的测试，包括 app 宿主组合、protocol 单元/负例与 runtime 存储测试。
 
-CI 只保留一个 `verify` job。S3-C 已有 fresh retry、完整 Composition 比较、稳定 wake 去重及提交后 CAS 恢复的 DSH fixture；CAS domain-aware 校验已有正负例，C-11 完整重放符合性仍未证明。本轮状态/路径/验收身份/预算与 deadline 修正及检查证据见 [`docs/tasks/s3-minimal-corrections.md`](docs/tasks/s3-minimal-corrections.md)。C-02 的既有真实模型证据见 [`docs/tasks/s3-b2-single-run.md`](docs/tasks/s3-b2-single-run.md)；本轮没有购买模型请求或升级 conformance。
+CI 只保留一个 `verify` job。S3-C 已有 fresh retry、完整 Composition 比较、稳定 wake 去重及提交后 CAS 恢复的 DSH fixture；CAS domain-aware 校验已有正负例，C-11 完整重放符合性仍未证明。当前修正及最薄审查见 [`docs/tasks/s3-completion.md`](docs/tasks/s3-completion.md)；上一轮状态/路径/验收身份/预算证据见 [`docs/tasks/s3-minimal-corrections.md`](docs/tasks/s3-minimal-corrections.md)。C-02 的既有真实模型证据见 [`docs/tasks/s3-b2-single-run.md`](docs/tasks/s3-b2-single-run.md)；本轮没有购买模型请求或升级 conformance。
 
-当前 profile 关闭自动 compaction，避免尚未预留的独立 summarizer 请求绕过 Task 预算。普通请求使用 DSH 原生 hook，并按 route 声明的完整上下文容量保守预留；缺失容量、剩余不足或 usage 未知时停止购买。模型仅看到预算百分比。自动压缩计量、不可停止作业的 quarantine、完整取消 drain 与实际配置的 Composition 来源核对仍需 S3 后续切片。
+当前 profile 关闭自动 compaction，避免尚未预留的独立 summarizer 请求绕过 Task 预算。普通请求使用 DSH 原生 hook，并按 route 声明的完整上下文容量保守预留；缺失容量、剩余不足或 usage 未知时停止购买。模型仅看到预算百分比；NodeView 与 dispatch 共用提交门禁，self-read/tool schema 有固定分页和大小上限。固定 profile 的实际普通 scoped/complete prompt identity 已核对；自动压缩计量、不可停止作业的 quarantine、跨 Run workspace lease 隔离与完整取消 drain 仍需 S3 后续切片。
 
 ## 协作流程
 

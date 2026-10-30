@@ -4,12 +4,12 @@ import test from 'node:test'
 import {
   executeSingleRun,
   initialContextEpoch,
-  validateRunVerification,
+  verifyRunSubmission,
 } from '../src/index.ts'
 
 void test('single-run runtime exports the shared execution surface', () => {
   assert.equal(typeof executeSingleRun, 'function')
-  assert.equal(typeof validateRunVerification, 'function')
+  assert.equal(typeof verifyRunSubmission, 'function')
 
   const first = initialContextEpoch('session-a')
   assert.equal(first, initialContextEpoch('session-a'))

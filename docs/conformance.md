@@ -62,7 +62,7 @@ pnpm --filter @singularity/app test
 
 - **C-02**：必须证明 submit 只接收非 draft output IDs 与 `includeLearningDrafts`，不接收 verdict/score/ref/role/required/timedOut；`SubmissionManifest` 与 `PublicReceipt` 绑定同一冻结合同、同一授权输入 snapshot（含 direct child outputs）和同一输出 snapshot；required criteria 恰一次；exit=0 只在 receipt 完整、身份/digest 匹配、全部 pass、`timedOut=false` 且 `signal=null` 时为 verified；invalid receipt 不是 acceptance Evidence。规范：[§11.4–§11.5、§15.3](../framework.md)。
 - **C-03**：必须证明 no-submission/stop/cancelled 不生成 `SubmissionManifest` 或 `PublicReceipt`，缺 receipt 是定义行为而不是零分；timeout 不伪造成 signal；fresh retry 使用新 Run/session/workspace，重新 submit、重新冻结、重新生成 receipt，旧 verdict 不复制、不覆盖；invalid receipt 仅诊断，不扩展 `ExecutionRecord`。规范：[§9、§11.5、§15.3、§19.1](../framework.md)。
-- **C-11**：必须证明 manifest/receipt 的稳定排序、无时间戳、固定 `operationId` 和对象不可变性支持 journal replay、torn-tail 恢复与 commandId 幂等；同一 commandId + commandDigest 重放返回原 fact 和原 refs，不重新冻结、不重新验证；不同顺序/不同 refs 产生不同 digest 并按身份不匹配拒绝；CAS 引用内容的 domain-aware replay 校验仍需实现证据。规范：[§10、§15.3、§19.1](../framework.md)。
+- **C-11**：必须证明 manifest/receipt 的稳定排序、无时间戳、固定 `operationId` 和对象不可变性支持 journal replay、torn-tail 恢复与 commandId 幂等；同一 commandId + commandDigest 重放返回原 fact 和原 refs，不重新冻结、不重新验证；不同顺序/不同 refs 产生不同 digest 并按身份不匹配拒绝。CAS 引用内容及 manifest/Evidence/public receipt/tree leaves 的 domain-aware 校验已有正负例，见 [`s3-completion`](tasks/s3-completion.md)；完整场景仍未证明。规范：[§10、§15.3、§19.1](../framework.md)。
 
 C-02 已有真实 DSH + 真实模型证据；C-03/C-11/C-12 及其余场景在 fresh retry、composition mismatch、完整 replay/CAS domain-aware 等证据出现前保持 `unproven`。协议 schema 通过、`pnpm verify` 通过、文档 digest 一致或 fixture verifier pass 都不能升级状态。
 
