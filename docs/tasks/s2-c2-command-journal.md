@@ -1,6 +1,6 @@
 # S2-C2 任务卡：纯 normalized command 与 command journal 投影
 
-- **状态**：已完成（纯 protocol command 计算/投影/幂等决策）；command service、journal FS/replay、runtime 未实现。
+- **状态**：已完成（纯 protocol command 计算/投影/幂等决策 + journal replay/fold 集成）；command service、journal FS append、runtime 未实现。
 
 ## Goal
 
@@ -24,7 +24,7 @@
 
 ## 非目标
 
-- 不实现 FS append/fsync、journal 文件 framing、torn tail、启动 replay、CAS 写入/读取、command service、唯一 writer、业务 guard/reducer、wake、runtime、DSH 或真实模型。
+- 不实现 FS append/fsync、journal 文件写路径、启动 replay 服务、CAS 写入/读取、command service、唯一 writer、业务 guard/reducer、wake、runtime、DSH 或真实模型；纯 journal 字符串 replay/fold 由 cherry-pick 集成，不在本范围重新实现。
 - 不新增持久 command 表、第二 ledger、第二 writer/fold、tool result 字段或 `commandRef + CAS` 备选。
 - 不从 fact 重新执行命令；replay 只返回原 `Fact`，结果由既有 Fact/CAS 携带。
 - 不将任何 conformance 场景改为 `proven`。
@@ -37,6 +37,7 @@
 - `decideCommandIdempotency` 纯决策：无记录 `new`；同 ID 同 digest `replay` 原 `Fact`；同 ID 不同 digest `IDEMPOTENCY_CONFLICT`；不 append、不预留、不派 child、不唤醒。
 - 新增测试先红后绿，覆盖 normalized 字段/未知字段、digest 稳定性与差异性、actor/scope 影响、host 状态隔离、重复 commandId 拒绝和幂等三分支。
 - 根 `pnpm verify` 与 `git diff --check` 通过；`command.ts` 不依赖 journal，protocol 仍不依赖 DSH/FS/网络/进程/时钟。
+- 集成 journal 纯 replay/fold：index 同时导出 command 与 journal；集成测试使用真实 `replayJournal(source)` + `foldFacts(facts, projectCommandFacts)` 覆盖 genesis/replay/conflict，并保持 builder 注入、无循环依赖。
 
 ## 检查命令
 
@@ -71,8 +72,8 @@ pnpm verify
 git diff --check
 ```
 
-- protocol tests `119/119` 通过（新增 command tests `10/10`）。
-- 根 `pnpm verify`：project verification、typecheck、lint、test、build 全部通过；其中 app tests `6/6`，protocol tests `119/119`。
+- protocol tests `138/138` 通过（command tests `10/10`、journal tests `15/15`、command-journal integration tests `4/4`）。
+- 根 `pnpm verify`：project verification、typecheck、lint、test、build 全部通过；其中 app tests `6/6`，protocol tests `138/138`。
 - `git diff --check` 退出码 `0`。
 - 首次实现后曾有一个测试失败，原因是测试误把空 `commandId` 当作非法；规范只要求 `string`，因此修正测试断言而未给 schema 增加规范外约束。
 
@@ -84,8 +85,10 @@ git diff --check
 - `projectCommandFacts` 从 `Fact[]` 建立 `commandId -> { commandDigest, seq, factDigest, fact }`；同一 commandId 的第二条 fact（无论 digest 是否相同）抛出 `CommandProjectionError`，replay 拒绝。
 - `decideCommandIdempotency` 纯决策：无记录 `{ kind: 'new' }`；同 ID 同 digest `{ kind: 'replay', fact }` 返回原 `Fact` 引用；同 ID 不同 digest `{ kind: 'conflict', code: 'IDEMPOTENCY_CONFLICT' }`。测试验证 projection 在决策前后完全不变，replay/conflict 不携带 append、reservation 或新 fact。
 - `command.ts` 只依赖 protocol 内的 digest/errors/fact/json/schema，不依赖 journal；index 追加导出 command surface，后续 journal 可直接消费投影与 replay Fact。
+- cherry-pick 集成 journal 的 `replayJournal`、`decodeJournalFactLine`、`verifyFactChain`、`foldFacts` 与 `JournalError`，未改其实现；`foldFacts` 通过 `CommandProjectionBuilder` 注入 `projectCommandFacts`，journal 不反向依赖 command，无循环依赖。
+- `index.ts` 同时导出 command 与 journal；新增 `test/command-journal.test.ts`，用真实 `replayJournal(source)` + `foldFacts(replay.facts, projectCommandFacts)` 覆盖 genesis 链、idempotent replay、`IDEMPOTENCY_CONFLICT`、`new` 和重复 commandId 拒绝。
 
 ## 仍未验证
 
-- command service、唯一 writer、journal 文件 append/fsync、torn tail、启动 replay、CAS 存在性、业务 state/budget guard、reducer、wake、runtime/DSH 与真实模型均未实现。
-- C-11 及所有 conformance 场景保持 `unproven`；本任务只覆盖其纯协议子集。
+- command service、唯一 writer、journal 文件 append/fsync、文件级启动 replay、CAS 存在性、业务 state/budget guard、reducer、wake、runtime/DSH 与真实模型均未实现。
+- C-11 仍为 `unproven`：已有纯字符串 journal replay/fold 与 command idempotency 证据，但没有 FS append/fsync、torn-tail 文件恢复、启动接线或 runtime 证据；所有 conformance 场景保持 `unproven`。
