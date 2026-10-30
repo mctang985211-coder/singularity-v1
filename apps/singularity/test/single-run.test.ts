@@ -328,6 +328,7 @@ async function makeScenario(
     readonly taskId: string
     readonly limits?: Partial<TaskContract['limits']>
     readonly reservation?: Partial<SingleRunAdmission['budgetReservation']>
+    readonly baseToolName?: string
   },
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
@@ -377,7 +378,7 @@ async function makeScenario(
     const dshConfig = await seedObject(store, 'dsh-config:s3b2', { v: 1, config: 'profile' })
     const modelRoute = await seedObject(store, 'model-route:s3b2', { v: 1, route: 'singularity-local' })
     const resources = await seedObject(store, 'resources:s3b2', { v: 1, resources: [] })
-    const bashTool = await seedObject(store, 'base-tool:bash', { v: 1, name: 'bash' })
+    const bashTool = await seedObject(store, 'base-tool:bash', { v: 1, name: options.baseToolName ?? 'bash' })
 
     const rootAdmission: RootAdmissionInput = {
       taskId: options.taskId,
@@ -1123,6 +1124,29 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
         if (boundary === 'unknown') assert.equal(result.usage.unknownRequests, 1)
       })
     }
+  })
+})
+
+void test('oversized visible tool schemas are rejected before the first model request', { timeout: 20_000 }, async () => {
+  await withHarness(() => ({ content: 'done', usage: fixtureUsage(0) }), async ({ spike, fixture, workspace, storeRoot }) => {
+    spike.ctx.tools.register({
+      name: 'verbose_fixture', description: 'x'.repeat(12 * 1024), parameters: {},
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: () => Promise.resolve('done'),
+    })
+    const taskId = `oversized-tools-${String(Date.now())}`
+    const scenario = await makeScenario(storeRoot, { taskId, baseToolName: 'verbose_fixture' })
+    const result = await executeSingleRun({
+      ctx: spike.ctx, journalRoot: storeRoot, workspace,
+      sessionId: `${taskId}:session`, runId: `${taskId}:run`,
+      admission: scenario.runAdmission, composition: scenario.composition,
+      agentOptions: agentOptions(), maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+    })
+    assert.equal(fixture.requests.length, 0)
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.evidence, undefined)
+    assert.match(result.executionRecord?.reason ?? '', /visible tool schemas/)
   })
 })
 

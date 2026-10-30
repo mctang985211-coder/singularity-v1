@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { JobView } from '@deepseek-ai/dsh-jobs'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 import {
@@ -33,7 +34,7 @@ import type { RunVerifier, VerifierRequest } from '../src/verification.ts'
 const digestA = `sha256:${'a'.repeat(64)}`
 const digestB = `sha256:${'b'.repeat(64)}`
 
-function makeContract(): TaskContract {
+function makeContract(constraints: string[] = []): TaskContract {
   return sealTaskContract({
     v: 1,
     taskId: 'task-verify',
@@ -42,7 +43,7 @@ function makeContract(): TaskContract {
         summary: 'verify',
         deliverable: 'one output',
         scope: [],
-        constraints: [],
+        constraints,
       },
       criteria: [{ id: 'crit', statement: 'must pass', required: true }],
       inputs: [{ id: 'input', object: { id: 'input', digest: digestA }, path: 'in.txt', access: 'read' }],
@@ -395,9 +396,10 @@ void test('frozen acceptance rejects a substituted verifier before it receives C
 
 void test('tool dispatch uses the exact host budget check while preserving read and stop', async () => {
   await withStore(async store => {
-    const contract = makeContract()
+    const contract = makeContract(['领域约束'.repeat(4096)])
     const contextEpoch = initialContextEpoch('session-guard')
     const definitions = new Map<string, ToolDefinition>()
+    const jobs: JobView[] = []
     let allowed = true
     const controller = new RunToolController({
       contract,
@@ -413,7 +415,7 @@ void test('tool dispatch uses the exact host budget check while preserving read 
       commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
     })
     const agent = { session: { id: 'session-guard', snapshotEvents: () => [] } } as unknown as Agent
-    controller.register({ tools: {
+    controller.register({ get: () => ({ list: () => jobs }), tools: {
       register: (definition: ToolDefinition) => definitions.set(definition.name, definition),
       guard() {},
     } } as unknown as Context, agent)
@@ -426,19 +428,63 @@ void test('tool dispatch uses the exact host budget check while preserving read 
     const readTool = definitions.get('singularity_read')
     const planTool = definitions.get('singularity_plan')
     assert.ok(readTool && planTool)
-    await readTool.execute({ kind: 'self' }, execution('singularity_read'))
+    const assertSubmissionGate = (expected: string | undefined) => {
+      const refusal = controller.checkGuard(execution('singularity_submit'))
+      assert.equal(refusal === undefined ? undefined : (JSON.parse(refusal) as { code: string }).code, expected)
+      assert.equal(controller.obligations().canSubmit, expected === undefined)
+      assert.deepEqual(controller.obligations().denialCodes, expected === undefined ? [] : [expected])
+    }
+    assertSubmissionGate('READ_SELF_FIRST')
+    const pages: string[] = []
+    let cursor: string | undefined
+    do {
+      const page = await readTool.execute({ kind: 'self', ...(cursor === undefined ? {} : { cursor }) }, execution('singularity_read')) as {
+        readonly data: string
+        readonly nextCursor?: string
+      }
+      assert.ok(new TextEncoder().encode(JSON.stringify(page)).byteLength <= 16 * 1024)
+      assert.equal(typeof page.data, 'string')
+      pages.push(page.data)
+      cursor = page.nextCursor
+      if (pages.length === 1 && cursor !== undefined) {
+        await assert.rejects(readTool.execute({ kind: 'self', cursor: `${cursor}0` }, execution('singularity_read')), /INVALID_ARGUMENT/)
+        const repeated = await readTool.execute({ kind: 'self' }, execution('singularity_read')) as { readonly data: string }
+        assert.equal(repeated.data, page.data, 're-reading a page must not advance coverage')
+      }
+      if (cursor !== undefined) assertSubmissionGate('READ_SELF_FIRST')
+    } while (cursor !== undefined)
+    assert.ok(pages.length > 1)
+    assert.deepEqual((JSON.parse(pages.join('')) as { goal: { constraints: string[] } }).goal.constraints, contract.spec.goal.constraints)
+    await assert.rejects(readTool.execute({ kind: 'self', cursor: 'unissued-cursor' }, execution('singularity_read')), /INVALID_ARGUMENT/)
+    assertSubmissionGate('PLAN_FIRST')
     await planTool.execute({ sketch: {
       v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch,
       objective: 'complete current task', sourceContract: contract.digest,
       levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
       directPlan: [], assumptions: [],
     } }, execution('singularity_plan'))
+    assertSubmissionGate(undefined)
+    jobs.push({
+      id: 'bash-active' as JobView['id'], kind: 'bash', label: 'writes output',
+      owner: agent.session.id, status: 'running', startedAt: 0,
+      output: { total: 0, earliest: 0 },
+    })
+    assertSubmissionGate('ACTIVE_JOB')
+    jobs[0] = { ...jobs[0], status: 'stopping' }
+    assertSubmissionGate('ACTIVE_JOB')
+    jobs[0] = { ...jobs[0], status: 'completed' }
+    assertSubmissionGate(undefined)
     assert.equal(controller.checkGuard(execution('bash')), undefined)
     allowed = false
+    assertSubmissionGate('LIMIT_EXCEEDED')
     const refusal = controller.checkGuard(execution('bash'))
     assert.ok(refusal)
     assert.equal((JSON.parse(refusal) as { readonly code: string }).code, 'LIMIT_EXCEEDED')
     assert.equal(controller.checkGuard(execution('singularity_read')), undefined)
     assert.equal(controller.checkGuard(execution('singularity_stop')), undefined)
+    const stopTool = definitions.get('singularity_stop')
+    assert.ok(stopTool)
+    await stopTool.execute({ reason: 'blocked', message: 'no further work' }, execution('singularity_stop'))
+    assertSubmissionGate('RUN_CLOSED')
   })
 })

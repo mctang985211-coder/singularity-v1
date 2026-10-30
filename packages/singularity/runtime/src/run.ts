@@ -48,7 +48,7 @@ import type {
 
 import { initialContextEpoch } from './epoch.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
-import { clampPercent, renderNodeView, renderWorkerCard } from './prompt.ts'
+import { assertPromptBudget, clampPercent, renderNodeView, renderWorkerCard } from './prompt.ts'
 import type { NodeView } from './prompt.ts'
 import { CommandService } from './service.ts'
 import type { CasDigestDomain } from './store.ts'
@@ -708,7 +708,7 @@ function buildAgentSetup(
       order: 300,
       required: true,
       interpolate: false,
-      text: () => renderNodeView(buildNodeView(runtime, request, controller, budget(), checkBudget())),
+      text: () => renderNodeView(buildNodeView(runtime, request, controller, budget())),
     })
     controller.register(agentCtx, agent)
     const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
@@ -717,6 +717,7 @@ function buildAgentSetup(
     } else if (globalNames.length > 0) {
       agentCtx.tools.restrict({ deny: globalNames })
     }
+    assertPromptBudget(JSON.stringify(agentCtx.tools.schemas(agent)), 12 * 1024, 'visible tool schemas')
   }
 }
 
@@ -1726,20 +1727,10 @@ function buildNodeView(
   request: ExecuteSingleRunRequest,
   controller: RunToolController,
   budget: RemainingBudgetPct,
-  withinBudget: boolean,
 ): NodeView {
   const tools = controller.snapshot()
   const asOf = runtime.clock()
-  const canSubmit = withinBudget && tools.readSelf
-    && tools.planningSketchRef !== undefined
-    && !tools.submitted
-    && tools.stopped === undefined
-  const denialCodes: string[] = []
-  if (!tools.readSelf) denialCodes.push('READ_SELF_FIRST')
-  else if (tools.planningSketchRef === undefined) denialCodes.push('PLAN_FIRST')
-  if (tools.submitted) denialCodes.push('ALREADY_SUBMITTED')
-  if (tools.stopped !== undefined) denialCodes.push('RUN_CLOSED')
-  if (!withinBudget) denialCodes.push('LIMIT_EXCEEDED')
+  const obligations = controller.obligations()
   return {
     v: 1,
     asOf,
@@ -1762,14 +1753,7 @@ function buildNodeView(
     childBatch: null,
     childHistory: { total: 0, outcomes: {} },
     recentChildResults: [],
-    obligations: {
-      readSelf: !tools.readSelf,
-      readPlanningSketch: tools.planningSketchRef === undefined,
-      requiredFailure: false,
-      canDecompose: false,
-      canSubmit,
-      denialCodes,
-    },
+    obligations,
     planningSketchRef: tools.planningSketchRef ?? null,
     feedback: { count: 0 },
     lastAttempt: null,

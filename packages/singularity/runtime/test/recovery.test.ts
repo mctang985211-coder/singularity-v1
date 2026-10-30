@@ -37,7 +37,7 @@ import type {
 
 import { retrySingleRun, resumeSingleRun } from '../src/recovery.ts'
 import { executeSingleRun } from '../src/run.ts'
-import { DomainStore } from '../src/store.ts'
+import { DomainStore, DomainStoreError } from '../src/store.ts'
 import { CommandService } from '../src/service.ts'
 import { buildExecutionRecord } from '../src/verification.ts'
 import type { RunVerifier, VerifierRequest } from '../src/verification.ts'
@@ -493,6 +493,7 @@ function makeFakeContext(options: FakeContextOptions): {
   }
 
   const agentCtx = {
+    get: () => undefined,
     on() {},
     systemPrompt: {
       section() {},
@@ -505,6 +506,7 @@ function makeFakeContext(options: FakeContextOptions): {
       guard() {},
       restrict() {},
       definitions: () => [],
+      schemas: () => [],
     },
   }
 
@@ -1441,7 +1443,7 @@ void test('resumeSingleRun submitted timeout closes invalid ExecutionRecord with
   }
 })
 
-void test('resumeSingleRun rejects an unverifiable frozen submission without calling the verifier', { timeout: 30_000 }, async () => {
+void test('submission admission and recovery reject invalid supporting CAS before verifier calls', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 's3c-badsub-root-'))
   const workspace = await mkdtemp(join(tmpdir(), 's3c-badsub-work-'))
   const taskId = 'task-s3c-badsub'
@@ -1455,7 +1457,7 @@ void test('resumeSingleRun rejects an unverifiable frozen submission without cal
       await admitTask(service, scenario)
       await openRun(service, scenario, { runId, sessionId, attempt: 1 })
       const brokenRef = await putValue(service, { v: 1, not: 'a manifest' }, `${runId}:submission`, 'object')
-      await commitFact(service, 'run/submitted', {
+      await assert.rejects(commitFact(service, 'run/submitted', {
         runId,
         outputs: brokenRef,
         transcriptOffset: { sessionId, seq: 1 },
@@ -1463,14 +1465,18 @@ void test('resumeSingleRun rejects an unverifiable frozen submission without cal
         readReceipts: [],
         planningSketchRef: brokenRef,
         feedbackRefs: [],
-      }, `run:${runId}:submitted`)
+      }, `run:${runId}:submitted`), error => error instanceof DomainStoreError && error.code === 'REFERENCE_INVALID')
+      assert.equal(factsOfType(service.facts(), 'run/submitted').length, 0)
+      await submitRun(service, scenario, { runId, sessionId })
     } finally {
       await service.close()
     }
 
-    const { ctx } = makeFakeContext({ resume: 'ok' })
+    await rm(join(root, 'objects', scenario.output.digest.slice('sha256:'.length)))
+    const before = await readFile(join(root, 'journal.ndjson'))
+    const { ctx, state } = makeFakeContext({ resume: 'ok' })
     let verifierCalls = 0
-    const result = await resumeSingleRun({
+    await assert.rejects(resumeSingleRun({
       ctx,
       journalRoot: root,
       workspace,
@@ -1486,16 +1492,11 @@ void test('resumeSingleRun rejects an unverifiable frozen submission without cal
         },
       },
       clock: () => FIXED_NOW + 1000,
-    })
+    }), error => error instanceof DomainStoreError && error.code === 'OBJECT_MISSING')
 
     assert.equal(verifierCalls, 0)
-    assert.equal(result.classification, 'invalid')
-    assert.ok(result.executionRecord)
-    assert.match(result.executionRecord.reason, /submission-invalid/i)
-    const facts = await readFacts(root)
-    const closed = factsOfType(facts, 'run/closed')[0]
-    assert.equal(closed.data.classification, 'invalid')
-    assert.equal('evidenceRef' in closed.data, false)
+    assert.equal(state.createCalls.length + state.resumeCalls.length + state.followupCalls, 0)
+    assert.deepEqual(await readFile(join(root, 'journal.ndjson')), before, 'corrupt CAS must not produce a closure or Evidence')
   } finally {
     await rm(root, { recursive: true, force: true })
     await rm(workspace, { recursive: true, force: true })

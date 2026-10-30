@@ -1,5 +1,6 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
+import type { JobRegistry } from '@deepseek-ai/dsh-jobs'
 import { canonicalize, parseProtocolValue, planningSketchSchema } from '@singularity/protocol'
 import type {
   JsonValue,
@@ -12,21 +13,24 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 
 import type { ContextEpoch } from './epoch.ts'
 import { deriveContextEpoch } from './epoch.ts'
-import type { RemainingBudgetPct } from './prompt.ts'
+import type { NodeView, RemainingBudgetPct } from './prompt.ts'
+import { assertPromptBudget } from './prompt.ts'
 import { freezeSubmission } from './workspace.ts'
 import type { FrozenSubmission, CasObjectWriter } from './workspace.ts'
 
 const TOOL_ERROR_NEXT_ACTIONS: Readonly<Record<string, string>> = {
   INVALID_ARGUMENT: 'Fix the tool arguments and retry with declared fields only.',
-  READ_SELF_FIRST: 'Call singularity_read(kind="self"), then continue.',
+  READ_SELF_FIRST: 'Call singularity_read(kind="self") and follow nextCursor through the complete contract, then continue.',
   PLAN_FIRST: 'Call singularity_plan with the current contextEpoch, then continue.',
   ALREADY_SUBMITTED: 'The submission is already frozen; stop calling tools.',
   RUN_CLOSED: 'This Run is already settling; stop calling tools.',
-  ACTIVE_JOB: 'Wait for the current submission to settle, then continue.',
+  ACTIVE_JOB: 'Wait for active jobs to finish or stop them with the listed job tools, then retry submission.',
   LIMIT_EXCEEDED: 'Reduce the requested scope or stop with a concrete blocker.',
 }
 
 const textEncoder = new TextEncoder()
+// UTF-16 text chunks; the encoded response envelope is capped separately.
+const SELF_PAGE_CHARS = 4096
 
 export interface RunToolControllerOptions {
   readonly contract: TaskContract
@@ -61,6 +65,7 @@ export interface RunToolSnapshot {
 interface MutableRunToolState {
   epoch: ContextEpoch
   readSelf: boolean
+  selfReadEnd: number
   submitting: boolean
   submitted: boolean
   planningSketchRef?: Ref
@@ -78,12 +83,14 @@ export class RunToolController {
   private readonly options: RunToolControllerOptions
   private readonly state: MutableRunToolState
   private agent: Agent | undefined
+  private jobs: JobRegistry | undefined
 
   constructor(options: RunToolControllerOptions) {
     this.options = options
     this.state = {
       epoch: options.epoch(),
       readSelf: false,
+      selfReadEnd: 0,
       submitting: false,
       submitted: false,
     }
@@ -92,6 +99,7 @@ export class RunToolController {
   /** Register the four Task tools and the shared guard in the Agent scope. */
   register(agentCtx: Context, agent: Agent): void {
     this.agent = agent
+    this.jobs = agentCtx.get('jobs', false)
     this.options.onAgent?.(agent)
     agentCtx.tools.register(this.readTool())
     agentCtx.tools.register(this.planTool())
@@ -106,19 +114,37 @@ export class RunToolController {
    */
   checkGuard(execution: Readonly<ToolExecution>): string | undefined {
     this.refreshEpoch()
-    if (this.state.submitted) return this.refusal('ALREADY_SUBMITTED')
-    if (this.state.stopped !== undefined) return this.refusal('RUN_CLOSED')
-    if (this.state.submitting) return this.refusal('ACTIVE_JOB')
-    if (this.agent === undefined || execution.agent !== this.agent) {
-      return this.refusal('INVALID_ARGUMENT')
+    const code = this.denialCode(execution.name, execution.agent)
+    return code === undefined ? undefined : this.refusal(code)
+  }
+
+  /** NodeView projects the same submission gate used by actual dispatch. */
+  obligations(): NodeView['obligations'] {
+    this.refreshEpoch()
+    const code = this.denialCode('singularity_submit', this.agent)
+    return {
+      readSelf: !this.state.readSelf,
+      readPlanningSketch: this.state.planningSketchRef === undefined,
+      requiredFailure: false,
+      canDecompose: false,
+      canSubmit: code === undefined,
+      denialCodes: code === undefined ? [] : [code],
     }
-    if (execution.name === 'singularity_read' || execution.name === 'singularity_stop') {
-      return undefined
-    }
-    if (!this.options.checkBudget()) return this.refusal('LIMIT_EXCEEDED')
-    if (!this.state.readSelf) return this.refusal('READ_SELF_FIRST')
-    if (execution.name === 'singularity_plan') return undefined
-    if (this.state.planningSketchRef === undefined) return this.refusal('PLAN_FIRST')
+  }
+
+  private denialCode(name: string, agent: Agent | undefined): string | undefined {
+    if (this.state.submitted) return 'ALREADY_SUBMITTED'
+    if (this.state.stopped !== undefined) return 'RUN_CLOSED'
+    if (this.state.submitting) return 'ACTIVE_JOB'
+    if (this.agent === undefined || agent !== this.agent) return 'INVALID_ARGUMENT'
+    if (name === 'singularity_read' || name === 'singularity_stop') return undefined
+    if (!this.options.checkBudget()) return 'LIMIT_EXCEEDED'
+    if (!this.state.readSelf) return 'READ_SELF_FIRST'
+    if (name === 'singularity_plan') return undefined
+    if (this.state.planningSketchRef === undefined) return 'PLAN_FIRST'
+    if (name === 'singularity_submit' && this.jobs?.list(this.agent.session.id)
+      .some(job => job.owner === this.agent?.session.id
+        && (job.status === 'running' || job.status === 'stopping'))) return 'ACTIVE_JOB'
     return undefined
   }
 
@@ -140,9 +166,10 @@ export class RunToolController {
   private readTool() {
     return defineTool({
       name: 'singularity_read',
-      description: 'Read the current Task contract, status, output paths, and remaining budget percentages.',
+      description: 'Read the Task contract or status. For paged self data, follow nextCursor and concatenate the JSON text pages before planning.',
       parameters: {
         kind: { type: 'string', enum: ['self', 'status'], required: true, description: 'Read the complete self contract or compact status.' },
+        cursor: { type: 'string', description: 'The nextCursor from an earlier self page in this context epoch.' },
       },
       output: {
         schema: {
@@ -151,6 +178,7 @@ export class RunToolController {
           properties: {
             data: { type: 'json', required: true },
             objectRef: refValueSchema(false),
+            nextCursor: { type: 'string' },
             asOf: { type: 'integer', required: true },
             contextEpoch: { type: 'string', required: true },
             remainingBudgetPct: budgetValueSchema(),
@@ -159,10 +187,11 @@ export class RunToolController {
         render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
       },
       execute: (args) => {
-        assertExactKeys(args, ['kind'])
+        assertExactKeys(args, args.cursor === undefined ? ['kind'] : ['kind', 'cursor'])
         this.refreshEpoch()
         const asOf = this.options.clock()
         if (args.kind === 'status') {
+          if (args.cursor !== undefined) throw this.toolError('INVALID_ARGUMENT')
           return Promise.resolve({
             data: {
               taskId: this.options.contract.taskId,
@@ -198,19 +227,29 @@ export class RunToolController {
             criteria: contract.spec.criteria.filter(criterion => criterion.required),
           },
           workspace: this.options.workspace,
-          planningSketchRef: this.state.planningSketchRef ?? null,
           contextEpoch: this.state.epoch,
         }
-        this.state.readSelf = true
-        return Promise.resolve({
-          data,
-          ...(this.state.planningSketchRef === undefined
-            ? {}
-            : { objectRef: this.state.planningSketchRef }),
+        const text = JSON.stringify(data)
+        const prefix = `${contract.digest}:${this.state.epoch}:`
+        const offset = args.cursor === undefined ? 0 : Number(args.cursor.slice(prefix.length))
+        if (!Number.isSafeInteger(offset) || offset < 0 || offset > this.state.selfReadEnd
+          || offset % SELF_PAGE_CHARS !== 0
+          || (args.cursor !== undefined && args.cursor !== `${prefix}${String(offset)}`)) {
+          throw this.toolError('INVALID_ARGUMENT')
+        }
+        const end = Math.min(text.length, offset + SELF_PAGE_CHARS)
+        const response = {
+          data: text.length > SELF_PAGE_CHARS ? text.slice(offset, end) : data,
+          objectRef: { id: contract.taskId, digest: contract.digest },
+          ...(end < text.length ? { nextCursor: `${prefix}${String(end)}` } : {}),
           asOf,
           contextEpoch: this.state.epoch,
           remainingBudgetPct: this.options.budget(),
-        })
+        }
+        assertPromptBudget(JSON.stringify(response), 16 * 1024, 'self read page')
+        this.state.selfReadEnd = Math.max(this.state.selfReadEnd, end)
+        this.state.readSelf ||= end === text.length
+        return Promise.resolve(response)
       },
     })
   }
@@ -387,6 +426,7 @@ export class RunToolController {
     if (current === this.state.epoch) return
     this.state.epoch = current
     this.state.readSelf = false
+    this.state.selfReadEnd = 0
     this.state.planningSketchRef = undefined
   }
 
