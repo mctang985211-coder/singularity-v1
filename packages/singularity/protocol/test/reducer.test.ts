@@ -1083,6 +1083,22 @@ void test('replacement supersedes only terminal nonverified children and becomes
   const afterFailure = reduceTaskRunFacts(journal.facts, context)
   assert.equal(mustGet(afterFailure.tasks, 'task-child-old').closed?.outcome, 'failed')
 
+  const emptyReplacement = appendFact(
+    journal.facts,
+    'task/children-admitted',
+    admission('run-root-1', 'batch-empty-replacement', [
+      admittedChild(
+        makeChildContract({ taskId: 'task-child-new', batchId: 'batch-empty-replacement' }),
+        'required',
+        { feedbackRef: ref('feedback-1', 40), supersedesChildIds: [] },
+      ),
+    ]),
+  )
+  expectReducerError(
+    () => reduceTaskRunFacts([...journal.facts, emptyReplacement], context),
+    'REPLACEMENT_TARGET_INVALID',
+  )
+
   const withoutReplacement = appendFact(
     journal.facts,
     'task/children-admitted',

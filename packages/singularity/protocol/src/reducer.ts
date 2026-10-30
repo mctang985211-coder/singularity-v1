@@ -975,6 +975,9 @@ function assertReplacementTargets(
   const replacement = admitted.replacement
   if (replacement === undefined) return
   const targets = replacement.supersedesChildIds
+  if (targets.length === 0) {
+    fail('REPLACEMENT_TARGET_INVALID', fact, 'Replacement must supersede at least one child')
+  }
   if (new Set(targets).size !== targets.length) {
     fail('REPLACEMENT_TARGET_INVALID', fact, 'Replacement target ids must be unique')
   }
