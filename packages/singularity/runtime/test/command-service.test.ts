@@ -265,8 +265,13 @@ void test('commit writes referenced CAS objects before returning the journal fac
 
   const fact = await service.commit({
     command,
-    type: 'task/admitted',
-    data: { taskId: 'task-with-object', contract: ref },
+    type: 'rsi/round-closed',
+    data: {
+      roundId: 'round-with-object',
+      outcome: 'cancelled',
+      reason: 'command service object ordering',
+      comparisonRef: ref,
+    },
     objects: [{ id: ref.id, bytes }],
   })
 

@@ -6,15 +6,41 @@ import { join, resolve } from 'node:path'
 import {
   JournalError,
   canonicalize,
+  computeDigest,
   computeDigestBytes,
   digestSchema,
+  parseJsonText,
   parseProtocolValue,
   refSchema,
   replayJournal,
   sealFact,
+  verifyDigest,
   verifyFact,
+  compositionPayloadSchema,
+  compositionSchema,
+  executionRecordPayloadSchema,
+  executionRecordSchema,
+  methodRevisionPayloadSchema,
+  methodRevisionSchema,
+  taskContractPayloadSchema,
+  taskContractSchema,
 } from '@singularity/protocol'
-import type { Digest, Fact, Ref, UnsealedFact } from '@singularity/protocol'
+import type {
+  Composition,
+  CompositionPayload,
+  Digest,
+  DigestDomain,
+  ExecutionRecord,
+  ExecutionRecordPayload,
+  Fact,
+  JsonValue,
+  MethodRevision,
+  MethodRevisionPayload,
+  Ref,
+  TaskContract,
+  TaskContractPayload,
+  UnsealedFact,
+} from '@singularity/protocol'
 
 /** Journal file name inside the store root. */
 export const JOURNAL_FILENAME = 'journal.ndjson'
@@ -22,12 +48,27 @@ export const JOURNAL_FILENAME = 'journal.ndjson'
 /** CAS object directory name inside the store root. */
 export const OBJECTS_DIRNAME = 'objects'
 
+/** Digest domains that address CAS objects; `fact` and `command` do not. */
+export const CAS_DIGEST_DOMAINS = [
+  'object',
+  'contract',
+  'method',
+  'composition',
+  'evidence',
+  'round-plan',
+  'preview',
+] as const satisfies readonly DigestDomain[]
+
+export type CasDigestDomain = (typeof CAS_DIGEST_DOMAINS)[number]
+
 export type DomainStoreErrorCode =
   | 'INVALID_ARGUMENT'
   | 'JOURNAL_CLOSED'
   | 'JOURNAL_INVALID_UTF8'
   | 'OBJECT_MISSING'
   | 'OBJECT_CORRUPT'
+  | 'OBJECT_DOMAIN_MISMATCH'
+  | 'REFERENCE_INVALID'
 
 /** Stable storage failures; journal replay also throws protocol `JournalError`. */
 export class DomainStoreError extends Error {
@@ -63,6 +104,104 @@ interface DomainStoreState {
 const textEncoder = new TextEncoder()
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 const looseUtf8 = new TextDecoder('utf-8', { ignoreBOM: true })
+
+const casDigestDomainSet = new Set<string>(CAS_DIGEST_DOMAINS)
+
+function isCasDigestDomain(value: unknown): value is CasDigestDomain {
+  return typeof value === 'string' && casDigestDomainSet.has(value)
+}
+
+function assertCasDigestDomain(value: unknown): asserts value is CasDigestDomain {
+  if (!isCasDigestDomain(value)) {
+    throw new DomainStoreError(
+      'INVALID_ARGUMENT',
+      `Unsupported CAS digest domain ${JSON.stringify(value)}`,
+    )
+  }
+}
+
+interface SealedObject {
+  readonly digest: Digest
+  readonly value: JsonValue
+}
+
+function parseJsonBytes(bytes: Uint8Array): JsonValue | undefined {
+  let text: string
+  try {
+    text = strictUtf8.decode(bytes)
+  } catch {
+    return undefined
+  }
+  try {
+    return parseJsonText(text)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Detects a sealed structured object whose self digest is valid under the
+ * requested domain. Raw bytes and unsealed payloads return undefined.
+ */
+function parseSealedObject(domain: CasDigestDomain, bytes: Uint8Array): SealedObject | undefined {
+  const value = parseJsonBytes(bytes)
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const digest: unknown = (value as { readonly digest?: unknown }).digest
+  if (typeof digest !== 'string' || !digestSchema.safeParse(digest).success) return undefined
+  try {
+    if (computeDigest(domain, value) !== digest) return undefined
+  } catch {
+    return undefined
+  }
+  return { digest, value }
+}
+
+/**
+ * Structured objects use their self digest (JCS without the outermost digest);
+ * raw payload bytes use the raw-byte digest. Both are the same for an unsealed
+ * canonical payload, so callers can use either representation.
+ */
+function digestForBytes(domain: CasDigestDomain, bytes: Uint8Array): Digest {
+  return parseSealedObject(domain, bytes)?.digest ?? computeDigestBytes(domain, bytes)
+}
+
+function bytesMatchDigest(domain: CasDigestDomain, bytes: Uint8Array, expected: Digest): boolean {
+  if (computeDigestBytes(domain, bytes) === expected) return true
+  return parseSealedObject(domain, bytes)?.digest === expected
+}
+
+function findMatchingDomain(bytes: Uint8Array, expected: Digest): CasDigestDomain | undefined {
+  for (const domain of CAS_DIGEST_DOMAINS) {
+    if (bytesMatchDigest(domain, bytes, expected)) return domain
+  }
+  return undefined
+}
+
+async function readVerifiedObject(
+  objectsPath: string,
+  ref: Ref,
+  domain: CasDigestDomain,
+): Promise<Uint8Array> {
+  const path = join(objectsPath, ref.digest.slice('sha256:'.length))
+  const bytes = await readIfPresent(path)
+  if (bytes === undefined) {
+    throw new DomainStoreError('OBJECT_MISSING', `CAS object ${ref.digest} does not exist`)
+  }
+  if (bytesMatchDigest(domain, bytes, ref.digest)) {
+    return new Uint8Array(bytes)
+  }
+  const actualDomain = findMatchingDomain(bytes, ref.digest)
+  if (actualDomain !== undefined) {
+    throw new DomainStoreError(
+      'OBJECT_DOMAIN_MISMATCH',
+      `CAS object ${ref.digest} is ${actualDomain}, not ${domain}`,
+    )
+  }
+  throw new DomainStoreError(
+    'OBJECT_CORRUPT',
+    `CAS object ${ref.digest} does not match its ${domain} digest`,
+  )
+}
 
 /**
  * One filesystem domain store: a single JCS NDJSON journal plus a raw-byte CAS.
@@ -118,6 +257,7 @@ export class DomainStore {
         await journal.truncate(image.committedBytes)
         await journal.sync()
       }
+      await validateFactReferences(image.facts, objectsPath)
       return new DomainStore({
         root,
         journalPath,
@@ -159,7 +299,12 @@ export class DomainStore {
    * Writes raw bytes through a synced temp file, re-verifies the persisted
    * digest, atomically renames into the CAS, and fsyncs the directory.
    */
-  async putObject(id: string, bytes: Uint8Array): Promise<Ref> {
+  async putObject(
+    id: string,
+    bytes: Uint8Array,
+    domain: CasDigestDomain = 'object',
+  ): Promise<Ref> {
+    assertCasDigestDomain(domain)
     if (typeof id !== 'string' || id.length === 0 || !id.isWellFormed()) {
       throw new DomainStoreError('INVALID_ARGUMENT', 'Object id must be a non-empty string')
     }
@@ -168,11 +313,11 @@ export class DomainStore {
     }
 
     const data = new Uint8Array(bytes)
-    const digest = computeDigestBytes('object', data)
+    const digest = digestForBytes(domain, data)
     const finalPath = this.objectPath(digest)
     const existing = await readIfPresent(finalPath)
     if (existing !== undefined) {
-      if (computeDigestBytes('object', existing) !== digest) {
+      if (!bytesMatchDigest(domain, existing, digest)) {
         throw new DomainStoreError('OBJECT_CORRUPT', `CAS object ${digest} has different bytes`)
       }
       return { id, digest }
@@ -190,7 +335,7 @@ export class DomainStore {
       }
 
       const persisted = await readFile(temporaryPath)
-      if (computeDigestBytes('object', persisted) !== digest) {
+      if (!bytesMatchDigest(domain, persisted, digest)) {
         throw new DomainStoreError('OBJECT_CORRUPT', 'CAS temporary object does not match its digest')
       }
 
@@ -205,8 +350,12 @@ export class DomainStore {
     }
   }
 
-  /** Reads raw bytes and re-verifies the supplied ref digest before returning. */
-  async readObject(objectRef: Ref): Promise<{ bytes: Uint8Array }> {
+  /** Reads raw bytes and re-verifies the supplied ref digest under `domain`. */
+  async readObject(
+    objectRef: Ref,
+    domain: CasDigestDomain = 'object',
+  ): Promise<{ bytes: Uint8Array }> {
+    assertCasDigestDomain(domain)
     let parsed: Ref
     try {
       parsed = parseProtocolValue(refSchema, objectRef)
@@ -216,14 +365,7 @@ export class DomainStore {
       })
     }
 
-    const bytes = await readIfPresent(this.objectPath(parsed.digest))
-    if (bytes === undefined) {
-      throw new DomainStoreError('OBJECT_MISSING', `CAS object ${parsed.digest} does not exist`)
-    }
-    if (computeDigestBytes('object', bytes) !== parsed.digest) {
-      throw new DomainStoreError('OBJECT_CORRUPT', `CAS object ${parsed.digest} does not match its digest`)
-    }
-    return { bytes: new Uint8Array(bytes) }
+    return { bytes: await readVerifiedObject(this.objectsPath, parsed, domain) }
   }
 
   /**
@@ -308,6 +450,7 @@ export class DomainStore {
         await this.journal.truncate(image.committedBytes)
         await this.journal.sync()
       }
+      await validateFactReferences(image.facts, this.objectsPath)
       this.committedBytes = image.committedBytes
       this.tail = image.tornTail ?? this.tail
       this.factsValue = image.facts
@@ -343,6 +486,384 @@ export class DomainStore {
       this.closed = true
       await this.journal.close().catch(() => undefined)
     }
+  }
+}
+
+type StructuredKind = 'task-contract' | 'method-revision' | 'composition' | 'execution-record'
+
+async function validateFactReferences(facts: readonly Fact[], objectsPath: string): Promise<void> {
+  const validator = new ReferenceValidator(objectsPath)
+  for (const fact of facts) {
+    await validator.validateFact(fact)
+  }
+}
+
+/**
+ * Validates every mapped fact/object ref against the CAS. This checks existence
+ * and digest domain only; it does not project business state or re-run guards.
+ * `TaskContract.acceptance` is intentionally skipped until amendment 002 fixes
+ * the AcceptanceRef domain. Evidence, RoundPlan, preview objects, manifests,
+ * and receipts are opaque here and are not parsed.
+ */
+class ReferenceValidator {
+  private readonly objectsPath: string
+  private readonly verifiedBytes = new Map<string, Promise<Uint8Array>>()
+  private readonly validatedStructures = new Set<string>()
+  private readonly activeStructures = new Set<string>()
+
+  constructor(objectsPath: string) {
+    this.objectsPath = objectsPath
+  }
+
+  async validateFact(fact: Fact): Promise<void> {
+    switch (fact.type) {
+      case 'method/registered': {
+        await this.validateStructured(fact.data.revision, 'method', 'method-revision')
+        if (fact.data.parent !== undefined) {
+          await this.validateStructured(fact.data.parent, 'method', 'method-revision')
+        }
+        if (fact.data.sourceProposal !== undefined) {
+          await this.validateRef(fact.data.sourceProposal, 'object')
+        }
+        return
+      }
+      case 'method/activated': {
+        if (fact.data.expectedPrevious !== undefined) {
+          await this.validateStructured(fact.data.expectedPrevious, 'method', 'method-revision')
+        }
+        if (fact.data.previous !== undefined) {
+          await this.validateStructured(fact.data.previous, 'method', 'method-revision')
+        }
+        await this.validateStructured(fact.data.next, 'method', 'method-revision')
+        await this.validateRef(fact.data.approval, 'object')
+        if (fact.data.evaluationRef !== undefined) {
+          await this.validateRef(fact.data.evaluationRef, 'object')
+        }
+        return
+      }
+      case 'task/admitted': {
+        await this.validateStructured(fact.data.contract, 'contract', 'task-contract')
+        return
+      }
+      case 'run/opened': {
+        await this.validateStructured(fact.data.composition, 'composition', 'composition')
+        await this.validateRef(fact.data.workspaceSeed, 'object')
+        return
+      }
+      case 'task/children-admitted': {
+        for (const child of fact.data.children) {
+          if (!verifyDigest('contract', child.contract)) {
+            throw referenceInvalid('Inline TaskContract digest is invalid')
+          }
+          await this.validateTaskContractValue(child.contract)
+          if (child.replacement !== undefined) {
+            await this.validateRef(child.replacement.feedbackRef, 'object')
+          }
+        }
+        return
+      }
+      case 'run/submitted': {
+        await this.validateRef(fact.data.outputs, 'object')
+        for (const receipt of fact.data.previewReceipts) {
+          await this.validateRef(receipt, 'object')
+        }
+        for (const receipt of fact.data.readReceipts) {
+          await this.validateRef(receipt, 'object')
+        }
+        await this.validateRef(fact.data.planningSketchRef, 'object')
+        for (const feedback of fact.data.feedbackRefs) {
+          await this.validateRef(feedback, 'object')
+        }
+        return
+      }
+      case 'run/closed': {
+        if ('evidenceRef' in fact.data) {
+          await this.validateRef(fact.data.evidenceRef, 'evidence')
+        } else {
+          await this.validateStructured(
+            fact.data.executionRecordRef,
+            'object',
+            'execution-record',
+          )
+        }
+        if (fact.data.planningSketchRef !== undefined) {
+          await this.validateRef(fact.data.planningSketchRef, 'object')
+        }
+        for (const feedback of fact.data.feedbackRefs) {
+          await this.validateRef(feedback, 'object')
+        }
+        return
+      }
+      case 'task/closed': {
+        for (const evidence of fact.data.evidenceRefs) {
+          await this.validateRef(evidence, 'evidence')
+        }
+        if (fact.data.cancellationCutRef !== undefined) {
+          await this.validateRef(fact.data.cancellationCutRef, 'object')
+        }
+        return
+      }
+      case 'rsi/trace-sealed': {
+        await this.validateRef(fact.data.trace, 'object')
+        return
+      }
+      case 'rsi/round-opened': {
+        await this.validateRef(fact.data.sourceTrace, 'object')
+        await this.validateStructured(fact.data.baseMethod, 'method', 'method-revision')
+        await this.validateRef(fact.data.plan, 'round-plan')
+        return
+      }
+      case 'rsi/proposal-submitted': {
+        await this.validateRef(fact.data.patch, 'object')
+        return
+      }
+      case 'rsi/candidate-ready': {
+        await this.validateRef(fact.data.patch, 'object')
+        await this.validateRef(fact.data.precheckReceipt, 'object')
+        await this.validateStructured(fact.data.candidateMethod, 'method', 'method-revision')
+        return
+      }
+      case 'rsi/round-closed': {
+        if (fact.data.comparisonRef !== undefined) {
+          await this.validateRef(fact.data.comparisonRef, 'object')
+        }
+        if (fact.data.precheckReceipt !== undefined) {
+          await this.validateRef(fact.data.precheckReceipt, 'object')
+        }
+        return
+      }
+    }
+  }
+
+  private async validateRef(ref: Ref, domain: CasDigestDomain): Promise<void> {
+    await this.read(ref, domain)
+  }
+
+  private read(ref: Ref, domain: CasDigestDomain): Promise<Uint8Array> {
+    const key = `${domain}\u0000${ref.digest}`
+    const existing = this.verifiedBytes.get(key)
+    if (existing !== undefined) return existing
+    const pending = readVerifiedObject(this.objectsPath, ref, domain)
+    this.verifiedBytes.set(key, pending)
+    return pending
+  }
+
+  private async validateStructured(
+    ref: Ref,
+    domain: CasDigestDomain,
+    kind: StructuredKind,
+  ): Promise<void> {
+    const key = `${domain}\u0000${ref.digest}\u0000${kind}`
+    if (this.validatedStructures.has(key) || this.activeStructures.has(key)) return
+
+    this.activeStructures.add(key)
+    try {
+      const bytes = await this.read(ref, domain)
+      switch (kind) {
+        case 'task-contract': {
+          await this.validateTaskContractValue(parseTaskContractBytes(bytes))
+          break
+        }
+        case 'method-revision': {
+          await this.validateMethodRevisionValue(parseMethodRevisionBytes(bytes))
+          break
+        }
+        case 'composition': {
+          await this.validateCompositionValue(parseCompositionBytes(bytes))
+          break
+        }
+        case 'execution-record': {
+          await this.validateExecutionRecordValue(parseExecutionRecordBytes(bytes))
+          break
+        }
+      }
+      this.validatedStructures.add(key)
+    } finally {
+      this.activeStructures.delete(key)
+    }
+  }
+
+  private async validateTaskContractValue(
+    contract: TaskContract | TaskContractPayload,
+  ): Promise<void> {
+    await this.validateStructured(contract.method, 'method', 'method-revision')
+    await this.validateStructured(contract.template, 'method', 'method-revision')
+    for (const input of contract.spec.inputs) {
+      await this.validateRef(input.object, 'object')
+    }
+    for (const ref of contract.resources.baseTools) {
+      await this.validateRef(ref, 'object')
+    }
+    for (const ref of contract.resources.skills) {
+      await this.validateRef(ref, 'object')
+    }
+    for (const ref of contract.resources.mcpServers) {
+      await this.validateRef(ref, 'object')
+    }
+    if (contract.resources.exploration !== undefined) {
+      await this.validateRef(contract.resources.exploration, 'object')
+    }
+    await this.validateRef(contract.environment.seed, 'object')
+    await this.validateRef(contract.environment.profile, 'object')
+    if (contract.origin.kind === 'root') {
+      await this.validateRef(contract.origin.requestRef, 'object')
+    }
+    // TaskContract.acceptance is AcceptanceRef; its domain is pending
+    // amendment 002 and is deliberately not guessed or validated here.
+  }
+
+  private async validateMethodRevisionValue(
+    method: MethodRevision | MethodRevisionPayload,
+  ): Promise<void> {
+    if (method.parent !== undefined) {
+      await this.validateStructured(method.parent, 'method', 'method-revision')
+    }
+    for (const template of method.templates) {
+      await this.validateRef(template.guidance, 'object')
+      await this.validateRef(template.example, 'object')
+      await this.validateRef(template.acceptancePolicy, 'object')
+    }
+    for (const skill of method.skills) {
+      await this.validateRef(skill.bundle, 'object')
+    }
+    for (const tool of method.tools) {
+      await this.validateRef(tool.server.bundle, 'object')
+      await this.validateRef(tool.server.manifest, 'object')
+      await this.validateRef(tool.server.sourceFiles, 'object')
+      await this.validateRef(tool.server.config, 'object')
+    }
+  }
+
+  private async validateCompositionValue(
+    composition: Composition | CompositionPayload,
+  ): Promise<void> {
+    await this.validateRef(composition.dsh.config, 'object')
+    await this.validateRef(composition.contract, 'object')
+    await this.validateRef(composition.template, 'object')
+    if (composition.guidance !== undefined) {
+      await this.validateRef(composition.guidance, 'object')
+    }
+    for (const skill of composition.skills) {
+      await this.validateRef(skill, 'object')
+    }
+    for (const server of composition.mcpServers) {
+      await this.validateRef(server.manifest, 'object')
+      await this.validateRef(server.bundle, 'object')
+      await this.validateRef(server.schema, 'object')
+      await this.validateRef(server.config, 'object')
+    }
+    await this.validateRef(composition.modelRoute, 'object')
+    await this.validateRef(composition.resources, 'object')
+    await this.validateRef(composition.seed, 'object')
+  }
+
+  private async validateExecutionRecordValue(
+    record: ExecutionRecord | ExecutionRecordPayload,
+  ): Promise<void> {
+    await this.validateStructured(record.method, 'method', 'method-revision')
+    await this.validateStructured(record.composition, 'composition', 'composition')
+    for (const input of record.inputs) {
+      await this.validateRef(input, 'object')
+    }
+    for (const output of record.outputs ?? []) {
+      await this.validateRef(output, 'object')
+    }
+  }
+}
+
+function referenceInvalid(message: string, cause?: unknown): DomainStoreError {
+  return new DomainStoreError(
+    'REFERENCE_INVALID',
+    message,
+    cause === undefined ? undefined : { cause },
+  )
+}
+
+function parseStructuredJson(bytes: Uint8Array, label: string): JsonValue {
+  const value = parseJsonBytes(bytes)
+  if (value === undefined) {
+    throw referenceInvalid(`${label} CAS object is not strict JSON`)
+  }
+  return value
+}
+
+function parseTaskContractBytes(bytes: Uint8Array): TaskContract | TaskContractPayload {
+  const value = parseStructuredJson(bytes, 'TaskContract')
+  let full: TaskContract | undefined
+  try {
+    full = parseProtocolValue(taskContractSchema, value)
+  } catch {
+    full = undefined
+  }
+  if (full !== undefined) {
+    if (!verifyDigest('contract', full)) throw referenceInvalid('TaskContract digest is invalid')
+    return full
+  }
+  try {
+    return parseProtocolValue(taskContractPayloadSchema, value)
+  } catch (error) {
+    throw referenceInvalid('CAS object is not a TaskContract', error)
+  }
+}
+
+function parseMethodRevisionBytes(
+  bytes: Uint8Array,
+): MethodRevision | MethodRevisionPayload {
+  const value = parseStructuredJson(bytes, 'MethodRevision')
+  let full: MethodRevision | undefined
+  try {
+    full = parseProtocolValue(methodRevisionSchema, value)
+  } catch {
+    full = undefined
+  }
+  if (full !== undefined) {
+    if (!verifyDigest('method', full)) throw referenceInvalid('MethodRevision digest is invalid')
+    return full
+  }
+  try {
+    return parseProtocolValue(methodRevisionPayloadSchema, value)
+  } catch (error) {
+    throw referenceInvalid('CAS object is not a MethodRevision', error)
+  }
+}
+
+function parseCompositionBytes(bytes: Uint8Array): Composition | CompositionPayload {
+  const value = parseStructuredJson(bytes, 'Composition')
+  let full: Composition | undefined
+  try {
+    full = parseProtocolValue(compositionSchema, value)
+  } catch {
+    full = undefined
+  }
+  if (full !== undefined) {
+    if (!verifyDigest('composition', full)) throw referenceInvalid('Composition digest is invalid')
+    return full
+  }
+  try {
+    return parseProtocolValue(compositionPayloadSchema, value)
+  } catch (error) {
+    throw referenceInvalid('CAS object is not a Composition', error)
+  }
+}
+
+function parseExecutionRecordBytes(
+  bytes: Uint8Array,
+): ExecutionRecord | ExecutionRecordPayload {
+  const value = parseStructuredJson(bytes, 'ExecutionRecord')
+  let full: ExecutionRecord | undefined
+  try {
+    full = parseProtocolValue(executionRecordSchema, value)
+  } catch {
+    full = undefined
+  }
+  if (full !== undefined) {
+    if (!verifyDigest('object', full)) throw referenceInvalid('ExecutionRecord digest is invalid')
+    return full
+  }
+  try {
+    return parseProtocolValue(executionRecordPayloadSchema, value)
+  } catch (error) {
+    throw referenceInvalid('CAS object is not an ExecutionRecord', error)
   }
 }
 

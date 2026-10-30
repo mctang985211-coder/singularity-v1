@@ -1,0 +1,676 @@
+import assert from 'node:assert/strict'
+import { access, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test from 'node:test'
+
+import {
+  canonicalize,
+  computeDigest,
+  computeDigestBytes,
+  seal,
+  sealFact,
+  sealMethodRevision,
+  sealTaskContract,
+} from '@singularity/protocol'
+import type {
+  Digest,
+  Fact,
+  FactActor,
+  FactPayloadMap,
+  FactType,
+  MethodRevision,
+  NormalizedCommand,
+  Ref,
+  UnsealedFact,
+} from '@singularity/protocol'
+
+import {
+  CAS_DIGEST_DOMAINS,
+  CommandService,
+  DomainStore,
+  JOURNAL_FILENAME,
+} from '../src/index.ts'
+import type { CasDigestDomain } from '../src/index.ts'
+
+const encoder = new TextEncoder()
+const digestA: Digest = `sha256:${'a'.repeat(64)}`
+const digestB: Digest = `sha256:${'b'.repeat(64)}`
+const actor: FactActor = { kind: 'runtime', id: 'runtime-reference-test' }
+const at = 1_800_000_000_000
+
+const limits = {
+  maxRuns: 2,
+  maxStepsPerRun: 10,
+  maxTokens: 10_000,
+  deadlineAt: at + 1_000_000,
+  maxDepth: 2,
+  maxTasks: 4,
+  maxBatchChildren: 2,
+}
+
+const usage = {
+  inputTokens: 1,
+  outputTokens: 2,
+  steps: 1,
+  unknownRequests: 0,
+}
+
+const sessionCut = { sessionId: 'session-1', from: 0, to: 1 }
+
+function ref(id: string, digest: Digest = digestA): Ref {
+  return { id, digest }
+}
+
+async function withRoot<T>(run: (root: string) => Promise<T>): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), 'singularity-cas-refs-'))
+  try {
+    return await run(root)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+function errorCode(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
+  return error.code
+}
+
+async function rejectsWithCode(promise: Promise<unknown>, code: string): Promise<void> {
+  await assert.rejects(promise, (error: unknown) => {
+    assert.equal(errorCode(error), code, `expected ${code}, got ${String(errorCode(error))}`)
+    return true
+  })
+}
+
+async function putRaw(
+  store: DomainStore,
+  id: string,
+  domain: CasDigestDomain = 'object',
+): Promise<Ref> {
+  const bytes = encoder.encode(`raw:${domain}:${id}\n`)
+  return store.putObject(id, bytes, domain)
+}
+
+async function putSealed(
+  store: DomainStore,
+  id: string,
+  domain: CasDigestDomain,
+  value: unknown,
+): Promise<Ref> {
+  return store.putObject(id, encoder.encode(canonicalize(value)), domain)
+}
+
+interface Graph {
+  readonly facts: readonly Fact[]
+  readonly methodRef: Ref
+  readonly parentMethodRef: Ref
+  readonly contractRef: Ref
+  readonly compositionRef: Ref
+  readonly executionRef: Ref
+  readonly guidanceRef: Ref
+  readonly compositionConfigRef: Ref
+  readonly executionInputRef: Ref
+  readonly acceptanceRef: Ref
+}
+
+interface GraphOptions {
+  readonly useMethodAsContract?: boolean
+}
+
+/**
+ * Builds one real 14-fact journal covering all 13 closed fact types (with both
+ * run/closed variants) plus a fully nested method, contract, composition, and
+ * execution record. All referenced CAS objects are written first.
+ */
+async function buildGraph(store: DomainStore, options: GraphOptions = {}): Promise<Graph> {
+  const objectRef = (id: string): Promise<Ref> => putRaw(store, id)
+  const requestRef = await objectRef('request-root')
+  const inputObjectRef = await objectRef('input-object')
+  const toolRef = await objectRef('resource-tool')
+  const resourceSkillRef = await objectRef('resource-skill')
+  const resourceMcpRef = await objectRef('resource-mcp')
+  const explorationRef = await objectRef('resource-exploration')
+  const seedRef = await objectRef('environment-seed')
+  const profileRef = await objectRef('environment-profile')
+  const guidanceRef = await objectRef('method-guidance')
+  const exampleRef = await objectRef('method-example')
+  const acceptancePolicyRef = await objectRef('template-acceptance-policy')
+  const skillBundleRef = await objectRef('method-skill-bundle')
+  const toolBundleRef = await objectRef('method-tool-bundle')
+  const toolManifestRef = await objectRef('method-tool-manifest')
+  const toolSourceRef = await objectRef('method-tool-source')
+  const toolConfigRef = await objectRef('method-tool-config')
+
+  const parentMethod = sealMethodRevision({
+    v: 1,
+    id: 'method-parent',
+    templates: [],
+    skills: [],
+    tools: [],
+  })
+  const parentMethodRef = await putSealed(store, 'method-parent', 'method', parentMethod)
+
+  const method: MethodRevision = sealMethodRevision({
+    v: 1,
+    id: 'method-rich',
+    parent: parentMethodRef,
+    templates: [
+      {
+        id: 'template-root',
+        brief: 'Use all nested references',
+        guidance: guidanceRef,
+        example: exampleRef,
+        instanceSchema: { type: 'object', additionalProperties: false },
+        requiredCriteria: [],
+        requiredOutputs: [],
+        acceptancePolicy: acceptancePolicyRef,
+        skills: [],
+        tools: [],
+        children: [],
+      },
+    ],
+    skills: [
+      { id: 'skill-1', name: 'Skill', description: 'Nested skill', bundle: skillBundleRef },
+    ],
+    tools: [
+      {
+        id: 'tool-1',
+        name: 'Tool',
+        description: 'Nested MCP server',
+        kind: 'mcp-server',
+        server: {
+          bundle: toolBundleRef,
+          manifest: toolManifestRef,
+          sourceFiles: toolSourceRef,
+          config: toolConfigRef,
+          transport: 'stdio',
+          capabilities: [],
+          exposedTools: [],
+        },
+      },
+    ],
+  })
+  const methodRef = await putSealed(store, 'method-rich', 'method', method)
+
+  const acceptanceRef = ref('acceptance-pending-amendment', digestB)
+  const contractPayload = {
+    v: 1 as const,
+    taskId: 'task-root',
+    spec: {
+      goal: {
+        summary: 'Reference validation',
+        deliverable: 'One frozen fact graph',
+        scope: ['cas-reference-validation'],
+        constraints: ['no business reducer'],
+      },
+      criteria: [],
+      inputs: [{ id: 'input-1', object: inputObjectRef, path: 'inputs/in', access: 'read' as const }],
+      outputs: [],
+    },
+    origin: { kind: 'root' as const, purpose: 'work' as const, requestRef },
+    method: methodRef,
+    template: { id: 'template-root', digest: methodRef.digest },
+    resources: {
+      baseTools: [toolRef],
+      skills: [resourceSkillRef],
+      mcpServers: [resourceMcpRef],
+      exploration: explorationRef,
+    },
+    acceptance: acceptanceRef,
+    environment: { seed: seedRef, profile: profileRef },
+    limits,
+  }
+  const contract = sealTaskContract(contractPayload)
+  const contractRef = await putSealed(store, 'contract-root', 'contract', contract)
+
+  const childContract = sealTaskContract({
+    ...contractPayload,
+    taskId: 'task-child',
+    origin: {
+      kind: 'child',
+      parentId: 'task-root',
+      parentRunId: 'run-1',
+      batchId: 'batch-1',
+      bindingId: 'binding-1',
+    },
+  })
+
+  const compositionConfigRef = await objectRef('composition-dsh-config')
+  const compositionContractRef = await objectRef('composition-contract-object')
+  const compositionTemplateRef = await objectRef('composition-template-object')
+  const compositionGuidanceRef = await objectRef('composition-guidance')
+  const compositionSkillRef = await objectRef('composition-skill')
+  const compositionMcpManifestRef = await objectRef('composition-mcp-manifest')
+  const compositionMcpBundleRef = await objectRef('composition-mcp-bundle')
+  const compositionMcpSchemaRef = await objectRef('composition-mcp-schema')
+  const compositionMcpConfigRef = await objectRef('composition-mcp-config')
+  const compositionModelRouteRef = await objectRef('composition-model-route')
+  const compositionResourcesRef = await objectRef('composition-resources')
+  const compositionSeedRef = await objectRef('composition-seed')
+
+  const composition = seal('composition', {
+    v: 1,
+    dsh: { package: 'dsh', version: '0.2.2-alpha.2', config: compositionConfigRef },
+    platformPrompt: digestA,
+    contract: compositionContractRef,
+    template: compositionTemplateRef,
+    guidance: compositionGuidanceRef,
+    skills: [compositionSkillRef],
+    mcpServers: [
+      {
+        manifest: compositionMcpManifestRef,
+        bundle: compositionMcpBundleRef,
+        schema: compositionMcpSchemaRef,
+        config: compositionMcpConfigRef,
+        transport: 'stdio',
+        capabilities: [],
+      },
+    ],
+    modelRoute: compositionModelRouteRef,
+    resources: compositionResourcesRef,
+    seed: compositionSeedRef,
+  })
+  const compositionRef = await putSealed(store, 'composition-1', 'composition', composition)
+
+  const executionInputRef = await objectRef('execution-input')
+  const executionOutputRef = await objectRef('execution-output')
+  const execution = seal('object', {
+    v: 1,
+    taskId: 'task-root',
+    runId: 'run-2',
+    contractDigest: contract.digest,
+    method: methodRef,
+    composition: compositionRef,
+    inputs: [executionInputRef],
+    outputs: [executionOutputRef],
+    usage,
+    sessionCut,
+    reason: 'stop',
+  })
+  const executionRef = await putSealed(store, 'execution-1', 'object', execution)
+
+  const evidenceRef = await putRaw(store, 'evidence-1', 'evidence')
+  const roundPlanRef = await putRaw(store, 'round-plan-1', 'round-plan')
+  const traceRef = await putRaw(store, 'trace-1')
+  const sourceTraceRef = await putRaw(store, 'source-trace-1')
+  const patchRef = await putRaw(store, 'patch-1')
+  const precheckRef = await putRaw(store, 'precheck-1')
+  const comparisonRef = await putRaw(store, 'comparison-1')
+  const sketchRef = await putRaw(store, 'sketch-1')
+  const feedbackRef = await putRaw(store, 'feedback-1')
+  const outputManifestRef = await putRaw(store, 'outputs-manifest')
+  const previewReceiptRef = await putRaw(store, 'preview-receipt')
+  const readReceiptRef = await putRaw(store, 'read-receipt')
+  const approvalRef = await putRaw(store, 'method-approval')
+  const evaluationRef = await putRaw(store, 'method-evaluation')
+  const proposalSourceRef = await putRaw(store, 'method-source-proposal')
+  const workspaceSeedRef = await putRaw(store, 'workspace-seed')
+  const cutRef = await putRaw(store, 'cancellation-cut')
+
+  const facts: Fact[] = []
+  async function append<Type extends FactType>(
+    type: Type,
+    data: FactPayloadMap[Type],
+  ): Promise<Fact> {
+    const unsealed = {
+      v: 1,
+      seq: facts.length,
+      commandId: `command-${String(facts.length)}`,
+      commandDigest: digestA,
+      type,
+      actor,
+      at: at + facts.length,
+      data,
+      prev: facts.at(-1)?.digest ?? null,
+    } as UnsealedFact
+    const fact = await store.appendFact(unsealed)
+    facts.push(fact)
+    return fact
+  }
+
+  await append('method/registered', {
+    revision: methodRef,
+    parent: parentMethodRef,
+    sourceProposal: proposalSourceRef,
+  })
+  await append('method/activated', {
+    expectedPrevious: parentMethodRef,
+    previous: parentMethodRef,
+    next: methodRef,
+    approval: approvalRef,
+    evaluationRef,
+  })
+  await append('task/admitted', {
+    taskId: 'task-root',
+    contract: options.useMethodAsContract === true ? methodRef : contractRef,
+  })
+  await append('run/opened', {
+    taskId: 'task-root',
+    runId: 'run-1',
+    attempt: 1,
+    sessionId: 'session-1',
+    composition: compositionRef,
+    workspaceKey: 'workspace-root',
+    workspaceSeed: workspaceSeedRef,
+    budgetReservation: { tokens: 100, steps: 1, deadlineAt: limits.deadlineAt },
+  })
+  await append('task/children-admitted', {
+    parentRunId: 'run-1',
+    batchId: 'batch-1',
+    children: [
+      {
+        contract: childContract,
+        join: 'required',
+        budgetReservation: { tokens: 10, steps: 1, deadlineAt: limits.deadlineAt },
+        replacement: { feedbackRef, supersedesChildIds: ['task-old'] },
+      },
+    ],
+  })
+  await append('run/submitted', {
+    runId: 'run-1',
+    outputs: outputManifestRef,
+    transcriptOffset: { sessionId: 'session-1', seq: 1 },
+    previewReceipts: [previewReceiptRef],
+    readReceipts: [readReceiptRef],
+    planningSketchRef: sketchRef,
+    feedbackRefs: [feedbackRef],
+  })
+  await append('run/closed', {
+    runId: 'run-1',
+    classification: 'verified',
+    reason: 'evidence closure',
+    evidenceRef,
+    usage,
+    planningSketchRef: sketchRef,
+    feedbackRefs: [feedbackRef],
+  })
+  await append('run/closed', {
+    runId: 'run-2',
+    classification: 'invalid',
+    reason: 'execution record closure',
+    executionRecordRef: executionRef,
+    usage,
+    feedbackRefs: [feedbackRef],
+  })
+  await append('task/closed', {
+    taskId: 'task-root',
+    outcome: 'verified',
+    reason: 'closed',
+    decisiveRunId: 'run-1',
+    evidenceRefs: [evidenceRef],
+    cancellationCutRef: cutRef,
+  })
+  await append('rsi/trace-sealed', {
+    rootTaskId: 'task-root',
+    trace: traceRef,
+    usage,
+    sessionCuts: [sessionCut],
+  })
+  await append('rsi/round-opened', {
+    roundId: 'round-1',
+    sourceTrace: sourceTraceRef,
+    baseMethod: methodRef,
+    plan: roundPlanRef,
+    proposerSessionId: 'session-2',
+  })
+  await append('rsi/proposal-submitted', { roundId: 'round-1', patch: patchRef })
+  await append('rsi/candidate-ready', {
+    roundId: 'round-1',
+    patch: patchRef,
+    precheckReceipt: precheckRef,
+    candidateMethod: methodRef,
+  })
+  await append('rsi/round-closed', {
+    roundId: 'round-1',
+    outcome: 'improved',
+    comparisonRef,
+    precheckReceipt: precheckRef,
+    reason: 'improved',
+  })
+
+  await store.putObject('orphan-object', encoder.encode('orphan'), 'object')
+  await access(join(store.root, JOURNAL_FILENAME))
+
+  return {
+    facts,
+    methodRef,
+    parentMethodRef,
+    contractRef,
+    compositionRef,
+    executionRef,
+    guidanceRef,
+    compositionConfigRef,
+    executionInputRef,
+    acceptanceRef,
+  }
+}
+
+void test('every CAS digest domain round-trips and rejects wrong domain, tampering, and absence', async () => {
+  await withRoot(async (root) => {
+    const store = await DomainStore.open({ root })
+    try {
+      for (const domain of CAS_DIGEST_DOMAINS) {
+        const bytes = encoder.encode(`raw bytes for ${domain}\n`)
+        const objectRef = await store.putObject(`object-${domain}`, bytes, domain)
+        assert.equal(objectRef.id, `object-${domain}`)
+        assert.equal(objectRef.digest, computeDigestBytes(domain, bytes))
+        assert.deepEqual((await store.readObject(objectRef, domain)).bytes, bytes)
+
+        const wrongDomain: CasDigestDomain = domain === 'object' ? 'contract' : 'object'
+        await rejectsWithCode(store.readObject(objectRef, wrongDomain), 'OBJECT_DOMAIN_MISMATCH')
+      }
+
+      await rejectsWithCode(
+        store.readObject({ id: 'missing', digest: digestB }, 'object'),
+        'OBJECT_MISSING',
+      )
+
+      const tamperedBytes = encoder.encode('tamper this object')
+      const tamperedRef = await store.putObject('tampered', tamperedBytes, 'object')
+      await writeFile(store.objectPath(tamperedRef.digest), encoder.encode('different bytes'))
+      await rejectsWithCode(store.readObject(tamperedRef, 'object'), 'OBJECT_CORRUPT')
+
+      await rejectsWithCode(
+        store.readObject(tamperedRef, 'fact' as CasDigestDomain),
+        'INVALID_ARGUMENT',
+      )
+    } finally {
+      await store.close()
+    }
+  })
+})
+
+void test('sealed structured objects use their self digest under the requested CAS domain', async () => {
+  await withRoot(async (root) => {
+    const store = await DomainStore.open({ root })
+    try {
+      const method = sealMethodRevision({
+        v: 1,
+        id: 'method-sealed',
+        templates: [],
+        skills: [],
+        tools: [],
+      })
+      const methodBytes = encoder.encode(canonicalize(method))
+      const methodRef = await store.putObject('method-sealed', methodBytes, 'method')
+      assert.equal(methodRef.digest, method.digest)
+      assert.deepEqual((await store.readObject(methodRef, 'method')).bytes, methodBytes)
+      await rejectsWithCode(store.readObject(methodRef, 'contract'), 'OBJECT_DOMAIN_MISMATCH')
+
+      const execution = seal('object', {
+        v: 1,
+        taskId: 'task-sealed',
+        runId: 'run-sealed',
+        contractDigest: digestA,
+        method: ref('method-sealed', method.digest),
+        composition: ref('composition-sealed', digestB),
+        inputs: [],
+        usage,
+        sessionCut,
+        reason: 'sealed',
+      })
+      const executionBytes = encoder.encode(canonicalize(execution))
+      const executionRef = await store.putObject('execution-sealed', executionBytes, 'object')
+      assert.equal(executionRef.digest, execution.digest)
+      assert.deepEqual((await store.readObject(executionRef, 'object')).bytes, executionBytes)
+      await rejectsWithCode(store.readObject(executionRef, 'evidence'), 'OBJECT_DOMAIN_MISMATCH')
+    } finally {
+      await store.close()
+    }
+  })
+})
+
+void test('replay validates all 13 fact types, nested refs, acceptance skip, and orphan tolerance', async () => {
+  await withRoot(async (root) => {
+    const store = await DomainStore.open({ root })
+    const graph = await buildGraph(store)
+    try {
+      assert.deepEqual(await store.replay(), graph.facts)
+      await assert.rejects(access(store.objectPath(graph.acceptanceRef.digest)))
+    } finally {
+      await store.close()
+    }
+
+    const reopened = await DomainStore.open({ root })
+    try {
+      const replay = await reopened.replay()
+      assert.deepEqual(replay, graph.facts)
+      assert.equal(new Set(replay.map((fact) => fact.type)).size, 13)
+      assert.equal(replay.length, 14)
+    } finally {
+      await reopened.close()
+    }
+  })
+})
+
+void test('nested method, contract, composition, and execution refs reject missing objects at startup', async () => {
+  const scenarios = [
+    { name: 'method template guidance', select: (graph: Graph) => graph.guidanceRef },
+    { name: 'composition dsh config', select: (graph: Graph) => graph.compositionConfigRef },
+    { name: 'execution input', select: (graph: Graph) => graph.executionInputRef },
+  ] as const
+
+  for (const scenario of scenarios) {
+    await withRoot(async (root) => {
+      const store = await DomainStore.open({ root })
+      const graph = await buildGraph(store)
+      const target = scenario.select(graph)
+      await store.close()
+      await unlink(store.objectPath(target.digest))
+      await assert.rejects(DomainStore.open({ root }), (error: unknown) => {
+        assert.equal(errorCode(error), 'OBJECT_MISSING', `${scenario.name} must reject`)
+        return true
+      })
+    })
+  }
+})
+
+void test('a tampered referenced object rejects both replay and a fresh open', async () => {
+  await withRoot(async (root) => {
+    const store = await DomainStore.open({ root })
+    const graph = await buildGraph(store)
+    await writeFile(
+      store.objectPath(graph.compositionConfigRef.digest),
+      encoder.encode('tampered reference target'),
+    )
+    try {
+      await rejectsWithCode(store.replay(), 'OBJECT_CORRUPT')
+    } finally {
+      await store.close()
+    }
+    await rejectsWithCode(DomainStore.open({ root }), 'OBJECT_CORRUPT')
+  })
+})
+
+void test('a fact ref with the wrong CAS domain rejects startup', async () => {
+  await withRoot(async (root) => {
+    const store = await DomainStore.open({ root })
+    await buildGraph(store, { useMethodAsContract: true })
+    await store.close()
+    await rejectsWithCode(DomainStore.open({ root }), 'OBJECT_DOMAIN_MISMATCH')
+  })
+})
+
+void test('an empty journal remains valid and a wrong-domain memory ref does not create an object', async () => {
+  await withRoot(async (root) => {
+    const store = await DomainStore.open({ root })
+    try {
+      assert.deepEqual(await store.replay(), [])
+      await rejectsWithCode(store.readObject(ref('never-stored', digestA), 'object'), 'OBJECT_MISSING')
+      assert.equal(store.tornTail(), undefined)
+    } finally {
+      await store.close()
+    }
+  })
+})
+
+void test('CommandService writes domain-tagged objects and restart replay validates them', async () => {
+  await withRoot(async (root) => {
+    const serviceActor: FactActor = { kind: 'operator', id: 'operator-service-reference' }
+    const command: NormalizedCommand = {
+      v: 1,
+      commandId: 'command-domain-object',
+      tool: 'singularity_reference_test',
+      toolVersion: 1,
+      actor: serviceActor,
+      scope: {},
+      input: { evidence: true },
+    }
+    const bytes = encoder.encode('evidence domain object bytes')
+    const evidenceRef: Ref = {
+      id: 'evidence-domain-object',
+      digest: computeDigestBytes('evidence', bytes),
+    }
+
+    const first = await CommandService.open({ root, actor: serviceActor, clock: () => at })
+    try {
+      const fact = await first.commit({
+        command,
+        type: 'task/closed',
+        data: {
+          taskId: 'task-service-reference',
+          outcome: 'verified',
+          reason: 'verified evidence',
+          evidenceRefs: [evidenceRef],
+        },
+        objects: [{ id: evidenceRef.id, bytes, domain: 'evidence' }],
+      })
+      assert.equal(fact.seq, 0)
+    } finally {
+      await first.close()
+    }
+
+    const restarted = await CommandService.open({ root, actor: serviceActor, clock: () => at })
+    try {
+      const replayed = await restarted.commit({
+        command,
+        type: 'task/closed',
+        data: {
+          taskId: 'task-service-reference',
+          outcome: 'verified',
+          reason: 'verified evidence',
+          evidenceRefs: [evidenceRef],
+        },
+      })
+      assert.equal(replayed.seq, 0)
+    } finally {
+      await restarted.close()
+    }
+  })
+})
+
+void test('fact helpers seal a verifiable chain before replay validation', () => {
+  const fact = sealFact({
+    v: 1,
+    seq: 0,
+    commandId: 'command-sealed',
+    commandDigest: digestA,
+    type: 'rsi/round-closed',
+    actor,
+    at,
+    data: { roundId: 'round-sealed', outcome: 'cancelled', reason: 'sealed' },
+    prev: null,
+  })
+  assert.equal(fact.digest, computeDigest('fact', fact))
+})
