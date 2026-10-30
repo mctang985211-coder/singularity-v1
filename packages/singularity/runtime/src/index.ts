@@ -1,6 +1,17 @@
 export * from './store.ts'
 export * from './service.ts'
-export * from './run.ts'
+export {
+  SingleRunError,
+  executeSingleRun,
+} from './run.ts'
+export type {
+  ExecuteSingleRunRequest,
+  ExecuteSingleRunResult,
+  SeedObject,
+  SingleRunAdmission,
+  SingleRunErrorCode,
+} from './run.ts'
+export * from './recovery.ts'
 export * from './prompt.ts'
 export * from './tools.ts'
 export * from './workspace.ts'
