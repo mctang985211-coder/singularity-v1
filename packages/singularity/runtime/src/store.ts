@@ -418,6 +418,11 @@ export class DomainStore {
         )
       }
 
+      // Reuse the same domain-aware reference validator as open/replay so the
+      // commit point never appends a fact whose mapped CAS refs are missing,
+      // wrong-domain, or corrupt. Validation completes before any journal write.
+      await validateFactReferences([sealed], this.objectsPath)
+
       const encoded = textEncoder.encode(`${canonicalize(sealed)}\n`)
       const previousBytes = this.committedBytes
       try {

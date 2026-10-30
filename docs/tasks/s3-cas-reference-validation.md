@@ -7,7 +7,7 @@
 
 ## Goal
 
-补齐 S3-A 遗留的 CAS 引用完整性：`putObject`/`readObject` 支持既有 9 个 digest domain 中 7 个实际 CAS 域；`DomainStore.open`/`replay` 在 journal 链校验后，对 fact 顶层 refs 和 TaskContract/MethodRevision/Composition/ExecutionRecord 的嵌套 refs 校验 CAS 存在、内容与 digest domain。保持单 journal、单 writer、CAS 和 store 非业务 reducer 边界。
+补齐 S3-A 遗留的 CAS 引用完整性：`putObject`/`readObject` 支持既有 9 个 digest domain 中 7 个实际 CAS 域；`DomainStore.open`/`replay`/`appendFact` 复用同一个 domain-aware validator，对 fact 顶层 refs 和 TaskContract/MethodRevision/Composition/ExecutionRecord 的嵌套 refs 校验 CAS 存在、内容与 digest domain。`appendFact` 在任何 journal 写入和 fsync 前拒绝无效引用，形成提交点不变量。保持单 journal、单 writer、CAS 和 store 非业务 reducer 边界。
 
 ## Spec refs
 
@@ -36,6 +36,7 @@
 
 - `putObject(id, bytes, domain = 'object')`
 - `readObject(ref, domain = 'object')`
+- `appendFact(fact)`：在 seal/seq/prev/commandId 检查后、写 journal 前调用同一 `validateFactReferences`；失败不写字节、不增长 seq。
 - `CAS_DIGEST_DOMAINS = ['object','contract','method','composition','evidence','round-plan','preview']`
 - `fact`/`command` 不是 CAS domain，传入即 `INVALID_ARGUMENT`。
 - `CommandObject` 增加可选 `domain`，`CommandService` 写 CAS 时透传。
@@ -52,7 +53,8 @@
 ## Done when
 
 - 7 个 CAS domain 均可读写；默认 object 兼容；错域、缺失、篡改拒绝。
-- open/replay 对 13 种 fact 顶层 refs 和四类结构化对象嵌套 refs 校验；orphan 不阻断。
+- open/replay/appendFact 对 13 种 fact 顶层 refs 和四类结构化对象嵌套 refs 校验；orphan 不阻断。
+- appendFact 在 fsync 前拒绝缺失/错域/损坏引用；失败后 journal 字节不变，后续合法 fact 复用同一 seq。
 - AcceptanceRef 不验证，其他已映射字段不放宽。
 - 根 `pnpm verify` 与 `git diff --check` 通过；真实文件测试覆盖正负例。
 
@@ -83,6 +85,8 @@ SyntaxError: The requested module '../src/index.ts' does not provide an export n
 
 失败原因是新 API/常量尚未实现，不是断言放宽。实现初版后，现有 runtime 测试还暴露了旧测试 fixture 引用未落 CAS 的问题；这些测试改为无 ref 的 `rsi/round-closed` 或真实 object ref，而不是关闭校验。
 
+提交点补强前的 `appendFact` 只做 seq/prev/digest 检查，不调用引用校验；因此它可以写入引用缺失的 fact。新增负例针对该缺口：缺失 contract、错域 evidence-as-contract、损坏 contract 的 `CommandService.commit` 均必须在 append 前拒绝，且 journal 字节、大小和 seq 不变。
+
 ## 绿证据
 
 ```bash
@@ -90,7 +94,7 @@ pnpm verify
 git diff --check
 ```
 
-结果：project、build、typecheck、lint、test 全部通过；protocol `189/189`、app `6/6`、runtime `29/29`（合计 `224`），`git diff --check` 通过。
+结果：project、build、typecheck、lint、test 全部通过；protocol `189/189`、app `6/6`、runtime `30/30`（合计 `225`），`git diff --check` 通过。
 
 ## 覆盖摘要
 
@@ -101,12 +105,12 @@ git diff --check
 - 嵌套 refs：rich MethodRevision（parent/template guidance/example/acceptancePolicy/skill bundle/tool server refs）、TaskContract（method/template/inputs/resources/environment/requestRef）、Composition（dsh/skills/mcp/modelRoute/resources/seed）、ExecutionRecord（method/composition/inputs/outputs）。
 - `AcceptanceRef` 指向未存对象仍可启动，证明该字段未被擅自验证；other fields 未跳过。
 - orphan CAS object 不影响 replay；损坏/缺失嵌套对象拒绝启动。
+- 提交点不变量：`appendFact` 复用同一 validator，在写 journal 前拒绝无效引用；失败后 journal 字节不变、seq 不增长，后续合法 commit 复用同一 seq；失败命令已写入的 CAS 对象作为 orphan 保留但不阻断 replay。
 
 ## 仍未验证
 
 - AcceptanceRef domain 仍未批准；本变更不覆盖。
 - Evidence、RoundPlan、preview、SubmissionManifest、PublicReceipt 的内部 refs 未解析/校验。
-- `CommandService.commit` 不预检新 fact 的引用完整性；完整性在 open/replay 生效。提交后引用缺失会导致下次启动拒绝，而不是提交时拒绝。
 - 无跨进程 OS writer lock；writer ownership 仍是进程内。
 - 未做掉电/强杀 fsync 故障注入；未实现业务 reducer、DSH、Agent、workspace、verifier 或真实模型路径。
 - 任何 conformance 场景状态未改变，仍为 unproven。

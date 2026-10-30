@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -114,16 +114,12 @@ interface Graph {
   readonly acceptanceRef: Ref
 }
 
-interface GraphOptions {
-  readonly useMethodAsContract?: boolean
-}
-
 /**
  * Builds one real 14-fact journal covering all 13 closed fact types (with both
  * run/closed variants) plus a fully nested method, contract, composition, and
  * execution record. All referenced CAS objects are written first.
  */
-async function buildGraph(store: DomainStore, options: GraphOptions = {}): Promise<Graph> {
+async function buildGraph(store: DomainStore): Promise<Graph> {
   const objectRef = (id: string): Promise<Ref> => putRaw(store, id)
   const requestRef = await objectRef('request-root')
   const inputObjectRef = await objectRef('input-object')
@@ -343,7 +339,7 @@ async function buildGraph(store: DomainStore, options: GraphOptions = {}): Promi
   })
   await append('task/admitted', {
     taskId: 'task-root',
-    contract: options.useMethodAsContract === true ? methodRef : contractRef,
+    contract: contractRef,
   })
   await append('run/opened', {
     taskId: 'task-root',
@@ -583,11 +579,33 @@ void test('a tampered referenced object rejects both replay and a fresh open', a
   })
 })
 
-void test('a fact ref with the wrong CAS domain rejects startup', async () => {
+void test('a journal fact with a wrong-domain ref rejects startup', async () => {
   await withRoot(async (root) => {
     const store = await DomainStore.open({ root })
-    await buildGraph(store, { useMethodAsContract: true })
+    const method = sealMethodRevision({
+      v: 1,
+      id: 'method-wrong-domain',
+      templates: [],
+      skills: [],
+      tools: [],
+    })
+    const methodRef = await putSealed(store, 'method-wrong-domain', 'method', method)
+    const fact = sealFact({
+      v: 1,
+      seq: 0,
+      commandId: 'command-wrong-domain-journal',
+      commandDigest: digestA,
+      type: 'task/admitted',
+      actor,
+      at,
+      data: { taskId: 'task-wrong-domain', contract: methodRef },
+      prev: null,
+    })
     await store.close()
+
+    // Bypass appendFact to simulate a journal written by an older writer and
+    // prove open/replay still rejects the wrong CAS domain.
+    await writeFile(store.journalPath, `${canonicalize(fact)}\n`)
     await rejectsWithCode(DomainStore.open({ root }), 'OBJECT_DOMAIN_MISMATCH')
   })
 })
@@ -656,6 +674,104 @@ void test('CommandService writes domain-tagged objects and restart replay valida
       assert.equal(replayed.seq, 0)
     } finally {
       await restarted.close()
+    }
+  })
+})
+
+void test('commit rejects invalid refs before fsync without consuming seq and ignores CAS orphans', async () => {
+  await withRoot(async (root) => {
+    const serviceActor: FactActor = { kind: 'operator', id: 'operator-commit-reference' }
+    const makeCommand = (commandId: string): NormalizedCommand => ({
+      v: 1,
+      commandId,
+      tool: 'singularity_reference_test',
+      toolVersion: 1,
+      actor: serviceActor,
+      scope: {},
+      input: { commandId },
+    })
+    const journalPath = join(root, JOURNAL_FILENAME)
+    const service = await CommandService.open({ root, actor: serviceActor, clock: () => at })
+    const inspector = await DomainStore.open({ root })
+    try {
+      const first = await service.commit({
+        command: makeCommand('command-valid-0'),
+        type: 'rsi/round-closed',
+        data: { roundId: 'round-valid-0', outcome: 'cancelled', reason: 'base' },
+      })
+      const journalBefore = await readFile(journalPath)
+      const sizeBefore = (await stat(journalPath)).size
+
+      const orphanBytes = encoder.encode('orphan written before failed commit')
+      const missingContract: Ref = { id: 'missing-contract', digest: digestB }
+      await rejectsWithCode(
+        service.commit({
+          command: makeCommand('command-missing-ref'),
+          type: 'task/admitted',
+          data: { taskId: 'task-missing', contract: missingContract },
+          objects: [{ id: 'orphan-object', bytes: orphanBytes }],
+        }),
+        'OBJECT_MISSING',
+      )
+      assert.deepEqual(await readFile(journalPath), journalBefore)
+      assert.equal((await stat(journalPath)).size, sizeBefore)
+      assert.equal(service.facts().length, 1)
+
+      const wrongBytes = encoder.encode('wrong domain object')
+      const wrongDigest = computeDigestBytes('evidence', wrongBytes)
+      await rejectsWithCode(
+        service.commit({
+          command: makeCommand('command-wrong-domain'),
+          type: 'task/admitted',
+          data: { taskId: 'task-wrong', contract: { id: 'wrong-domain', digest: wrongDigest } },
+          objects: [{ id: 'wrong-domain', bytes: wrongBytes, domain: 'evidence' }],
+        }),
+        'OBJECT_DOMAIN_MISMATCH',
+      )
+      assert.deepEqual(await readFile(journalPath), journalBefore)
+      assert.equal(service.facts().length, 1)
+
+      const corruptBytes = encoder.encode('original contract bytes')
+      const corruptRef = await inspector.putObject('corrupt-contract', corruptBytes, 'contract')
+      await writeFile(
+        inspector.objectPath(corruptRef.digest),
+        encoder.encode('tampered contract bytes'),
+      )
+      await rejectsWithCode(
+        service.commit({
+          command: makeCommand('command-corrupt-ref'),
+          type: 'task/admitted',
+          data: { taskId: 'task-corrupt', contract: corruptRef },
+        }),
+        'OBJECT_CORRUPT',
+      )
+      assert.deepEqual(await readFile(journalPath), journalBefore)
+      assert.equal(service.facts().length, 1)
+
+      const valid = await service.commit({
+        command: makeCommand('command-valid-1'),
+        type: 'rsi/round-closed',
+        data: { roundId: 'round-valid-1', outcome: 'cancelled', reason: 'after failures' },
+      })
+      assert.equal(valid.seq, first.seq + 1)
+      assert.equal(valid.prev, first.digest)
+      assert.equal(service.facts().length, 2)
+      assert.equal((await readFile(journalPath, 'utf8')).trimEnd().split('\n').length, 2)
+
+      const replay = await inspector.replay()
+      assert.deepEqual(replay, [first, valid])
+      assert.deepEqual(
+        (
+          await inspector.readObject({
+            id: 'orphan-object',
+            digest: computeDigestBytes('object', orphanBytes),
+          })
+        ).bytes,
+        orphanBytes,
+      )
+    } finally {
+      await inspector.close()
+      await service.close()
     }
   })
 })
