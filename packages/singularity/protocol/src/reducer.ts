@@ -1,0 +1,1208 @@
+import type { Digest } from './digest.ts'
+import { verifyFact } from './fact.ts'
+import type {
+  AdmittedChild,
+  ChildrenAdmittedPayload,
+  Fact,
+  RunClosedPayload,
+  RunOpenedPayload,
+  RunSubmittedPayload,
+  TaskAdmittedPayload,
+  TaskClosedPayload,
+  UsageRecord,
+} from './fact.ts'
+import { verifyMethodRevision } from './method.ts'
+import type { ChildBinding, MethodRevision, TaskTemplate } from './method.ts'
+import type { Ref } from './refs.ts'
+import { verifyTaskContract } from './task.ts'
+import type { TaskChildOrigin, TaskContract, TaskLimits } from './task.ts'
+
+/** Stable reducer rejection codes. Messages remain diagnostics only. */
+export const REDUCER_ERROR_CODES = [
+  'UNSUPPORTED_FACT_TYPE',
+  'FACT_INVALID',
+  'CAS_REF_MISSING',
+  'CONTRACT_INVALID',
+  'METHOD_INVALID',
+  'METHOD_TEMPLATE_MISMATCH',
+  'TASK_ORIGIN_INVALID',
+  'TASK_CONTRACT_MISMATCH',
+  'DUPLICATE_TASK',
+  'DUPLICATE_RUN',
+  'UNKNOWN_TASK',
+  'UNKNOWN_RUN',
+  'TASK_NOT_OPEN',
+  'TASK_NOT_ACTIVE',
+  'TASK_ALREADY_CLOSED',
+  'TASK_ACTIVE_RUN',
+  'INVALID_ATTEMPT',
+  'BUDGET_INVALID',
+  'BUDGET_EXCEEDED',
+  'RUN_NOT_OPEN',
+  'RUN_ALREADY_CLOSED',
+  'RUN_CLASSIFICATION_INVALID',
+  'SESSION_MISMATCH',
+  'CHILD_BATCH_EMPTY',
+  'CHILD_BATCH_EXISTS',
+  'CHILD_LIMIT_EXCEEDED',
+  'CHILD_ORIGIN_MISMATCH',
+  'CHILD_METHOD_MISMATCH',
+  'CHILD_TEMPLATE_MISMATCH',
+  'CHILD_BINDING_MISMATCH',
+  'CHILD_JOIN_MISMATCH',
+  'CHILD_DUPLICATE',
+  'CHILD_ACTIVE',
+  'BINDING_ALREADY_SATISFIED',
+  'REPLACEMENT_REQUIRED',
+  'REPLACEMENT_TARGET_INVALID',
+  'JOIN_UNSATISFIED',
+  'CHILDREN_NOT_TERMINAL',
+  'RETRY_AVAILABLE',
+  'RETRY_NOT_ALLOWED',
+  'TASK_OUTCOME_INVALID',
+  'EVIDENCE_MISMATCH',
+  'CANCELLATION_INVALID',
+] as const
+
+export type ReducerErrorCode = (typeof REDUCER_ERROR_CODES)[number]
+
+/** A deterministic reducer rejection; `factSeq`/`factType` identify the cause. */
+export class ReducerError extends Error {
+  override readonly name = 'ReducerError'
+  readonly code: ReducerErrorCode
+  readonly factSeq: number | undefined
+  readonly factType: Fact['type'] | undefined
+
+  constructor(code: ReducerErrorCode, message: string, fact?: Fact) {
+    super(
+      fact === undefined
+        ? message
+        : `${message} (fact seq ${String(fact.seq)}, type ${fact.type})`,
+    )
+    this.code = code
+    this.factSeq = fact?.seq
+    this.factType = fact?.type
+  }
+}
+
+/**
+ * Frozen CAS view supplied by the caller. The reducer never reads a live
+ * registry, journal, filesystem, clock, or process; these objects are the
+ * caller's immutable authority snapshot.
+ */
+export interface ReplayContext {
+  /** CAS object id -> complete frozen contract. */
+  readonly contracts: ReadonlyMap<string, TaskContract>
+  /** Method revision id -> complete frozen revision. */
+  readonly methods: ReadonlyMap<string, MethodRevision>
+  /** Deployment pre-listed transient infrastructure reasons for invalid retry. */
+  readonly transientInvalidReasons: readonly string[]
+}
+
+export type TaskPhase = 'open' | 'active' | 'closed'
+export type RunPhase = 'open' | 'submitted' | 'closed'
+export type JoinKind = 'required' | 'probe'
+export type RunClassification = RunClosedPayload['classification']
+export type TaskOutcome = TaskClosedPayload['outcome']
+
+/** How a Task entered its terminal projection. */
+export interface TaskCloseState {
+  readonly outcome: TaskOutcome
+  readonly reason: string
+  readonly source: 'task/closed' | 'subtree-cancellation'
+  readonly factDigest: Digest
+}
+
+/** How a Run entered its terminal projection, including subtree cancellation. */
+export interface RunCloseState {
+  readonly classification: RunClassification
+  readonly reason: string
+  readonly source: 'run/closed' | 'subtree-cancellation'
+  readonly factDigest: Digest
+  readonly evidenceRef?: Ref
+  readonly executionRecordRef?: Ref
+  readonly usage?: UsageRecord
+}
+
+/** Read-only Task projection. */
+export interface TaskState {
+  readonly taskId: string
+  readonly contract: TaskContract
+  readonly rootTaskId: string
+  readonly depth: number
+  readonly phase: TaskPhase
+  readonly activeRunId?: string
+  readonly runIds: readonly string[]
+  readonly childIds: readonly string[]
+  readonly parentTaskId?: string
+  readonly parentRunId?: string
+  readonly batchId?: string
+  readonly bindingId?: string
+  readonly join?: JoinKind
+  readonly supersededBy?: string
+  readonly closed?: TaskCloseState
+}
+
+/** Read-only Run projection. */
+export interface RunState {
+  readonly runId: string
+  readonly taskId: string
+  readonly attempt: number
+  readonly phase: RunPhase
+  readonly opened: RunOpenedPayload
+  readonly submitted?: RunSubmittedPayload
+  readonly closed?: RunCloseState
+  readonly childIds: readonly string[]
+}
+
+/** Read-only child batch projection. */
+export interface ChildBatchState {
+  readonly batchId: string
+  readonly parentTaskId: string
+  readonly parentRunId: string
+  readonly factDigest: Digest
+  readonly childIds: readonly string[]
+  readonly joins: ReadonlyMap<string, JoinKind>
+}
+
+/** Deterministic Task/Run fold result. */
+export interface TaskRunState {
+  readonly tasks: ReadonlyMap<string, TaskState>
+  readonly runs: ReadonlyMap<string, RunState>
+  readonly batches: ReadonlyMap<string, ChildBatchState>
+}
+
+interface MutableTaskRecord {
+  readonly taskId: string
+  readonly contract: TaskContract
+  readonly rootTaskId: string
+  readonly depth: number
+  readonly parentTaskId: string | undefined
+  readonly parentRunId: string | undefined
+  readonly batchId: string | undefined
+  readonly bindingId: string | undefined
+  readonly join: JoinKind | undefined
+  readonly runIds: string[]
+  readonly childIds: string[]
+  phase: TaskPhase
+  activeRunId: string | undefined
+  supersededBy: string | undefined
+  closed: TaskCloseState | undefined
+}
+
+interface MutableRunRecord {
+  readonly runId: string
+  readonly taskId: string
+  readonly attempt: number
+  readonly opened: RunOpenedPayload
+  readonly childIds: string[]
+  phase: RunPhase
+  submitted: RunSubmittedPayload | undefined
+  closed: RunCloseState | undefined
+}
+
+interface BatchRecord {
+  readonly batchId: string
+  readonly parentTaskId: string
+  readonly parentRunId: string
+  readonly factDigest: Digest
+  readonly childIds: string[]
+  readonly joins: Map<string, JoinKind>
+}
+
+interface ReducerRuntime {
+  readonly context: ReplayContext
+  readonly tasks: Map<string, MutableTaskRecord>
+  readonly runs: Map<string, MutableRunRecord>
+  readonly batches: Map<string, BatchRecord>
+}
+
+interface RetryDecision {
+  readonly allowed: boolean
+  readonly reason: string
+}
+
+interface UsageTotals {
+  tokens: number
+  unknown: boolean
+}
+
+type FactOf<Type extends Fact['type']> = Extract<Fact, { readonly type: Type }>
+
+/**
+ * Folds journal facts into the single Task/Run projection. Only the six
+ * Task/Run fact types are accepted; every other fact type is rejected rather
+ * than ignored. The function never mutates facts or the frozen context.
+ */
+export function reduceTaskRunFacts(
+  facts: readonly Fact[],
+  context: ReplayContext,
+): TaskRunState {
+  const runtime: ReducerRuntime = {
+    context,
+    tasks: new Map(),
+    runs: new Map(),
+    batches: new Map(),
+  }
+
+  for (const fact of facts) {
+    if (!verifyFact(fact)) {
+      fail('FACT_INVALID', fact, 'Fact digest or shape does not verify')
+    }
+    switch (fact.type) {
+      case 'task/admitted':
+        applyTaskAdmitted(runtime, fact)
+        break
+      case 'run/opened':
+        applyRunOpened(runtime, fact)
+        break
+      case 'task/children-admitted':
+        applyChildrenAdmitted(runtime, fact)
+        break
+      case 'run/submitted':
+        applyRunSubmitted(runtime, fact)
+        break
+      case 'run/closed':
+        applyRunClosed(runtime, fact)
+        break
+      case 'task/closed':
+        applyTaskClosed(runtime, fact)
+        break
+      default:
+        fail(
+          'UNSUPPORTED_FACT_TYPE',
+          fact,
+          `Task/Run reducer does not handle fact type ${fact.type}`,
+        )
+    }
+  }
+
+  return snapshot(runtime)
+}
+
+function applyTaskAdmitted(runtime: ReducerRuntime, fact: FactOf<'task/admitted'>): void {
+  const payload: TaskAdmittedPayload = fact.data
+  const contract = resolveContract(payload.contract, runtime, fact)
+  if (!verifyTaskContract(contract)) {
+    fail('CONTRACT_INVALID', fact, 'Frozen contract does not verify in the contract domain')
+  }
+  if (payload.taskId !== contract.taskId) {
+    fail('TASK_CONTRACT_MISMATCH', fact, 'taskId does not match the frozen contract')
+  }
+  if (contract.origin.kind !== 'root') {
+    fail('TASK_ORIGIN_INVALID', fact, 'task/admitted only admits a root contract')
+  }
+  if (runtime.tasks.has(contract.taskId)) {
+    fail('DUPLICATE_TASK', fact, `Task ${JSON.stringify(contract.taskId)} was already admitted`)
+  }
+
+  const method = resolveMethod(contract.method, runtime, fact)
+  resolveTemplate(method, contract.template, fact)
+
+  runtime.tasks.set(contract.taskId, {
+    taskId: contract.taskId,
+    contract,
+    rootTaskId: contract.taskId,
+    depth: 0,
+    parentTaskId: undefined,
+    parentRunId: undefined,
+    batchId: undefined,
+    bindingId: undefined,
+    join: undefined,
+    runIds: [],
+    childIds: [],
+    phase: 'open',
+    activeRunId: undefined,
+    supersededBy: undefined,
+    closed: undefined,
+  })
+}
+
+function applyRunOpened(runtime: ReducerRuntime, fact: FactOf<'run/opened'>): void {
+  const payload = fact.data
+  const task = requireTask(runtime, payload.taskId, fact)
+  if (runtime.runs.has(payload.runId)) {
+    fail('DUPLICATE_RUN', fact, `Run ${JSON.stringify(payload.runId)} already exists`)
+  }
+  if (task.phase !== 'open') {
+    fail('TASK_NOT_OPEN', fact, `Task ${JSON.stringify(task.taskId)} is not open`)
+  }
+  for (const childId of task.childIds) {
+    const child = requireTask(runtime, childId, fact)
+    if (child.phase !== 'closed') {
+      fail(
+        'CHILDREN_NOT_TERMINAL',
+        fact,
+        `Cannot open a parent Run while child Task ${JSON.stringify(child.taskId)} is not terminal`,
+      )
+    }
+  }
+
+  const previousRunId = task.runIds.at(-1)
+  if (previousRunId !== undefined) {
+    const previousRun = requireRun(runtime, previousRunId, fact)
+    const decision = retryDecision(runtime, task, previousRun, fact.at)
+    if (!decision.allowed) {
+      fail(
+        'RETRY_NOT_ALLOWED',
+        fact,
+        `Retry is not allowed for task ${JSON.stringify(task.taskId)}: ${decision.reason}`,
+      )
+    }
+  }
+
+  if (
+    !Number.isSafeInteger(payload.attempt) ||
+    payload.attempt < 1 ||
+    payload.attempt !== task.runIds.length + 1 ||
+    payload.attempt > task.contract.limits.maxRuns
+  ) {
+    fail(
+      'INVALID_ATTEMPT',
+      fact,
+      `Run attempt must be ${String(task.runIds.length + 1)} and within maxRuns`,
+    )
+  }
+  assertReservation(payload.budgetReservation, task.contract.limits, fact)
+
+  runtime.runs.set(payload.runId, {
+    runId: payload.runId,
+    taskId: task.taskId,
+    attempt: payload.attempt,
+    opened: payload,
+    childIds: [],
+    phase: 'open',
+    submitted: undefined,
+    closed: undefined,
+  })
+  task.runIds.push(payload.runId)
+  task.phase = 'active'
+  task.activeRunId = payload.runId
+}
+
+function applyChildrenAdmitted(
+  runtime: ReducerRuntime,
+  fact: FactOf<'task/children-admitted'>,
+): void {
+  const payload: ChildrenAdmittedPayload = fact.data
+  const parentRun = requireRun(runtime, payload.parentRunId, fact)
+  if (parentRun.phase !== 'open') {
+    fail('RUN_NOT_OPEN', fact, `Parent Run ${JSON.stringify(parentRun.runId)} is not open`)
+  }
+  const parent = requireTask(runtime, parentRun.taskId, fact)
+  if (parent.phase !== 'active' || parent.activeRunId !== parentRun.runId) {
+    fail('TASK_NOT_ACTIVE', fact, 'Parent Run is not the active Run of its Task')
+  }
+  if (runtime.batches.has(payload.batchId)) {
+    fail('CHILD_BATCH_EXISTS', fact, `Batch ${JSON.stringify(payload.batchId)} already exists`)
+  }
+  if (payload.children.length === 0) {
+    fail('CHILD_BATCH_EMPTY', fact, 'Child admissions must not be empty')
+  }
+  if (payload.children.length > parent.contract.limits.maxBatchChildren) {
+    fail('CHILD_LIMIT_EXCEEDED', fact, 'Child batch exceeds maxBatchChildren')
+  }
+  for (const childId of parent.childIds) {
+    const existing = requireTask(runtime, childId, fact)
+    if (existing.phase !== 'closed') {
+      fail(
+        'CHILD_ACTIVE',
+        fact,
+        `Task ${JSON.stringify(existing.taskId)} is still active; only one child batch may run`,
+      )
+    }
+  }
+
+  const method = resolveMethod(parent.contract.method, runtime, fact)
+  const parentTemplate = resolveTemplate(method, parent.contract.template, fact)
+  const root = requireTask(runtime, parent.rootTaskId, fact)
+  const subtreeTaskCount = [...runtime.tasks.values()].filter(
+    task => task.rootTaskId === parent.rootTaskId,
+  ).length
+  if (subtreeTaskCount + payload.children.length > root.contract.limits.maxTasks) {
+    fail('CHILD_LIMIT_EXCEEDED', fact, 'Admission exceeds the root maxTasks budget')
+  }
+
+  const pending: MutableTaskRecord[] = []
+  const pendingIds = new Set<string>()
+  const pendingBindings = new Set<string>()
+
+  for (const admitted of payload.children) {
+    const child = admitted.contract
+    const childTaskId = child.taskId
+    if (!verifyTaskContract(child)) {
+      fail('CONTRACT_INVALID', fact, `Child contract ${JSON.stringify(childTaskId)} does not verify`)
+    }
+    if (runtime.tasks.has(child.taskId) || pendingIds.has(child.taskId)) {
+      fail('CHILD_DUPLICATE', fact, `Child Task ${JSON.stringify(child.taskId)} already exists`)
+    }
+    pendingIds.add(child.taskId)
+
+    const origin = childOriginOf(child, fact)
+    if (
+      origin.parentId !== parent.taskId ||
+      origin.parentRunId !== parentRun.runId ||
+      origin.batchId !== payload.batchId
+    ) {
+      fail(
+        'CHILD_ORIGIN_MISMATCH',
+        fact,
+        `Child ${JSON.stringify(child.taskId)} origin does not match the parent admission`,
+      )
+    }
+    if (pendingBindings.has(origin.bindingId)) {
+      fail(
+        'CHILD_DUPLICATE',
+        fact,
+        `Binding ${JSON.stringify(origin.bindingId)} appears more than once in one batch`,
+      )
+    }
+    pendingBindings.add(origin.bindingId)
+
+    const binding = resolveChildBinding(parentTemplate, origin, fact)
+    if (
+      child.method.id !== parent.contract.method.id ||
+      child.method.digest !== parent.contract.method.digest
+    ) {
+      fail('CHILD_METHOD_MISMATCH', fact, 'Child Task must pin the parent Method revision')
+    }
+    if (child.template.id !== binding.templateId) {
+      fail(
+        'CHILD_TEMPLATE_MISMATCH',
+        fact,
+        `Child template ${JSON.stringify(child.template.id)} does not match binding ${JSON.stringify(binding.templateId)}`,
+      )
+    }
+    resolveTemplate(method, child.template, fact, 'CHILD_TEMPLATE_MISMATCH')
+    if (admitted.join !== binding.join) {
+      fail('CHILD_JOIN_MISMATCH', fact, 'Child join must equal the frozen binding join')
+    }
+    if (parent.depth + 1 > root.contract.limits.maxDepth) {
+      fail('CHILD_LIMIT_EXCEEDED', fact, 'Admission exceeds the root maxDepth budget')
+    }
+
+    assertChildLimits(parent, child)
+    assertReservation(admitted.budgetReservation, child.limits, fact)
+    if (admitted.budgetReservation.tokens > parent.contract.limits.maxTokens) {
+      fail('BUDGET_EXCEEDED', fact, 'Child token reservation exceeds the parent budget')
+    }
+    if (admitted.budgetReservation.deadlineAt > parent.contract.limits.deadlineAt) {
+      fail('BUDGET_EXCEEDED', fact, 'Child deadline exceeds the parent deadline')
+    }
+
+    if (hasBindingWinner(runtime, parent, parentRun.runId, binding.bindingId)) {
+      fail(
+        'BINDING_ALREADY_SATISFIED',
+        fact,
+        `Binding ${JSON.stringify(binding.bindingId)} already has a winner in this Run`,
+      )
+    }
+
+    const eligible = eligiblePredecessors(runtime, parent, binding.bindingId)
+    if (admitted.replacement !== undefined) {
+      assertReplacementTargets(runtime, parent, binding.bindingId, admitted, eligible, fact)
+    } else if (binding.join === 'required' && eligible.length > 0) {
+      fail(
+        'REPLACEMENT_REQUIRED',
+        fact,
+        `Binding ${JSON.stringify(binding.bindingId)} has a terminal failed child; admission must be a replacement`,
+      )
+    }
+
+    pending.push({
+      taskId: child.taskId,
+      contract: child,
+      rootTaskId: parent.rootTaskId,
+      depth: parent.depth + 1,
+      parentTaskId: parent.taskId,
+      parentRunId: parentRun.runId,
+      batchId: payload.batchId,
+      bindingId: binding.bindingId,
+      join: admitted.join,
+      runIds: [],
+      childIds: [],
+      phase: 'open',
+      activeRunId: undefined,
+      supersededBy: undefined,
+      closed: undefined,
+    })
+  }
+
+  const joins = new Map<string, JoinKind>()
+  for (let index = 0; index < payload.children.length; index += 1) {
+    const admitted = payload.children[index]
+    const record = pending[index]
+    joins.set(record.taskId, admitted.join)
+    if (admitted.replacement !== undefined) {
+      for (const supersededId of admitted.replacement.supersedesChildIds) {
+        const superseded = requireTask(runtime, supersededId, fact)
+        superseded.supersededBy = record.taskId
+      }
+    }
+  }
+
+  runtime.batches.set(payload.batchId, {
+    batchId: payload.batchId,
+    parentTaskId: parent.taskId,
+    parentRunId: parentRun.runId,
+    factDigest: fact.digest,
+    childIds: pending.map(record => record.taskId),
+    joins,
+  })
+  for (const record of pending) {
+    runtime.tasks.set(record.taskId, record)
+    parent.childIds.push(record.taskId)
+    parentRun.childIds.push(record.taskId)
+  }
+}
+
+function applyRunSubmitted(runtime: ReducerRuntime, fact: FactOf<'run/submitted'>): void {
+  const payload: RunSubmittedPayload = fact.data
+  const run = requireRun(runtime, payload.runId, fact)
+  if (run.phase === 'closed') {
+    fail('RUN_ALREADY_CLOSED', fact, `Run ${JSON.stringify(run.runId)} is already closed`)
+  }
+  if (run.phase !== 'open') {
+    fail('RUN_NOT_OPEN', fact, `Run ${JSON.stringify(run.runId)} is not open`)
+  }
+  const task = requireTask(runtime, run.taskId, fact)
+  if (task.phase !== 'active' || task.activeRunId !== run.runId) {
+    fail('TASK_NOT_ACTIVE', fact, 'Run is not the active Run of its Task')
+  }
+  if (payload.transcriptOffset.sessionId !== run.opened.sessionId) {
+    fail('SESSION_MISMATCH', fact, 'submission transcript session does not match the Run session')
+  }
+  for (const childId of run.childIds) {
+    const child = requireTask(runtime, childId, fact)
+    if (child.phase !== 'closed') {
+      fail(
+        'CHILD_ACTIVE',
+        fact,
+        `Cannot submit while child Task ${JSON.stringify(child.taskId)} is not terminal`,
+      )
+    }
+  }
+  run.phase = 'submitted'
+  run.submitted = payload
+}
+
+function applyRunClosed(runtime: ReducerRuntime, fact: FactOf<'run/closed'>): void {
+  const payload: RunClosedPayload = fact.data
+  const run = requireRun(runtime, payload.runId, fact)
+  if (run.phase === 'closed') {
+    fail('RUN_ALREADY_CLOSED', fact, `Run ${JSON.stringify(run.runId)} is already closed`)
+  }
+  const task = requireTask(runtime, run.taskId, fact)
+  if (task.phase !== 'active' || task.activeRunId !== run.runId) {
+    fail('TASK_NOT_ACTIVE', fact, 'Run is not the active Run of its Task')
+  }
+  if ('evidenceRef' in payload && run.phase !== 'submitted') {
+    fail(
+      'RUN_CLASSIFICATION_INVALID',
+      fact,
+      'Evidence-backed Run closure requires a submitted Run',
+    )
+  }
+
+  run.closed = runCloseState(payload, fact.digest)
+  run.phase = 'closed'
+  task.activeRunId = undefined
+  task.phase = payload.classification === 'verified' ? 'active' : 'open'
+}
+
+function applyTaskClosed(runtime: ReducerRuntime, fact: FactOf<'task/closed'>): void {
+  const payload: TaskClosedPayload = fact.data
+  const task = requireTask(runtime, payload.taskId, fact)
+  if (task.phase === 'closed') {
+    fail('TASK_ALREADY_CLOSED', fact, `Task ${JSON.stringify(task.taskId)} is already closed`)
+  }
+
+  if (payload.scope === 'subtree') {
+    if (payload.outcome !== 'cancelled') {
+      fail('CANCELLATION_INVALID', fact, 'Only cancelled Task closure may use scope=subtree')
+    }
+    closeSubtree(runtime, task, payload, fact)
+    return
+  }
+
+  switch (payload.outcome) {
+    case 'verified':
+      closeVerified(runtime, task, payload, fact)
+      break
+    case 'failed':
+      closeFailed(runtime, task, payload, fact)
+      break
+    case 'invalid':
+      closeInvalid(runtime, task, payload, fact)
+      break
+    case 'cancelled':
+      closeCancelled(runtime, task, payload, fact)
+      break
+  }
+}
+
+function closeVerified(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  payload: TaskClosedPayload,
+  fact: FactOf<'task/closed'>,
+): void {
+  if (task.phase !== 'active') {
+    fail('TASK_NOT_ACTIVE', fact, 'Verified Task closure requires an active Task projection')
+  }
+  if (task.activeRunId !== undefined) {
+    fail('TASK_ACTIVE_RUN', fact, 'Verified Task closure requires no active Run')
+  }
+  const decisiveRunId = payload.decisiveRunId
+  if (decisiveRunId === undefined) {
+    fail('TASK_OUTCOME_INVALID', fact, 'Verified Task closure requires decisiveRunId')
+  }
+  const decisiveRun = requireRun(runtime, decisiveRunId, fact)
+  if (
+    decisiveRun.taskId !== task.taskId ||
+    decisiveRun.phase !== 'closed' ||
+    decisiveRun.closed?.classification !== 'verified' ||
+    decisiveRun.closed.source !== 'run/closed'
+  ) {
+    fail('TASK_OUTCOME_INVALID', fact, 'decisiveRunId must reference a verified Run closure')
+  }
+  if (task.runIds.at(-1) !== decisiveRun.runId) {
+    fail('TASK_OUTCOME_INVALID', fact, 'decisiveRunId must be the latest Run of the Task')
+  }
+  for (const childId of task.childIds) {
+    const child = requireTask(runtime, childId, fact)
+    if (child.phase !== 'closed') {
+      fail(
+        'CHILDREN_NOT_TERMINAL',
+        fact,
+        `Task ${JSON.stringify(task.taskId)} has non-terminal child ${JSON.stringify(child.taskId)}`,
+      )
+    }
+  }
+
+  const runEvidence = decisiveRun.closed.evidenceRef
+  if (
+    runEvidence === undefined ||
+    !payload.evidenceRefs.some(candidate => sameRef(candidate, runEvidence))
+  ) {
+    fail('EVIDENCE_MISMATCH', fact, 'task/closed evidenceRefs must include decisive Run Evidence')
+  }
+
+  const method = resolveMethod(task.contract.method, runtime, fact)
+  const template = resolveTemplate(method, task.contract.template, fact)
+  for (const binding of template.children) {
+    if (binding.join !== 'required') continue
+    if (!hasBindingWinner(runtime, task, decisiveRun.runId, binding.bindingId)) {
+      fail(
+        'JOIN_UNSATISFIED',
+        fact,
+        `Required binding ${JSON.stringify(binding.bindingId)} has no verified winner in the decisive Run`,
+      )
+    }
+  }
+
+  task.phase = 'closed'
+  task.activeRunId = undefined
+  task.closed = taskCloseState(payload, fact.digest)
+}
+
+function closeFailed(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  payload: TaskClosedPayload,
+  fact: FactOf<'task/closed'>,
+): void {
+  if (task.activeRunId !== undefined) {
+    fail('TASK_ACTIVE_RUN', fact, 'Failed Task closure requires no active Run')
+  }
+  const lastRun = latestRun(runtime, task, fact)
+  if (lastRun.phase !== 'closed' || lastRun.closed?.classification !== 'failed') {
+    fail('TASK_OUTCOME_INVALID', fact, 'Failed Task closure requires the latest Run to be failed')
+  }
+  if (
+    payload.decisiveRunId !== undefined &&
+    payload.decisiveRunId !== lastRun.runId
+  ) {
+    fail('TASK_OUTCOME_INVALID', fact, 'decisiveRunId must be the latest Run for failed closure')
+  }
+  if (retryDecision(runtime, task, lastRun, fact.at).allowed) {
+    fail('RETRY_AVAILABLE', fact, 'Task cannot close failed while retry policy still permits a Run')
+  }
+  task.phase = 'closed'
+  task.activeRunId = undefined
+  task.closed = taskCloseState(payload, fact.digest)
+}
+
+function closeInvalid(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  payload: TaskClosedPayload,
+  fact: FactOf<'task/closed'>,
+): void {
+  if (task.activeRunId !== undefined) {
+    fail('TASK_ACTIVE_RUN', fact, 'Invalid Task closure requires no active Run')
+  }
+  const lastRunId = task.runIds.at(-1)
+  if (lastRunId !== undefined) {
+    const lastRun = requireRun(runtime, lastRunId, fact)
+    if (lastRun.phase !== 'closed' || lastRun.closed?.classification !== 'invalid') {
+      fail('TASK_OUTCOME_INVALID', fact, 'Invalid Task closure requires the latest Run to be invalid')
+    }
+    if (payload.decisiveRunId !== undefined && payload.decisiveRunId !== lastRun.runId) {
+      fail('TASK_OUTCOME_INVALID', fact, 'decisiveRunId must be the latest Run for invalid closure')
+    }
+    const reason = lastRun.closed.reason
+    const decision = retryDecision(runtime, task, lastRun, fact.at)
+    if (runtime.context.transientInvalidReasons.includes(reason) && decision.allowed) {
+      fail(
+        'RETRY_AVAILABLE',
+        fact,
+        'Transient invalid Run can still be retried under the fixed policy',
+      )
+    }
+  }
+  task.phase = 'closed'
+  task.activeRunId = undefined
+  task.closed = taskCloseState(payload, fact.digest)
+}
+
+function closeCancelled(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  payload: TaskClosedPayload,
+  fact: FactOf<'task/closed'>,
+): void {
+  closeTaskRuns(runtime, task, payload.reason, fact.digest)
+  task.phase = 'closed'
+  task.activeRunId = undefined
+  task.closed = taskCloseState(payload, fact.digest)
+}
+
+function closeSubtree(
+  runtime: ReducerRuntime,
+  target: MutableTaskRecord,
+  payload: TaskClosedPayload,
+  fact: FactOf<'task/closed'>,
+): void {
+  const affected = [target, ...descendantsOf(runtime, target.taskId)].filter(
+    task => task.phase !== 'closed',
+  )
+  for (const task of affected) {
+    closeTaskRuns(runtime, task, payload.reason, fact.digest)
+    task.phase = 'closed'
+    task.activeRunId = undefined
+    task.closed =
+      task.taskId === target.taskId
+        ? taskCloseState(payload, fact.digest)
+        : {
+            outcome: 'cancelled',
+            reason: payload.reason,
+            source: 'subtree-cancellation',
+            factDigest: fact.digest,
+          }
+  }
+}
+
+function closeTaskRuns(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  reason: string,
+  factDigest: Digest,
+): void {
+  for (const runId of task.runIds) {
+    const run = requireRun(runtime, runId, undefined)
+    if (run.phase === 'closed') continue
+    run.phase = 'closed'
+    run.closed = {
+      classification: 'cancelled',
+      reason,
+      source: 'subtree-cancellation',
+      factDigest,
+    }
+  }
+}
+
+function descendantsOf(runtime: ReducerRuntime, taskId: string): MutableTaskRecord[] {
+  const result: MutableTaskRecord[] = []
+  const queue = [taskId]
+  while (queue.length > 0) {
+    const parentId = queue.shift()
+    if (parentId === undefined) continue
+    for (const task of runtime.tasks.values()) {
+      if (task.parentTaskId !== parentId) continue
+      result.push(task)
+      queue.push(task.taskId)
+    }
+  }
+  return result
+}
+
+function taskCloseState(payload: TaskClosedPayload, factDigest: Digest): TaskCloseState {
+  return {
+    outcome: payload.outcome,
+    reason: payload.reason,
+    source: 'task/closed',
+    factDigest,
+  }
+}
+
+function runCloseState(payload: RunClosedPayload, factDigest: Digest): RunCloseState {
+  const base = {
+    classification: payload.classification,
+    reason: payload.reason,
+    source: 'run/closed' as const,
+    factDigest,
+    usage: payload.usage,
+  }
+  if ('evidenceRef' in payload) {
+    return { ...base, evidenceRef: payload.evidenceRef }
+  }
+  return { ...base, executionRecordRef: payload.executionRecordRef }
+}
+
+function retryDecision(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  run: MutableRunRecord,
+  now: number,
+): RetryDecision {
+  if (run.phase !== 'closed' || run.closed === undefined) {
+    return { allowed: false, reason: 'latest Run is not closed' }
+  }
+  const closure = run.closed
+  if (closure.source !== 'run/closed') {
+    return { allowed: false, reason: 'latest Run was cancelled by subtree closure' }
+  }
+  switch (closure.classification) {
+    case 'verified':
+      return { allowed: false, reason: 'latest Run is verified' }
+    case 'cancelled':
+      return { allowed: false, reason: 'cancelled Runs are not retried' }
+    case 'invalid':
+      if (!runtime.context.transientInvalidReasons.includes(closure.reason)) {
+        return { allowed: false, reason: 'invalid reason is not pre-listed as transient' }
+      }
+      break
+    case 'failed':
+      break
+  }
+  if (task.runIds.length >= task.contract.limits.maxRuns) {
+    return { allowed: false, reason: 'maxRuns is exhausted' }
+  }
+  if (now >= task.contract.limits.deadlineAt) {
+    return { allowed: false, reason: 'deadline has been reached' }
+  }
+  const totals = subtreeUsage(runtime, task.taskId)
+  if (totals.unknown) {
+    return { allowed: false, reason: 'usage is unknown, so budget cannot be proven' }
+  }
+  if (totals.tokens >= task.contract.limits.maxTokens) {
+    return { allowed: false, reason: 'known token budget is exhausted' }
+  }
+  return { allowed: true, reason: 'retry is permitted' }
+}
+
+function subtreeUsage(runtime: ReducerRuntime, taskId: string): UsageTotals {
+  const totals: UsageTotals = { tokens: 0, unknown: false }
+  const visit = (currentTaskId: string): void => {
+    const task = runtime.tasks.get(currentTaskId)
+    if (task === undefined) return
+    for (const runId of task.runIds) {
+      const run = runtime.runs.get(runId)
+      const entry = run?.closed?.usage
+      if (entry !== undefined) addUsage(totals, entry)
+    }
+    for (const childId of task.childIds) visit(childId)
+  }
+  visit(taskId)
+  return totals
+}
+
+function addUsage(totals: UsageTotals, entry: UsageRecord): void {
+  totals.tokens += entry.inputTokens + entry.outputTokens
+  if (entry.unknownRequests > 0) totals.unknown = true
+  if (entry.summary !== undefined) {
+    totals.tokens += entry.summary.inputTokens + entry.summary.outputTokens
+    if (entry.summary.unknownRequests > 0) totals.unknown = true
+  }
+}
+
+function hasBindingWinner(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  parentRunId: string,
+  bindingId: string,
+): boolean {
+  return task.childIds.some(childId => {
+    const child = runtime.tasks.get(childId)
+    return (
+      child !== undefined &&
+      child.parentRunId === parentRunId &&
+      child.bindingId === bindingId &&
+      child.phase === 'closed' &&
+      child.closed?.outcome === 'verified' &&
+      child.supersededBy === undefined
+    )
+  })
+}
+
+function eligiblePredecessors(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  bindingId: string,
+): MutableTaskRecord[] {
+  const eligible: MutableTaskRecord[] = []
+  for (const childId of task.childIds) {
+    const child = runtime.tasks.get(childId)
+    if (child === undefined) continue
+    if (child.bindingId !== bindingId) continue
+    if (child.phase !== 'closed') continue
+    if (child.closed?.outcome === 'verified') continue
+    if (child.supersededBy !== undefined) continue
+    eligible.push(child)
+  }
+  return eligible
+}
+
+function assertReplacementTargets(
+  runtime: ReducerRuntime,
+  parent: MutableTaskRecord,
+  bindingId: string,
+  admitted: AdmittedChild,
+  eligible: readonly MutableTaskRecord[],
+  fact: FactOf<'task/children-admitted'>,
+): void {
+  const replacement = admitted.replacement
+  if (replacement === undefined) return
+  const targets = replacement.supersedesChildIds
+  if (new Set(targets).size !== targets.length) {
+    fail('REPLACEMENT_TARGET_INVALID', fact, 'Replacement target ids must be unique')
+  }
+  const eligibleIds = new Set(eligible.map(child => child.taskId))
+  if (targets.length !== eligible.length || targets.some(targetId => !eligibleIds.has(targetId))) {
+    fail(
+      'REPLACEMENT_TARGET_INVALID',
+      fact,
+      `Replacement must supersede exactly the terminal nonverified children of binding ${JSON.stringify(bindingId)}`,
+    )
+  }
+  for (const targetId of targets) {
+    const target = requireTask(runtime, targetId, fact)
+    if (target.parentTaskId !== parent.taskId) {
+      fail('REPLACEMENT_TARGET_INVALID', fact, 'Replacement target must be a direct child')
+    }
+    if (target.phase !== 'closed' || target.closed?.outcome === 'verified') {
+      fail(
+        'REPLACEMENT_TARGET_INVALID',
+        fact,
+        'Replacement may supersede only terminal nonverified children',
+      )
+    }
+  }
+}
+
+function resolveChildBinding(
+  template: TaskTemplate,
+  origin: TaskChildOrigin,
+  fact: FactOf<'task/children-admitted'>,
+): ChildBinding {
+  const matches = template.children.filter(binding => binding.bindingId === origin.bindingId)
+  if (matches.length !== 1) {
+    fail(
+      'CHILD_BINDING_MISMATCH',
+      fact,
+      `Binding ${JSON.stringify(origin.bindingId)} is not available on the parent template`,
+    )
+  }
+  return matches[0]
+}
+
+function childOriginOf(
+  contract: TaskContract,
+  fact: FactOf<'task/children-admitted'>,
+): TaskChildOrigin {
+  if (contract.origin.kind !== 'child') {
+    fail('CHILD_ORIGIN_MISMATCH', fact, 'Admitted child contract must have a child origin')
+  }
+  return contract.origin
+}
+
+function assertChildLimits(parent: MutableTaskRecord, child: TaskContract): void {
+  if (child.limits.deadlineAt > parent.contract.limits.deadlineAt) {
+    fail('BUDGET_EXCEEDED', undefined, 'Child deadline exceeds the parent deadline')
+  }
+  if (child.limits.maxTokens > parent.contract.limits.maxTokens) {
+    fail('BUDGET_EXCEEDED', undefined, 'Child token limit exceeds the parent token budget')
+  }
+}
+
+function assertReservation(
+  reservation: { readonly tokens: number; readonly steps: number; readonly deadlineAt: number },
+  limits: TaskLimits,
+  fact: FactOf<'run/opened'> | FactOf<'task/children-admitted'>,
+): void {
+  if (
+    !Number.isSafeInteger(reservation.tokens) ||
+    !Number.isSafeInteger(reservation.steps) ||
+    !Number.isSafeInteger(reservation.deadlineAt) ||
+    reservation.tokens <= 0 ||
+    reservation.steps <= 0 ||
+    reservation.deadlineAt <= 0
+  ) {
+    fail('BUDGET_INVALID', fact, 'Budget reservation must use positive safe integers')
+  }
+  if (
+    reservation.tokens > limits.maxTokens ||
+    reservation.steps > limits.maxStepsPerRun ||
+    reservation.deadlineAt > limits.deadlineAt
+  ) {
+    fail('BUDGET_EXCEEDED', fact, 'Budget reservation exceeds frozen Task limits')
+  }
+}
+
+function resolveContract(
+  ref: Ref,
+  runtime: ReducerRuntime,
+  fact: Fact,
+): TaskContract {
+  const contract = runtime.context.contracts.get(ref.id)
+  if (contract === undefined || contract.digest !== ref.digest) {
+    fail(
+      'CAS_REF_MISSING',
+      fact,
+      `Frozen contract ${JSON.stringify(ref.id)} is missing or has a different digest`,
+    )
+  }
+  return contract
+}
+
+function resolveMethod(
+  ref: Ref,
+  runtime: ReducerRuntime,
+  fact: Fact,
+): MethodRevision {
+  const method = runtime.context.methods.get(ref.id)
+  if (method === undefined || method.digest !== ref.digest) {
+    fail(
+      'CAS_REF_MISSING',
+      fact,
+      `Frozen Method ${JSON.stringify(ref.id)} is missing or has a different digest`,
+    )
+  }
+  if (method.id !== ref.id || !verifyMethodRevision(method)) {
+    fail('METHOD_INVALID', fact, `Frozen Method ${JSON.stringify(ref.id)} does not verify`)
+  }
+  return method
+}
+
+function resolveTemplate(
+  method: MethodRevision,
+  ref: Ref,
+  fact: Fact,
+  code: ReducerErrorCode = 'METHOD_TEMPLATE_MISMATCH',
+): TaskTemplate {
+  const matches = method.templates.filter(template => template.id === ref.id)
+  if (matches.length !== 1 || ref.digest !== method.digest) {
+    fail(
+      code,
+      fact,
+      `Template ${JSON.stringify(ref.id)} must exist once and reuse the Method digest`,
+    )
+  }
+  return matches[0]
+}
+
+function requireTask(
+  runtime: ReducerRuntime,
+  taskId: string,
+  fact: Fact | undefined,
+): MutableTaskRecord {
+  const task = runtime.tasks.get(taskId)
+  if (task === undefined) {
+    fail('UNKNOWN_TASK', fact, `Task ${JSON.stringify(taskId)} is not known`)
+  }
+  return task
+}
+
+function requireRun(
+  runtime: ReducerRuntime,
+  runId: string,
+  fact: Fact | undefined,
+): MutableRunRecord {
+  const run = runtime.runs.get(runId)
+  if (run === undefined) {
+    fail('UNKNOWN_RUN', fact, `Run ${JSON.stringify(runId)} is not known`)
+  }
+  return run
+}
+
+function latestRun(
+  runtime: ReducerRuntime,
+  task: MutableTaskRecord,
+  fact: FactOf<'task/closed'>,
+): MutableRunRecord {
+  const runId = task.runIds.at(-1)
+  if (runId === undefined) {
+    fail('TASK_OUTCOME_INVALID', fact, `Task ${JSON.stringify(task.taskId)} has no Run`)
+  }
+  return requireRun(runtime, runId, fact)
+}
+
+function sameRef(left: Ref, right: Ref): boolean {
+  return left.id === right.id && left.digest === right.digest
+}
+
+function fail(code: ReducerErrorCode, fact: Fact | undefined, message: string): never {
+  throw new ReducerError(code, message, fact)
+}
+
+function snapshot(runtime: ReducerRuntime): TaskRunState {
+  const tasks = new Map<string, TaskState>()
+  for (const [taskId, task] of runtime.tasks) {
+    tasks.set(taskId, {
+      taskId: task.taskId,
+      contract: task.contract,
+      rootTaskId: task.rootTaskId,
+      depth: task.depth,
+      phase: task.phase,
+      activeRunId: task.activeRunId,
+      runIds: [...task.runIds],
+      childIds: [...task.childIds],
+      parentTaskId: task.parentTaskId,
+      parentRunId: task.parentRunId,
+      batchId: task.batchId,
+      bindingId: task.bindingId,
+      join: task.join,
+      supersededBy: task.supersededBy,
+      closed: task.closed === undefined ? undefined : { ...task.closed },
+    })
+  }
+
+  const runs = new Map<string, RunState>()
+  for (const [runId, run] of runtime.runs) {
+    runs.set(runId, {
+      runId: run.runId,
+      taskId: run.taskId,
+      attempt: run.attempt,
+      phase: run.phase,
+      opened: run.opened,
+      submitted: run.submitted,
+      closed: run.closed === undefined ? undefined : { ...run.closed },
+      childIds: [...run.childIds],
+    })
+  }
+
+  const batches = new Map<string, ChildBatchState>()
+  for (const [batchId, batch] of runtime.batches) {
+    batches.set(batchId, {
+      batchId: batch.batchId,
+      parentTaskId: batch.parentTaskId,
+      parentRunId: batch.parentRunId,
+      factDigest: batch.factDigest,
+      childIds: [...batch.childIds],
+      joins: new Map(batch.joins),
+    })
+  }
+
+  return { tasks, runs, batches }
+}
