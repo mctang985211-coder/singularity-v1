@@ -1,6 +1,6 @@
 # S2-C4 任务卡：纯 Task/Run reducer
 
-- **状态**：已完成（纯 protocol Task/Run reducer + 负例）；runtime/FS/CAS IO/真实模型不在本切片。
+- **状态**：已完成（纯 protocol Task/Run reducer + 负例）；S2 Done when 的 C-01/C-05/C-11 纯协议正负例已覆盖，S2 完成。conformance 整体仍 unproven；下一 S3 单 Task/Run 闭环。Method/RSI reducer 属后续。runtime/FS/CAS IO/真实模型不在本切片。
 
 ## Goal
 
@@ -184,6 +184,7 @@ git diff --check
 - Task failed/invalid/cancelled closure：failed 要求最新 Run failed 且 retry 耗尽/不允许；invalid 要求最新 Run invalid，transient 且仍可 retry 时拒绝，非 transient 允许；cancelled 关闭目标自身未关闭 Runs。
 - `scope='subtree'`：必须带 `cancellationCutRef`，无 scope 不得带；目标 outcome 允许 failed/cancelled，descendants 一律 cancelled；一次 fold 关闭目标与所有非 terminal descendants 及其未关闭 Runs；terminal 节点/Run 原样保留；Run closure source 标记为 `subtree-cancellation`，不新增 `run/closed`，事后补写 `run/closed` 拒绝。
 - 非六类 fact（method/rsi）以 `UNSUPPORTED_FACT_TYPE` 明确拒绝；非法状态转换返回稳定 `ReducerErrorCode`。
+- 集成审查修复：跨 Run replacement 只取当前 parent Run；submit required winner 按当前 Run 计算；batch 身份为 `parentRunId`+`batchId`，避免全局误识别；subtree cut 必须带 `cancellationCutRef`；Composition contract/seed 必须与 `run/opened` 匹配。以上均先增加负例再修正，不是只写首版。
 - `index.ts` 导出 admission 与 reducer，`childBatchKey`/`reduceTaskRunFacts` 可从协议入口使用。
 
 ## 仍未验证
@@ -192,3 +193,5 @@ git diff --check
 - Composition 只校验 strict schema、composition domain digest、contract id/digest 与 workspaceSeed；不读取 Composition 引用的 DSH/MCP/skill/CAS 对象内容，也不证明 runtime 实际按该 Composition 启动。
 - Method/RSI reducer、admission command guard、preview/receipt、wake、trace seal 未实现。
 - C-01/C-05/C-06/C-07/C-10/C-11/C-21/C-22 及其他 conformance 仍为 `unproven`。
+
+结论：S2-C4 完成，S2 完成；下一步 S3 单 Task/Run 闭环。Method/RSI reducer 属后续。

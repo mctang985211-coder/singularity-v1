@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；S2-A（protocol JSON/JCS/digest/schema 基础）、S2-B（Task+Method schema、seal 与 tool errors）、S2-C1（获批闭合 fact payload）、S2-C2（pure command/journal replay）与 S2-C3（纯 root/child admission）已完成，S2 继续，下一 Task/Run reducer，Task/RSI 业务实现尚未开始。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；S2-A（protocol JSON/JCS/digest/schema 基础）、S2-B（Task+Method schema、seal 与 tool errors）、S2-C1（获批闭合 fact payload）、S2-C2（pure command/journal replay）、S2-C3（纯 root/child admission）与 S2-C4（纯 Task/Run reducer）已完成，S2 完成，下一步 S3 单 Task/Run 闭环，Task/RSI 业务实现尚未开始。
 
 ## 权威入口
 
@@ -16,7 +16,7 @@ Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中�
 
 - Node `>=24.9.0`
 - pnpm `11.18.0`
-- DSH `0.2.2-alpha.2`（S1-A–S1-E 已完成真实 DSH 组合验证；S2-A/S2-B/S2-C1/S2-C2/S2-C3 protocol 基础已完成）
+- DSH `0.2.2-alpha.2`（S1-A–S1-E 已完成真实 DSH 组合验证；S2-A/S2-B/S2-C1/S2-C2/S2-C3/S2-C4 protocol 基础已完成）
 
 ## 验证
 
@@ -33,7 +33,7 @@ pnpm verify
 - `pnpm test`（`pnpm --recursive test`）：所有 workspace 包的测试，包括 app 宿主组合与 protocol 单元/负例；
 - `pnpm build`（`tsc -b tsconfig.json`）：按根 references 构建 app 与 protocol，输出各自 `dist`。
 
-CI 只保留一个 `verify` job。S1-A–S1-E 已完成；S2-A、S2-B、S2-C1、S2-C2、S2-C3 已完成，frozen install 与根 `pnpm verify` 的 project/typecheck/lint/test/build 全通过（protocol tests 157/157、app tests 6/6，合计 163），`git diff --check` 通过。用户 2026-10-30 已确认 K1–K5，K6 仍未证明；framework/spec-lock/amendment/conformance 已在同一变更更新（spec sha256=`6f4a57e7987c8def2b5e12504fb8a6e2599968161f94115a473b8b98ed29fd91`）。S2 继续，下一 Task/Run reducer；root/child admission 合并、drafts、host pin、authorized inputs、join、identity/batch guards 与 child limits 收紧已实现，但历史消耗/全局 reservation、preview/epoch、FS/CAS IO、catalog 内容、verifier、业务 reducer/runtime/真实模型未验证；C-11 整体仍 unproven，所有 conformance 保持 unproven。领域 RSI 收益需要独立证据，不能由仓库检查推断。
+CI 只保留一个 `verify` job。S1-A–S1-E 已完成；S2-A、S2-B、S2-C1、S2-C2、S2-C3、S2-C4 已完成，frozen install 与根 `pnpm verify` 的 project/typecheck/lint/test/build 全通过（protocol tests 178/178、app tests 6/6，合计 184），`git diff --check` 通过。用户 2026-10-30 已确认 K1–K5，K6 仍未证明；framework/spec-lock/amendment/conformance 已在同一变更更新（spec sha256=`6f4a57e7987c8def2b5e12504fb8a6e2599968161f94115a473b8b98ed29fd91`）。S2 完成（C-01/C-05/C-11 纯协议正负例已覆盖）；conformance 整体仍 unproven（CAS 内容/FS/runtime/DSH/真实模型未验证）。下一步 S3 单 Task/Run 闭环；Method/RSI reducer 属后续，Task/RSI 业务功能尚未实现。领域 RSI 收益需要独立证据，不能由仓库检查推断。
 
 ## 协作流程
 
