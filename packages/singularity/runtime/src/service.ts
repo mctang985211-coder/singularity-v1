@@ -56,28 +56,10 @@ export interface CommandServiceOptions {
   readonly clock: () => number
 }
 
-/** One supporting CAS object written before the command fact. */
-export interface CommandObject {
-  readonly id: string
-  readonly bytes: Uint8Array
-  /** Digest domain for the object; defaults to `object`. */
-  readonly domain?: CasDigestDomain
-}
-
-/**
- * CAS objects for one command. The ordered array is canonical; a string-keyed
- * record or Map is accepted as the same id-to-bytes mapping.
- */
-export type CommandObjects =
-  | readonly CommandObject[]
-  | Readonly<Record<string, Uint8Array>>
-  | ReadonlyMap<string, Uint8Array>
-
 export interface CommandCommitInput<Type extends FactType = FactType> {
   readonly command: NormalizedCommand
   readonly type: Type
   readonly data: FactPayloadMap[Type]
-  readonly objects?: CommandObjects
 }
 
 /**
@@ -93,10 +75,11 @@ const activeWriterRoots = new Set<string>()
  * `open` claims process-local writer ownership for the canonical root, replays
  * the journal, and rebuilds the in-memory command projection. A second live
  * service for the same root rejects with `WRITER_ALREADY_OPEN`; a successful
- * close releases ownership. `commit` serializes every command, writes
- * supporting CAS objects first, then appends exactly one fact after fsync. A
- * repeated commandId with the same commandDigest returns the original fact
- * without appending; a different digest rejects with `IDEMPOTENCY_CONFLICT`.
+ * close releases ownership. Callers write supporting CAS objects through
+ * `putObject` before invoking `commit`, which serializes every command and
+ * appends exactly one fact after fsync. A repeated commandId with the same
+ * commandDigest returns the original fact without appending; a different
+ * digest rejects with `IDEMPOTENCY_CONFLICT`.
  */
 export class CommandService {
   private readonly store: DomainStore
@@ -155,14 +138,13 @@ export class CommandService {
     let store: DomainStore | undefined
     try {
       store = await DomainStore.open({ root })
-      const facts = await store.replay()
       return new CommandService(
         store,
         root,
         actor,
         options.clock,
-        facts,
-        new Map(projectCommandFacts(facts)),
+        store.facts(),
+        new Map(projectCommandFacts(store.facts())),
       )
     } catch (error) {
       if (store !== undefined) {
@@ -181,28 +163,11 @@ export class CommandService {
   /**
    * Commits one normalized command as exactly one fact.
    *
-   * The command and fact are validated before any CAS write; supporting
-   * objects are written before the fact append, and the returned fact exists
-   * only after append + fsync.
+   * The command and fact are validated before append; the returned fact exists
+   * only after append + fsync. Supporting CAS objects must already be durable
+   * through `putObject`.
    */
-  async commit<Type extends FactType>(input: CommandCommitInput<Type>): Promise<Fact> {
-    return this.commitCommand(input)
-  }
-
-  /** Production Task/Run commands share this writer and the protocol fold. */
-  commitTaskRun<Type extends FactType>(
-    input: CommandCommitInput<Type>,
-    transientInvalidReasons: readonly string[],
-  ): Promise<Fact> {
-    return this.commitCommand(input, transientInvalidReasons)
-  }
-
-  /** Rebuilds the sole Task/Run projection from verified journal and CAS. */
-  taskRunState(transientInvalidReasons: readonly string[]): Promise<TaskRunState> {
-    return this.projectTaskRuns(this.factsValue, transientInvalidReasons)
-  }
-
-  private async commitCommand<Type extends FactType>(
+  async commit<Type extends FactType>(
     input: CommandCommitInput<Type>,
     transientInvalidReasons?: readonly string[],
   ): Promise<Fact> {
@@ -269,10 +234,6 @@ export class CommandService {
         })
       }
 
-      for (const object of commandObjectEntries(input.objects)) {
-        await this.store.putObject(object.id, object.bytes, object.domain ?? 'object')
-      }
-
       if (transientInvalidReasons !== undefined) {
         await this.projectTaskRuns([...this.factsValue, sealFact(unsealed)], transientInvalidReasons)
       }
@@ -287,6 +248,11 @@ export class CommandService {
       })
       return fact
     })
+  }
+
+  /** Rebuilds the sole Task/Run projection from verified journal and CAS. */
+  taskRunState(transientInvalidReasons: readonly string[]): Promise<TaskRunState> {
+    return this.projectTaskRuns(this.factsValue, transientInvalidReasons)
   }
 
   private async projectTaskRuns(
@@ -373,35 +339,4 @@ function normalizeRoot(root: unknown): string {
     throw new CommandServiceError('INVALID_ARGUMENT', 'CommandService root must be a non-empty path')
   }
   return resolve(root)
-}
-
-function commandObjectEntries(objects: CommandObjects | undefined): readonly CommandObject[] {
-  if (objects === undefined) return []
-  if (Array.isArray(objects)) return objects as readonly CommandObject[]
-  if (isCommandObjectMap(objects)) {
-    return [...objects].map(([id, bytes]) => ({ id, bytes }))
-  }
-  if (isObjectBytesRecord(objects)) {
-    return Object.entries(objects).map(([id, bytes]) => ({ id, bytes }))
-  }
-  throw new CommandServiceError(
-    'INVALID_ARGUMENT',
-    'Command objects must be an ordered array, record, or Map',
-  )
-}
-
-function isCommandObjectMap(value: unknown): value is ReadonlyMap<string, Uint8Array> {
-  return value instanceof Map
-}
-
-function isObjectBytesRecord(
-  value: unknown,
-): value is Readonly<Record<string, Uint8Array>> {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value) &&
-    !(value instanceof Map) &&
-    !ArrayBuffer.isView(value)
-  )
 }

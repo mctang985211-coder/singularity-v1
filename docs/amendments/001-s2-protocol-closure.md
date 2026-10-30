@@ -1,6 +1,6 @@
 # Amendment 001：S2 protocol closure（fact payload、command 与 admission 最小语义）
 
-- **状态：已批准；K1–K5 已纳入正式规范，实现与证据仍未完成（K6 unproven）。**
+- **状态：已批准；K1–K5 已纳入正式规范。** 本文保留提案与纳入时的基线，当前实现和各场景证据见 [build-plan](../build-plan.md) 与 [conformance](../conformance.md)；K6 的证据规则保持。
 - **批准：** 用户于 2026-10-30 明确回复“确认。请继续”。
 - **日期：** 2026-10-30
 - **基线：** 提案基线 `main` @ `5b5f2584d2572dab83ff97ee5065563feecdb332`；`docs/framework.md` V1 发布规范 1.0；提案时 `spec-lock.json` `sha256:06fa0b717eb1ed83ee3e319c809b1b1569263eb84cbe03abc7259ce6347957c2`。落地后的规范 digest 以 `spec-lock.json` 为准。

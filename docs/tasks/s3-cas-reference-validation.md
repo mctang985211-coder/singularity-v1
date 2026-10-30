@@ -1,6 +1,8 @@
 # S3-A 遗留任务卡：domain-aware CAS 引用校验
 
-- **状态**：实现完成，等待联调审查；不处理 acceptance amendment 002。
+> **historical/superseded**：本切片已完成集成；下文保留当时 scope 和验证记录。当前完整 replay 与 C-11 证据见 [S3 closure](s3-closure.md)、[build-plan](../build-plan.md) 和 [conformance](../conformance.md)。
+
+- **历史状态**：实现完成；当时等待联调审查，不处理 acceptance amendment 002。
 - **分支**：`s3-cas-reference-validation`
 - **Worktree**：`/home/ROXY/code/singularity-v1-cas-reference-validation`
 - **基线**：`origin/main` @ `9eeb8b9`（本地 main 的普通 merge 同步未用于本 worktree）。

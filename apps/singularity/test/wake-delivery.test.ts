@@ -16,11 +16,12 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
+import { createWakeMessage, deliverWakeOnceOrFail, WakeDeliveryRefusedError } from '@singularity/runtime'
+import type { WakeRequest, WakeRefusalState } from '@singularity/runtime'
+
 import { bootSpikeProfile } from '../src/host-composition.ts'
 import { startChatCompletionsFixture } from './fixtures/chat-completions.ts'
 import type { CapturedChatRequest, ChatCompletionsFixture, FixtureReply } from './fixtures/chat-completions.ts'
-import { createWakeMessage, deliverWakeOnceOrFail, WakeDeliveryRefusedError } from './helpers/wake-delivery.ts'
-import type { WakeRequest, WakeRefusalState } from './helpers/wake-delivery.ts'
 
 const CRASH_CHILD_PATH = fileURLToPath(new URL('./fixtures/wake-crash-child.ts', import.meta.url))
 const AGENT_OPTIONS = {

@@ -257,7 +257,7 @@ void test('open rejects middle corruption instead of skipping or truncating it',
   })
 })
 
-void test('CommandService writes CAS objects before one fact and replays the original fact', async () => {
+void test('putObject writes a CAS object before commit and replay returns the original fact', async () => {
   await withRoot(async (root) => {
     let tick = 1_800_000_000_000
     const clock = (): number => tick++
@@ -291,29 +291,19 @@ void test('CommandService writes CAS objects before one fact and replays the ori
 
       const objectBytes = textEncoder.encode('{"proposal":true}')
       const objectDigest = computeDigestBytes('object', objectBytes)
+      const objectRef = ref('proposal-1', objectDigest)
+      assert.deepEqual(await service.putObject(objectRef.id, objectBytes), objectRef)
       const second = await service.commit({
         command: normalized('command-2', { value: 'two' }),
         type: 'rsi/round-closed',
-        data: { ...roundClosed('command-2'), comparisonRef: ref('proposal-1', objectDigest) },
-        objects: [{ id: 'proposal-1', bytes: objectBytes }],
+        data: { ...roundClosed('command-2'), comparisonRef: objectRef },
       })
       assert.equal(second.seq, 1)
       assert.equal(second.prev, first.digest)
-      assert.deepEqual(
-        await inspector.readObject({ id: 'proposal-1', digest: objectDigest }),
-        { bytes: objectBytes },
-      )
+      assert.deepEqual(await inspector.readObject(objectRef), { bytes: objectBytes })
 
       const beforeFailedObject = await readFile(join(root, JOURNAL_FILENAME))
-      await rejectsWithCode(
-        service.commit({
-          command: normalized('command-3', { value: 'three' }),
-          type: 'rsi/round-closed',
-          data: roundClosed('command-3'),
-          objects: [{ id: '', bytes: objectBytes }],
-        }),
-        'INVALID_ARGUMENT',
-      )
+      await rejectsWithCode(service.putObject('', objectBytes), 'INVALID_ARGUMENT')
       assert.deepEqual(await readFile(join(root, JOURNAL_FILENAME)), beforeFailedObject)
     } finally {
       await inspector.close()
@@ -346,28 +336,15 @@ void test('CommandService rejects digest conflicts and keeps idempotency across 
       assert.deepEqual(await readFile(join(root, JOURNAL_FILENAME)), committed)
 
       const conflicting = normalized('command-1', { value: 'different' })
-      const conflictBytes = textEncoder.encode('must-not-be-written')
-      const conflictDigest = computeDigestBytes('object', conflictBytes)
       await rejectsWithCode(
         reopened.commit({
           command: conflicting,
           type: 'rsi/round-closed',
           data: roundClosed('command-1'),
-          objects: [{ id: 'conflict-object', bytes: conflictBytes }],
         }),
         'IDEMPOTENCY_CONFLICT',
       )
       assert.deepEqual(await readFile(join(root, JOURNAL_FILENAME)), committed)
-
-      const inspector = await DomainStore.open({ root })
-      try {
-        await rejectsWithCode(
-          inspector.readObject({ id: 'conflict-object', digest: conflictDigest }),
-          'OBJECT_MISSING',
-        )
-      } finally {
-        await inspector.close()
-      }
 
       await rejectsWithCode(
         reopened.commit({

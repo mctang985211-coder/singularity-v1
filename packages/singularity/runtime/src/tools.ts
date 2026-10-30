@@ -54,10 +54,8 @@ export interface RunToolControllerOptions {
 }
 
 export interface RunToolSnapshot {
-  readonly readSelf: boolean
   readonly planningSketchRef?: Ref
   readonly submission?: FrozenSubmission
-  readonly submitted: boolean
   readonly stopped?: { readonly reason: 'blocked' | 'unsolved'; readonly message: string }
   readonly contextEpoch: ContextEpoch
 }
@@ -152,12 +150,10 @@ export class RunToolController {
   snapshot(): RunToolSnapshot {
     this.refreshEpoch()
     return {
-      readSelf: this.state.readSelf,
       ...(this.state.planningSketchRef === undefined
         ? {}
         : { planningSketchRef: this.state.planningSketchRef }),
       ...(this.state.submission === undefined ? {} : { submission: this.state.submission }),
-      submitted: this.state.submitted,
       ...(this.state.stopped === undefined ? {} : { stopped: this.state.stopped }),
       contextEpoch: this.state.epoch,
     }

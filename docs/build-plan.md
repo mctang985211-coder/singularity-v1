@@ -2,6 +2,8 @@
 
 本文件是非规范构建流。切片顺序可以依据证据调整，但不得改变 `docs/framework.md` 冻结的字段、guard、可见性、权限或完成语义。每个切片单独形成可审查变更，未完成对应证据前不宣称下一阶段能力已经成立。
 
+用户已授权 S4–S7 按既有规范连续自主施工，整体派发入口为 [S4–S7 启动 prompt](tasks/s4-s7-start-prompt.md)。逐片完成行为、结构和证据出口后直接推进下一片。
+
 ## S0 — 仓库与规范门禁
 
 - **状态**：已完成；后续构建从 S1 推进。
@@ -17,8 +19,8 @@
 - **S1-C 出口证据**：真实 DSH profile 与官方 `@modelcontextprotocol/server` `2.2.0` + `@modelcontextprotocol/node` `2.0.0` streamable-http fixture 通过；覆盖 mount 前 allowlist、closed-port startup failure、`server/discover`→`initialize`→`initialized`→`tools/list`→`tools/call`、每请求配置 header、schema/prompt/resource surface、echo/fail/tool/resource guards、`250ms` timeout、pre-abort/in-flight abort、dispose 后声明消失、无新请求及所有 HTTP sockets 关闭。无真实模型请求。根 `pnpm verify` tests `3/3`；详见 `docs/tasks/s1-c-mcp-streamable-http.md`。
 - **S1-D 出口证据**：真实 DSH profile + chat fixture 验证稳定 `MessageId`：首次发送 1 请求；完成后与 resume 后 already-admitted 不新增请求/turn；raw DSH 同 ID followup 对照会第二次购买；pending/removed/unknown/corrupt 全部 fail closed；独立子进程 provider 收到 hanging 请求后 SIGKILL，父 resume 为 interrupted、无 assistant settlement/usage unknown、deliver 不重发且外部请求仍为 1。请求数以 chat fixture 实际 HTTP 计数，不用 `request/header`；仅 test-local helper，无生产 wake authority 或新账本。根 `pnpm verify` tests `5/5`；详见 `docs/tasks/s1-d-wake-delivery.md`。
 - **S1-E 出口证据**：真实 DSH profile + chat fixture 验证 self-read/preview tool result 原 receipt 为 current；dispose/resume 后 surface 仍可见，但 `session/end-seed` 改变 epoch 使 receipt stale；真实 `ctx.compaction.compactNow()` 增加恰好一次 summarizer fixture 请求，`compaction/start`/`summary`/`end` 与 `shadowedSeqs` 齐全，surface/`deriveMessages` 不含旧正文，receipt epoch+surface 双失效；`inbox.clear` 不改变 epoch/surface。helper 直接复用 `@deepseek-ai/dsh-compaction` 公开类型，无平行事件声明。根 `pnpm verify` tests `6/6`；详见 `docs/tasks/s1-e-compaction-epoch.md`。
-- **剩余未验证**：自动 pressure compaction/prune、失败/取消 compaction、pending/removed wake 成功恢复、provider exactly-once、resource read/template 成功内容、C-12 composition mismatch、C-16 manifest/capability precheck 与 C-20 等后续场景；这些不阻挡 S1 已完成的范围，但保持 unproven，C-12/C-16/C-20 整体亦未改为 proven；`docs/conformance.md` 与 `spec-lock.json` 未改。
-- **下一步**：S2 protocol 已完成（S2-A–S2-C4）；S3 进行中，S3-A、PlanningSketch schema、S3-B1、S3-B2 已完成；下一真实模型 retry/resume 与 S3 其余边界验证。
+- **剩余未验证**：自动 pressure compaction/prune、失败/取消 compaction、pending/removed wake 成功恢复、provider exactly-once、resource read/template 成功内容、C-16 manifest/capability precheck 与 C-20 等后续场景；这些不阻挡 S1 已完成的范围。C-12 已由 S3-C 真实模型证据标为 proven，C-16/C-20 保持 unproven。
+- **下一步**：S2 与 S3 已完成；进入 S4 Method、分解、replacement 与祖先反馈。
 - **规范引用**：§2、§3、§12、§14、§19.1。
 - **实现位置**：优先放在未来 runtime 的真实组合测试和 app profile，不新增独立产品包。
 - **工作**：验证 Agent create/resume/setup、scoped prompt/tool/skill、global tool restrict、MCP `stdio` 与 `streamable-http` 挂载及 disposal、concludeTurn、wake 去重、compaction epoch、取消/disposal、实际 prompt/token 计量；两种 transport 均须通过 server/tool guard，不得只验证连接成功。
@@ -35,7 +37,7 @@
 - **S2-C3 出口证据**：官方 Node `24.9.0`/pnpm `11.18.0`，frozen install 与根 `pnpm verify` 全通过；protocol tests `157/157`、app tests `6/6`（合计 `163`），`git diff --check` 通过。root/child 确定性 output 合并、drafts、host pin、authorized inputs、join 派生、batch/identity guards 已实现；补齐 taskId/criteria/input 去重和 child limits 不放大 parent（deadline/depth/tasks/tokens/steps/batch），`maxRuns` 不臆造继承。历史消耗/全局 reservation、preview/epoch、FS/CAS IO、catalog 内容、verifier、runtime/真实模型未验证；所有 conformance unproven。详见 `docs/tasks/s2-c3-admission.md`。
 - **S2-C4 出口证据**：官方 Node `24.9.0`/pnpm `11.18.0`，frozen install 与根 `pnpm verify` 全通过；protocol tests `178/178`、app tests `6/6`（合计 `184`），`git diff --check` 通过。实现单一 Task/Run fold + `ReplayContext`、root ref/method/template、Composition contract/seed、run/retry、children/replacement/current-Run winner、submit required join、subtree cancellation、batch `parentRunId`+`batchId` 与共享 child limits。集成审查修复了跨 Run replacement、submit required winner、batch 全局误识别、cut 强制和 Composition 校验，不是只写首版。C-01/C-05/C-11 纯协议正负例已覆盖；conformance 整体仍 unproven（CAS 内容/FS/runtime/DSH/真实模型未验证）。详见 `docs/tasks/s2-c4-task-run-reducer.md`。
 - **剩余未验证**：CAS 对象内容、journal FS/command service、preview/receipt、context epoch、catalog 内容、verifier、runtime/DSH、真实模型；Method/RSI reducer 属后续；所有 conformance 场景保持 unproven。
-- **下一步**：S3 进行中；S3-A、PlanningSketch schema、S3-B1、S3-B2 已完成；下一真实模型 retry/resume 与 S3 其余边界验证。
+- **下一步**：S3 已完成；进入 S4 Method、分解、replacement 与祖先反馈。
 - **规范引用**：§4、§5、§9、§10。
 - **工作**：建立 `packages/singularity/protocol`，选择单一 schema 权威源，实现冻结对象、闭合 facts、命令 guard、纯 projection、JCS/digest 和错误 union。
 - **Done when**：C-01、C-05 及 C-11 的纯协议部分有正负例；protocol 不依赖 DSH、FS、网络、进程、时钟或领域包；根 `pnpm verify` 已纳入 typecheck、lint、test、build。
@@ -43,21 +45,37 @@
 
 ## S3 — 单 Task/Run 执行闭环
 
-- **状态**：进行中；S3-A、PlanningSketch schema、S3-B1、S3-B2、S3-C 恢复与当前最小修正已有 fixture 证据；C-02 已由真实 DSH + 真实模型证据标为 proven；C-03/C-11/C-12 保持 unproven。下一真实模型 retry/resume 与 S3 其余边界验证。S3 整体未完成。
-- **S3-A 出口证据**：官方 Node `24.9.0`/pnpm `11.18.0`，frozen install 与根 `pnpm verify` 全通过；protocol tests `178/178`、app tests `6/6`、runtime tests `20/20`（合计 `204`），`git diff --check` 通过。根 verify 顺序为 `project → build → typecheck → lint → test`，先 build 解决干净 checkout 的 `protocol/dist` 缺失，不绕过门禁。实现真实 CAS temp/fsync/atomic rename/read 验证、JCS NDJSON fact append/fsync、单 root writer、重启幂等、并发 seq、torn tail、中间损坏拒绝。未验证 CAS 引用内容的 domain-aware replay 校验、跨进程 OS lock、业务结果重建、Agent/verifier/C-02/C-03/C-12；C-11 不得标 proven。详见 `docs/tasks/s3-a-journal-cas.md`。
+- **状态**：已完成；S3-A、PlanningSketch schema、S3-B1、S3-B2、S3-C 全部完成。C-02/C-03/C-11/C-12 均有真实 DSH + 真实模型证据，S3 Done when 已满足；下一阶段为 S4。
+- **S3-A 出口证据**：官方 Node `24.9.0`/pnpm `11.18.0`，frozen install 与根 `pnpm verify` 全通过；protocol tests `178/178`、app tests `6/6`、runtime tests `20/20`（合计 `204`），`git diff --check` 通过。根 verify 顺序为 `project → build → typecheck → lint → test`，先 build 解决干净 checkout 的 `protocol/dist` 缺失，不绕过门禁。实现真实 CAS temp/fsync/atomic rename/read 验证、JCS NDJSON fact append/fsync、单 root writer、重启幂等、并发 seq、torn tail、中间损坏拒绝。详见 `docs/tasks/s3-a-journal-cas.md`。
 - **PlanningSketch schema 出口证据**：官方 Node `24.9.0`，protocol tests `189/189`、app tests `6/6`、runtime tests `20/20`（合计 `215`），根 `pnpm verify` 与 `git diff --check` 通过。schema 只接受有序 `[0,1]` 或 `[0,1,2]` levels，严格拒绝 authority 字段；仅结构校验，无 host guard、receipt 或 runtime。详见 `docs/tasks/s3-planning-schema.md`。
-- **S3-B1 schema 规范纳入（已完成）**：用户于 2026-10-30 批准 amendment 002 A0–A9（原话：“全部确定，以后不需要向我确认任何事，自行推进”）。`docs/framework.md`、`spec-lock.json`、`docs/amendments/002-acceptance-and-submission.md`、`docs/conformance.md`、本计划与 `README.md` 已同步：接受 `AcceptanceRef=object`，冻结 `PublicReceipt`/`SubmissionManifest` strict 字段、host 分类、digest 顺序、`exit`/`timedOut`、`checks`、opaque `privateReceipt` 和 invalid receipt 仅诊断。schema、校验与负例已进入最终 protocol/runtime 测试（见 S3-B2 的 `225/225`、`44/44`）；规范与实现证据的边界见 S3-B2。详见 `docs/amendments/002-acceptance-and-submission.md` 与 `docs/tasks/s3-b1-acceptance-schema.md`。
-- **S3-B2 出口证据**：官方 Node `24.9.0`/pnpm `11.18.0`/DSH `0.2.2-alpha.2`；根 `pnpm verify` 通过 protocol `225/225`、app `11/11`、runtime `44/44`（合计 `280`），`git diff --check` 通过。5 个 DSH 场景覆盖 verified、no-submission、invalid criterion、verifier timeout、symlink；真实模型使用 `http://127.0.0.1:16660/v1`、`deepseek-v4.1-flash`、`reasoning=max`，live verified 通过，Evidence digest `sha256:2cf1acd25b5f46ca5289bab9ccb238502b36d52bc195a7944b3c49bfcd059ec4`。verifier 只读 CAS，workspace 被篡改仍读冻结 bytes；self-read/plan/bash/submit、稳定 wake、fact 顺序、manifest/receipt/usage/sessionCut 均验证；无提交与 invalid 不冒充 Evidence。C-02 标为 proven，C-03/C-11/C-12 保持 unproven。详见 `docs/tasks/s3-b2-single-run.md` 与 `docs/conformance.md`。
-- **当前实现证据**：S3-C fresh retry/resume 的四个 DSH fixture 已通过；生产提交与恢复接通已有 reducer，修复输出祖先 symlink、恢复覆盖、验收 provider、预算 guard、CAS supporting refs 和有界生命周期。NodeView 与实际 dispatch 共享同一提交 denial guard；alpha2 原生 jobs 的 running/stopping 会阻止提交；worker/NodeView/tool schemas/self-read 分页均有固定门禁。普通请求以原 reservation 和累计已知 usage 限制，按 route contextWindow 保守预留；DSH 内部未知请求不 retry，绝对 deadline 传入原生 create/resume/cancel，verifier 等待有界。证据与规模审查见 `docs/tasks/s3-minimal-corrections.md`、`docs/tasks/s3-completion.md`。
-- **剩余未验证**：C-03/C-12 尚无本轮对应真实模型证据；CAS domain-aware 校验已有正负例，但 C-11 完整 replay 符合性仍未证明。固定 profile 的普通 scoped/complete prompt identity 已验证；未来 Method/MCP/skill 的资源装配归后续 S4。自动压缩/summary 的独立计量、不可停止作业 quarantine、跨 Run workspace lease 隔离、完整取消 drain、preview/read receipt 与 S4 资源/child 行为尚待完成。除 C-02 外不升级 conformance。
-- **下一步**：完成 S3 的真实模型 retry/resume、完整 replay/Composition 及取消计量边界，再进入 S4。当前 app profile 关闭自动 compaction，待独立预算接入后再启用。S3 整体未完成。
+- **S3-B1 schema 规范纳入（已完成）**：用户于 2026-10-30 批准 amendment 002 A0–A9（原话：“全部确定，以后不需要向我确认任何事，自行推进”）。`docs/framework.md`、`spec-lock.json`、`docs/amendments/002-acceptance-and-submission.md`、`docs/conformance.md`、本计划与 `README.md` 已同步：接受 `AcceptanceRef=object`，冻结 `PublicReceipt`/`SubmissionManifest` strict 字段、host 分类、digest 顺序、`exit`/`timedOut`、`checks`、opaque `privateReceipt` 和 invalid receipt 仅诊断。详见 `docs/amendments/002-acceptance-and-submission.md` 与 `docs/tasks/s3-b1-acceptance-schema.md`。
+- **S3-B2 出口证据**：真实 DSH + 真实模型单 Run verified 通过，verifier 只读冻结 CAS；self-read/plan/bash/submit、稳定 wake、fact 顺序、manifest/receipt/usage/sessionCut 均验证，无提交与 invalid 不冒充 Evidence。2026-10-31 最终复跑 Evidence digest 为 `sha256:e78abbf37462eb639a0fead42b5dee4ccab3dc9d9ab25da115ac350fe6154af7`。详见 `docs/tasks/s3-b2-single-run.md` 与 `docs/conformance.md`。
+- **S3-C 出口证据**：Node `24.22.2`/pnpm `11.18.0`/DSH `0.2.2-alpha.2`；根 `pnpm verify` 通过 protocol `225/225`、runtime `85/85`、app `31/31`（合计 `341`），全部 live app 场景 `31/31` 通过。真实模型完成 no-submission 后 fresh retry、同 journal 的 closed resume/replay/torn-tail、原 Composition wake 去重与 composition mismatch；retry 公开 `lastAttempt`，canonical workspace freshness 复用 DSH `SessionHeader.cwd`，job teardown failure 结算 `invalid + drainPending`。证据 digest、usage 和未覆盖项见 `docs/tasks/s3-closure.md` 与 `docs/conformance.md`；DSH 生命周期、Run 编排与恢复执行的职责归位见 `docs/tasks/s3-run-responsibility-split.md`。
+- **S4 前结构整理**：结算边界、结构完成门禁和当前 worker 工具面治理见 [S3→S4 结构交接](tasks/s3-s4-structure-handoff.md)；该整理保持 framework/spec-lock 与业务语义。
+- **最终复核**：[S1–S3 复核交接](tasks/s3-final-review.md)补齐全历史 retry workspace guard 与专项回归，并完成规范权威文件名、来源路径、历史任务卡及自主派发入口的编辑性整理；当前验证和规范 digest 见该记录。
+- **剩余未验证**：自动 pressure compaction、summary 独立计量、不可停止进程的实际 sandbox quarantine、preview/read receipt 与未来 Method/MCP/skill 资源装配归后续切片；完整 evaluation Capsule 属 S6，不影响已完成的 S3 范围。除 C-02/C-03/C-11/C-12 外不升级其他 conformance。
+- **下一步**：S4 Method、分解、replacement 与祖先反馈。当前 app profile 关闭自动 compaction，待独立预算接入后再启用。
 - **规范引用**：§9、§10、§11、§15、§19.1。
 - **工作**：建立 runtime 的单 writer/journal/CAS、workspace、Agent 驱动、submit/stop、独立 verifier、Evidence、usage 和恢复。
-- **Done when**：C-02、C-03、C-12 通过真实 DSH 组合；模型自述和 idle 不会完成 Task；提交只消费冻结 CAS；失败与基础设施 invalid 不混淆。
+- **Done when**：C-02、C-03、C-11、C-12 通过真实 DSH 组合；模型自述和 idle 不会完成 Task；提交只消费冻结 CAS；失败与基础设施 invalid 不混淆。
 - **禁止**：第二 writer、第二模型 loop、报告决定验收、从活动 workspace 复验。
+
+### S3 交接后的待验收项
+
+以下登记区分已修复缺陷与后续证据责任，随对应切片关闭；S1–S3 的已交付范围与历史证据保持可追溯。
+
+| 项目 | 当前证据/边界 | 后续 owner 与出口 |
+|---|---|---|
+| 全历史 retry workspace | 已修复；专项回归覆盖第三次复用第一次目录、symlink 与历史 cwd 缺失；真实模型证据仍为两次尝试 | S4-D / S7-B：接入 child retry，并保留全部 attempt 的隔离与恢复证据 |
+| 自动 pressure compaction | 手动 compaction/epoch 已有 S1 证据；当前 profile 关闭自动压缩 | S4-F/G / S7-B：先接独立预算、summary usage、epoch/重读，再启用并验证压力场景 |
+| 不可停止 owned work | 已有 teardown failure 的 invalid/drainPending 回归；实际 sandbox quarantine、descendant cancel 与尾部计量待验证 | S4-D / S6-A/B / S7-B：验证隔离、drain、取消及最终成本 |
+| MCP resource/template 成功内容 | 原生 transport/guard/disposal 已验证；实际资源正文和 template 成功路径尚无完整证据 | S4-A / S7-B：真实资源内容、读取授权和失败清理 |
+| 强杀/掉电恢复与 writer 部署边界 | 已有字节级 replay/torn-tail 与部分 DSH 强杀证据；完整宿主恢复待证明；部署沿单进程 writer 假设 | S7-B/D：验证进程中断与持久化边界，记录存储保证和部署前提 |
+| 执行卡与结算拆分后的新 live 证据 | 最新整理已完成 fixture/DSH 回归；既有模型证据对应整理前的执行卡 | S7-A/B：在最终装配上重跑必要小场景，记录 Composition、usage 与 refs |
 
 ## S4 — Method、分解、replacement 与祖先反馈
 
+- **启动派发**：[S4–S7 整体启动 prompt](tasks/s4-s7-start-prompt.md)；[S4 专项说明](tasks/s4-start-prompt.md)提供细化协议要点。
 - **规范引用**：§4–§8、§12–§14。
 - **工作**：实现 Method pin、资源绑定、PlanningSketch、preview/commit、required/probe obligation、replacement、direct-parent feedback、Contract Summary 和只读祖先查询。
 - **Done when**：C-04–C-09、C-21、C-22 通过；旧合同与 Evidence 不可变；每个 required binding 的 winner/supersession/retry 语义一致；summary usage 归属可核对。
@@ -86,7 +104,7 @@
 
 ## 每片共同出口
 
-- PR 中的 Goal、规范引用、范围和 Done when 完整；
+- 任务卡与 PR 的 Goal、规范引用、范围、Done when 和 Structure done when 完整；结构出口记录最终模块归属、公开导出/依赖变化及大文件的处理理由，按 AGENTS §4.1 审查；
 - 根 `pnpm verify` 通过，且已纳入项目门禁、typecheck、lint、test 和 build；
 - 最终 diff 无越界、第二权威或无关重构；
 - 文档、测试、证据等级和未验证项同步更新；

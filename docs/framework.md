@@ -101,6 +101,8 @@ DSH session log 保存对话和工具轨迹；Singularity journal 保存领域�
 
 采用 DSH 常见的 packages/<group>/<package>、src/index.ts、类型与 runtime 分离、Cordis plugin apply、TS ESM、显式 import type、.ts 源码导入、包 exports、tsconfig references 和统一格式化。
 
+下列目录表达职责与依赖方向；具体内部文件拆分以当前实现和 `AGENTS.md` 的职责表为准。
+
 ~~~text
 singularity/
   packages/singularity/
@@ -1708,7 +1710,7 @@ Host 在写 manifest 和 `run/submitted` 之前必须完成：
 - fresh retry 使用新 Run/session/workspace，合同与 Method 不变；旧 receipt/manifest 不复制、不覆盖、不自动成为新 Run 的验收结果。新 Run 只有重新 submit 并重新验收才可能 verified。
 - `PublicReceipt` 与 `SubmissionManifest` 都是 CAS 对象；host 先写对象，再 append 引用它们的 fact。它们不新增 journal 行、fact type、writer 或 fold。同一 commandId + commandDigest 重放时返回原 `Fact` 及其原 manifest/receipt refs，不重新冻结、不重新验证、不追加 fact。
 - verifier 已完成但 closure 未写时，用固定 `operationId` 和 receipt 身份恢复：身份/digest 可核对则补写 closure；不可核对或超时则 `invalid`，不盲目重复有外部副作用的调用。manifest/receipt 的稳定排序、无时间戳和独立 `timedOut` 使同一提交在重放/重启后产生相同 digest；不同顺序或不同 refs 必须产生不同 digest 并按身份不匹配拒绝。
-- `seq`/`prev`/`commandDigest`/torn-tail 规则不变；CAS 引用内容的 domain-aware replay 校验仍是后续 runtime/reducer 实现工作，本节不声称已补上，也不产生实现或 conformance 证据。
+- `seq`/`prev`/`commandDigest`/torn-tail 规则不变；CAS 引用内容的 domain-aware replay 校验由 runtime/reducer 实现，实际完成范围与 conformance 证据由实现记录独立登记。
 
 ## 16. 从 root terminal 到一个 RSI Round 结束
 
@@ -2259,7 +2261,7 @@ C-24 single-case gain with validation regression is not improved
 ~~~text
 版本：V1 发布规范
 修订：2026-10-30 纳入 amendment 002（Acceptance receipt 与 submission manifest；A0–A9 已批准）
-权威文件：SINGULARITY_FRAMEWORK_V1.md
+权威文件：docs/framework.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威
 ~~~
@@ -2304,7 +2306,7 @@ C-24 single-case gain with validation regression is not improved
 | [001](amendments/001-s2-protocol-closure.md) | 已批准并纳入 | S2 protocol closure（K1–K5）；K6 证据规则不变 |
 | [002](amendments/002-acceptance-and-submission.md) | 2026-10-30 用户批准 A0–A9；已纳入本文与 `spec-lock.json` | `AcceptanceRef=object`、`PublicReceipt`/`SubmissionManifest` strict 字段、host 分类、digest 顺序、`exit`/`timedOut`、`checks`、opaque `privateReceipt`、invalid receipt 仅诊断 |
 
-用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义，但不等于实现、运行验证或 conformance 证据；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的 `proven` 状态仍须后续变更独立完成。规范、lock、相关协议和 conformance 的更新必须与本次批准保持同一语义。
+用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/conformance.md`。规范、lock、相关协议和 conformance 的更新必须与本次批准保持同一语义。
 
 ### 23.3 实现的 review gates
 
@@ -2316,16 +2318,18 @@ C-24 single-case gain with validation regression is not improved
 
 ## 24. 来源、证据与当前交付范围
 
+以下是规范发布时使用的外部资料身份。历史研究位于外部 `singualrity_final` 资料集；DSH 类型来自固定版本安装包。它们用于追溯设计依据，当前施工入口仍是本仓库的规范、构建计划与 conformance。
+
 | 来源 | 本文使用方式 |
 |---|---|
-| [SINGULARITY_FRAMEWORK_V1_REVISION_NOTES.md](/home/ROXY/code/singualrity_final/SINGULARITY_FRAMEWORK_V1_REVISION_NOTES.md) | A–F 用户确认修改与配套设计输入；本发布版将其冻结为统一规范 |
-| [SINGULARITY_HANDOFF.md](/home/ROXY/code/singualrity_final/SINGULARITY_HANDOFF.md)、[SINGULARITY_BLUEPRINT.md](/home/ROXY/code/singualrity_final/SINGULARITY_BLUEPRINT.md) | 研究入口与候选结构；没有继承其接口或规范状态 |
-| [core protocol 研究](/home/ROXY/code/singualrity_final/analysis/01-core-protocol-state-machines.md)、[assembly/RSI 研究](/home/ROXY/code/singualrity_final/analysis/02-core-assembly-rsi-runtime.md)、[legacy 对照](/home/ROXY/code/singualrity_final/analysis/03-legacy-vs-core-domain-rsi.md) | 理解旧责任边界、模型界面和具体膨胀来源 |
-| [失败诊断](/home/ROXY/code/singualrity_final/analysis/04-failure-diagnosis.md)、[对抗审查](/home/ROXY/code/singualrity_final/analysis/adversarial-review.md) | 区分评测经济、模型完成合同与状态/恢复问题；不把模型陈述当实跑结论 |
-| [冻结 V8.2 cut](/home/ROXY/code/singualrity_final/analysis/evidence/v8-2-cut-20261028T1725/cut.json) | 固定研究所据的历史记录；本文没有重新购买实验或使用活跃日志数字 |
-| [DSH Agent types](/home/ROXY/code/singularity/.tooling/dsh-022/node_modules/@deepseek-ai/dsh-agent/lib/types/index.d.ts)、[runtime types](/home/ROXY/code/singularity/.tooling/dsh-022/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts) | 核对 create/resume/setup、inbox、wake、idle 和 handle ownership |
-| [DSH tool contracts](/home/ROXY/code/singularity/.tooling/dsh-022/node_modules/@deepseek-ai/dsh-tools/lib/types/contracts.d.ts)、[skill registry](/home/ROXY/code/singularity/.tooling/dsh-022/node_modules/@deepseek-ai/dsh-skill/lib/types/index.d.ts)、[system prompt](/home/ROXY/code/singularity/.tooling/dsh-022/node_modules/@deepseek-ai/dsh-system-prompt/lib/types/index.d.ts) | 核对工具 guard/并发、concludeTurn、资源继承与 prompt contribution 边界 |
+| `SINGULARITY_FRAMEWORK_V1_REVISION_NOTES.md` | A–F 用户确认修改与配套设计输入；本发布版将其冻结为统一规范 |
+| `SINGULARITY_HANDOFF.md`、`SINGULARITY_BLUEPRINT.md` | 研究入口与候选结构；没有继承其接口或规范状态 |
+| `analysis/01-core-protocol-state-machines.md`、`02-core-assembly-rsi-runtime.md`、`03-legacy-vs-core-domain-rsi.md` | 理解旧责任边界、模型界面和具体膨胀来源 |
+| `analysis/04-failure-diagnosis.md`、`analysis/adversarial-review.md` | 区分评测经济、模型完成合同与状态/恢复问题；不把模型陈述当实跑结论 |
+| `analysis/evidence/v8-2-cut-20261028T1725/cut.json` | 固定研究所据的历史记录；本文没有重新购买实验或使用活跃日志数字 |
+| `@deepseek-ai/dsh-agent@0.2.2-alpha.2` 的 `lib/types/index.d.ts`、`runtime-types.d.ts` | 核对 create/resume/setup、inbox、wake、idle 和 handle ownership |
+| 同版本 `@deepseek-ai/dsh-tools/lib/types/contracts.d.ts`、`dsh-skill/lib/types/index.d.ts`、`dsh-system-prompt/lib/types/index.d.ts` | 核对工具 guard/并发、concludeTurn、资源继承与 prompt contribution 边界 |
 
 DSH 类型核对不等于 runtime conformance。持久 wake 去重、compaction 后阅读义务、完整工具门禁、sandbox/read isolation、取消/恢复与 prompt 实际大小仍必须在实现阶段针对确切版本验证。第 19.2 节只是协议演示，没有任何新领域收益成绩。
 
-本次交付是 V1 发布规范及其文档一致性检查；本轮未实现、迁移、激活 Method 或修改旧项目源码。原始 0.1 草案和修订草案保留作历史参考，不能与本发布版混用。
+本节记录 V1 规范发布时的交付范围：规范及文档一致性检查。当前实现进度、运行证据和未验证项见 `docs/build-plan.md` 与 `docs/conformance.md`。原始 0.1 草案和修订草案保留作历史参考。

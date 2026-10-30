@@ -660,7 +660,7 @@ void test('an empty journal remains valid and a wrong-domain memory ref does not
   })
 })
 
-void test('CommandService writes domain-tagged objects and restart replay validates them', async () => {
+void test('CommandService putObject writes domain-tagged objects and restart replay validates them', async () => {
   await withRoot(async (root) => {
     const serviceActor: FactActor = { kind: 'operator', id: 'operator-service-reference' }
     const command: NormalizedCommand = {
@@ -678,11 +678,11 @@ void test('CommandService writes domain-tagged objects and restart replay valida
 
     const first = await CommandService.open({ root, actor: serviceActor, clock: () => at })
     try {
+      assert.deepEqual(await first.putObject(methodRef.id, bytes, 'method'), methodRef)
       const fact = await first.commit({
         command,
         type: 'method/registered',
         data: { revision: methodRef },
-        objects: [{ id: methodRef.id, bytes, domain: 'method' }],
       })
       assert.equal(fact.seq, 0)
     } finally {
@@ -728,28 +728,29 @@ void test('commit rejects invalid refs before fsync without consuming seq and ig
       const sizeBefore = (await stat(journalPath)).size
 
       const orphanBytes = encoder.encode('orphan written before failed commit')
+      const orphanRef = await service.putObject('orphan-object', orphanBytes)
       const missingContract: Ref = { id: 'missing-contract', digest: digestB }
       await rejectsWithCode(
         service.commit({
           command: makeCommand('command-missing-ref'),
           type: 'task/admitted',
           data: { taskId: 'task-missing', contract: missingContract },
-          objects: [{ id: 'orphan-object', bytes: orphanBytes }],
         }),
         'OBJECT_MISSING',
       )
       assert.deepEqual(await readFile(journalPath), journalBefore)
       assert.equal((await stat(journalPath)).size, sizeBefore)
       assert.equal(service.facts().length, 1)
+      assert.deepEqual(await inspector.readObject(orphanRef), { bytes: orphanBytes })
 
       const wrongBytes = encoder.encode('wrong domain object')
       const wrongDigest = computeDigestBytes('evidence', wrongBytes)
+      await service.putObject('wrong-domain', wrongBytes, 'evidence')
       await rejectsWithCode(
         service.commit({
           command: makeCommand('command-wrong-domain'),
           type: 'task/admitted',
           data: { taskId: 'task-wrong', contract: { id: 'wrong-domain', digest: wrongDigest } },
-          objects: [{ id: 'wrong-domain', bytes: wrongBytes, domain: 'evidence' }],
         }),
         'OBJECT_DOMAIN_MISMATCH',
       )

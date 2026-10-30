@@ -60,14 +60,6 @@ export function deriveContextEpochFromEvents(
   return deriveEpoch(sessionId, markers)
 }
 
-/** Whether a receipt-issuing epoch still matches the current raw log. */
-export function isContextEpochCurrent(
-  session: Session,
-  epoch: ContextEpoch,
-): boolean {
-  return deriveContextEpoch(session) === epoch
-}
-
 function deriveEpoch(sessionId: string, markers: readonly string[]): ContextEpoch {
   const material = [EPOCH_PREFIX, sessionId, ...markers].join('\n')
   return `sha256:${createHash('sha256').update(material).digest('hex')}`

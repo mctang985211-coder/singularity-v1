@@ -9,15 +9,10 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { JobView } from '@deepseek-ai/dsh-jobs'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 
-import {
-  sealPublicReceipt,
-  sealSubmissionManifest,
-  sealTaskContract,
-} from '@singularity/protocol'
+import { sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type {
   PublicReceipt,
   Ref,
-  SubmissionManifest,
   TaskContract,
 } from '@singularity/protocol'
 
@@ -72,28 +67,6 @@ function makeContract(constraints: string[] = []): TaskContract {
   })
 }
 
-function makeManifest(contract: TaskContract, outputRef: Ref): SubmissionManifest {
-  return sealSubmissionManifest({
-    v: 1,
-    taskId: contract.taskId,
-    runId: 'run-verify',
-    contractDigest: contract.digest,
-    includeLearningDrafts: false,
-    outputs: [
-      {
-        id: 'out',
-        path: 'out.txt',
-        kind: 'file',
-        role: 'deliverable',
-        required: true,
-        object: outputRef,
-      },
-    ],
-    learningDrafts: [],
-    checks: [{ outputId: 'out', bytes: 5, symlinks: 'none' }],
-  })
-}
-
 function receipt(
   contract: TaskContract,
   provider: Ref,
@@ -144,7 +117,6 @@ async function run(
   options: {
     readonly verifier: RunVerifier
     readonly contract: TaskContract
-    readonly manifest: SubmissionManifest
     readonly outputRef: Ref
   },
   clock: () => number = () => 0,
@@ -152,7 +124,6 @@ async function run(
   return verifyRunSubmission({
     contract: options.contract,
     runId: 'run-verify',
-    manifest: options.manifest,
     inputs: [{ id: 'input', digest: digestA }],
     outputs: [options.outputRef],
     verifier: options.verifier,
@@ -167,7 +138,7 @@ void test('host deadline bounds a verifier that never returns', async () => {
     const contract = makeContract()
     const result = await Promise.race([
       run(store, {
-        contract, manifest: makeManifest(contract, outputRef), outputRef,
+        contract, outputRef,
         verifier: { provider: contract.acceptance, verify: () => new Promise<never>(() => {}) },
       }, () => contract.limits.deadlineAt - 10),
       new Promise<'hung'>(resolve => { setTimeout(() => { resolve('hung') }, 100) }),
@@ -185,7 +156,7 @@ void test('host rejects receipts returned at the deadline or after an invalid cl
     for (const finishedAt of [contract.limits.deadlineAt, contract.limits.deadlineAt - 2, NaN]) {
       let now = contract.limits.deadlineAt - 1
       const result = await run(store, {
-        contract, manifest: makeManifest(contract, outputRef), outputRef,
+        contract, outputRef,
         verifier: {
           provider: contract.acceptance,
           verify() {
@@ -204,13 +175,11 @@ void test('host classifies verified and failed receipts and writes the receipt t
   await withStore(async store => {
     const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    const manifest = makeManifest(contract, outputRef)
     const provider = contract.acceptance
 
     let readBack = ''
     const verified = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -230,7 +199,6 @@ void test('host classifies verified and failed receipts and writes the receipt t
 
     const failed = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -249,12 +217,10 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
   await withStore(async store => {
     const outputRef = await store.putObject('output-invalid', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    const manifest = makeManifest(contract, outputRef)
     const provider = contract.acceptance
 
     const selfVerdict = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -268,7 +234,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const timedOut = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -283,7 +248,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const signalled = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -298,7 +262,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const wrongProvider = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -309,7 +272,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const wrongDigest = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -322,7 +284,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const allPassExitOne = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -333,7 +294,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const thrown = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -349,11 +309,9 @@ void test('timeout reason is stable for transient retry policy matching', async 
   await withStore(async store => {
     const outputRef = await store.putObject('output-timeout', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    const manifest = makeManifest(contract, outputRef)
     const provider = contract.acceptance
     const result = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -370,7 +328,6 @@ void test('frozen acceptance rejects a substituted verifier before it receives C
   await withStore(async store => {
     const outputRef = await store.putObject('output-provider', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    const manifest = makeManifest(contract, outputRef)
     for (const provider of [
       { ...contract.acceptance, id: 'other-provider' },
       { ...contract.acceptance, digest: digestB },
@@ -378,7 +335,6 @@ void test('frozen acceptance rejects a substituted verifier before it receives C
       let called = false
       const result = await run(store, {
         contract,
-        manifest,
         outputRef,
         verifier: {
           provider,

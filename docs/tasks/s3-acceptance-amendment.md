@@ -1,6 +1,8 @@
 # S3 前置任务卡：Acceptance amendment（最终候选）
 
-- **状态：最终候选，待用户一次性确认；未批准、未实现。** 本任务只修改两份文档，不修改规范、源码或 conformance。
+> **historical/superseded**：amendment 002 已于 2026-10-30 获用户批准并纳入规范；下文保留候选提案阶段的范围与证据，不再阻断实现或要求确认。正式记录见 [amendment 002](../amendments/002-acceptance-and-submission.md) 和 [build-plan](../build-plan.md)。
+
+- **状态：候选阶段已结束；已批准并纳入正式规范。** 下文的“两份文档”范围属于历史任务。
 - **分支：** `s3-acceptance-amendment-final`
 - **基线：** `main` @ `bf79e3a7fec560ab91d62de867c2d41d22f0de7a`（含 PlanningSketch schema 与 amendment 002 草案）。
 - **Worktree：** `/home/ROXY/code/singularity-v1-acceptance-final`

@@ -1,5 +1,7 @@
 # S3-C 任务卡：fresh retry 与 Run 恢复 app 集成
 
+> **historical/superseded**：下文保留最初 app 集成的范围与 fixture 证据；不再限制后续 conformance 状态。最终真实模型与闭合证据见 [S3 closure](s3-closure.md)、[build-plan](../build-plan.md) 和 [conformance](../conformance.md)。
+
 - **状态**：实现完成；app 4 个场景通过真实 DSH `0.2.2-alpha.2` + scripted chat fixture。
 - **Worktree**：`/home/ROXY/code/singularity-v1-swarm-recovery`
 - **分支**：`s3-c-swarm-recovery`，基线 `ec8d084`（S3-B2 单 Run 执行闭环）。

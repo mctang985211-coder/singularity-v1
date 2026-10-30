@@ -16,13 +16,14 @@ import type { CasObjectWriter } from '@singularity/runtime'
 
 const REQUIRED_DSH_VERSION = '0.2.2-alpha.2'
 const PROFILE_NAME = 'singularity'
+const DEFAULT_BASE_URL = 'http://127.0.0.1:16660/v1'
 const BASE_URL_ENV = 'SINGULARITY_SPIKE_BASE_URL'
 const API_KEY_ENV = 'SINGULARITY_SPIKE_API_KEY'
 
 export interface SpikeProfileOptions {
   /** Harness home for this run; defaults to `DSH_HOME`, then a disposable temporary directory. */
   readonly home?: string
-  /** OpenAI-compatible endpoint; defaults to `SINGULARITY_SPIKE_BASE_URL`. */
+  /** OpenAI-compatible chat endpoint; `SINGULARITY_SPIKE_BASE_URL` overrides the local default. */
   readonly baseURL?: string
   /** Launch credential; defaults to `SINGULARITY_SPIKE_API_KEY` and never enters process env. */
   readonly apiKey?: string
@@ -140,7 +141,7 @@ async function releaseHome(home: string, previousHome: string | undefined, owned
 
 export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promise<SpikeProfile> {
   const dshVersion = await assertDshVersion()
-  const baseURL = required(BASE_URL_ENV, options.baseURL ?? process.env[BASE_URL_ENV])
+  const baseURL = options.baseURL ?? process.env[BASE_URL_ENV] ?? DEFAULT_BASE_URL
   const apiKey = required(API_KEY_ENV, options.apiKey ?? process.env[API_KEY_ENV])
 
   const configuredHome = options.home ?? process.env.DSH_HOME

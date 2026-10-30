@@ -519,7 +519,6 @@ class ReferenceValidator {
   private readonly objectsPath: string
   private readonly verifiedBytes = new Map<string, Promise<Uint8Array>>()
   private readonly validatedStructures = new Set<string>()
-  private readonly activeStructures = new Set<string>()
 
   constructor(objectsPath: string) {
     this.objectsPath = objectsPath
@@ -679,9 +678,8 @@ class ReferenceValidator {
     kind: StructuredKind,
   ): Promise<void> {
     const key = `${domain}\u0000${ref.digest}\u0000${kind}`
-    if (this.validatedStructures.has(key) || this.activeStructures.has(key)) return
+    if (this.validatedStructures.has(key)) return
 
-    this.activeStructures.add(key)
     try {
       const bytes = await this.read(ref, domain)
       switch (kind) {
@@ -734,8 +732,6 @@ class ReferenceValidator {
     } catch (error) {
       if (error instanceof DomainStoreError) throw error
       throw referenceInvalid(`CAS object is not a valid ${kind}`, error)
-    } finally {
-      this.activeStructures.delete(key)
     }
   }
 

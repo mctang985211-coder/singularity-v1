@@ -1,6 +1,8 @@
 # S3 PlanningSketch schema 任务卡
 
-- **状态**：已完成（纯 protocol strict schema 与 `z.infer` 类型；levels 已按集成审查收紧为 `[0,1]`/`[0,1,2]` schema union）；S3 继续，未实现 host guard、receipt 或 runtime。acceptance/submission amendment 仍待用户确认，S3 验收前规范阻断，不宣称 S3-B 开始。
+> **historical/superseded**：amendment 002 已获批准并纳入规范，S3 也已闭合。下文仅保留 schema 切片当时的范围与证据；当前状态见 [build-plan](../build-plan.md) 和 [conformance](../conformance.md)。
+
+- **历史状态**：schema 切片已完成（纯 protocol strict schema 与 `z.infer` 类型；levels 收紧为 `[0,1]`/`[0,1,2]` schema union）；当时未实现 host guard、receipt 或 runtime。
 
 ## Goal
 

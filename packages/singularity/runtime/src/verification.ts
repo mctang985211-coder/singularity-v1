@@ -15,7 +15,6 @@ import type {
   PublicReceiptValidation,
   Ref,
   SessionCut,
-  SubmissionManifest,
   TaskContract,
   UsageRecord,
   VerifyRequest,
@@ -64,7 +63,6 @@ export interface RunVerifier {
 export interface RunVerificationInput {
   readonly contract: TaskContract
   readonly runId: string
-  readonly manifest: SubmissionManifest
   readonly inputs: readonly Ref[]
   readonly outputs: readonly Ref[]
   readonly verifier: RunVerifier

@@ -116,7 +116,7 @@ void test('freezes files, trees, drafts, checks, and a strict manifest in CAS', 
         '__skill-drafts',
         '__mcp-drafts',
       ])
-      assert.deepEqual(frozen.checks.map(check => check.outputId), [
+      assert.deepEqual(frozen.manifest.checks.map(check => check.outputId), [
         'out-file',
         'out-tree',
         '__skill-drafts',
@@ -170,7 +170,7 @@ void test('optional outputs may be absent and drafts stay empty when disabled', 
       })
       assert.equal(frozen.manifest.outputs[1]?.object, undefined)
       assert.deepEqual(frozen.manifest.learningDrafts, [])
-      assert.equal(frozen.checks.length, 1)
+      assert.equal(frozen.manifest.checks.length, 1)
     })
   })
 })

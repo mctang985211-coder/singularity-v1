@@ -1,6 +1,8 @@
 # S3-B2 任务卡：单 Run 执行闭环 app 集成
 
-- **状态**：已完成；S3 继续，下一 fresh retry/resume composition mismatch。
+> **historical/superseded**：本卡保留首次单 Run app 集成证据；后续 fresh retry、resume 和 S3 闭合已完成。当前阶段与 conformance 见 [S3 closure](s3-closure.md)、[build-plan](../build-plan.md) 和 [conformance](../conformance.md)。
+
+- **历史状态**：本切片已完成；当时下一步为 fresh retry/resume composition mismatch。
 
 ## Goal
 

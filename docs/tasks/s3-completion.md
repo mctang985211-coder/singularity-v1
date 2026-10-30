@@ -1,5 +1,7 @@
 # S4 前实现闭合与最薄审查
 
+> **historical/superseded**：本卡保留当时的审查结果与验证次数；阶段状态和后续阻断结论已由 [S3 closure](s3-closure.md)、[build-plan](../build-plan.md) 和 [conformance](../conformance.md) 取代，不再作为施工指令。
+
 - Goal：按冻结 framework 完成 S1–S3 适用行为及证据，逐项核对已有代码是否由当前消费者需要；不以测试通过代替框架符合性。
 - Spec refs：framework §2–§4、§9–§15.3、§19.1、§21；build-plan S1–S3；conformance C-01/C-02/C-03/C-11/C-12。
 - 允许范围：既有 protocol/runtime/app 实现与对应现有测试、README/build-plan/conformance 证据登记；不修改 framework/spec-lock，不进入 S4，不升级依赖。

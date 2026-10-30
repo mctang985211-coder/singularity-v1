@@ -1,5 +1,7 @@
 # S3-A 任务卡：单 writer journal 与 CAS
 
+> **historical/superseded**：本卡保留最初 journal/CAS 切片的证据；“下一步”及 conformance 状态属于当时记录。当前阶段与最终证据见 [S3 closure](s3-closure.md)、[build-plan](../build-plan.md) 和 [conformance](../conformance.md)。
+
 - **状态**：已完成（真实文件 CAS/journal + 单 writer command service）；S3 继续，下一单 Run 执行闭环。
 
 ## Goal

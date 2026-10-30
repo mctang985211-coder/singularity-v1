@@ -1,5 +1,7 @@
 # S3 最小修正
 
+> **historical/superseded**：本卡保留 S3 闭合前一轮修正的范围与 fixture 证据；其中“进入 S4 前”的阻断结论已由 [S3 closure](s3-closure.md) 取代。当前阶段与未验证项见 [build-plan](../build-plan.md) 和 [conformance](../conformance.md)。
+
 ## Goal / Spec refs
 
 按 framework §4.2–4.3、§9–§11、§15.3、§19.1 修复只读审查发现的状态、输出路径、验收身份、预算和恢复缺口。复用既有 reducer、DSH scope 与 CAS，删除被替代的重复推导；不新增 authority、事实、协议字段、依赖或运行时。

@@ -1,111 +1,136 @@
 # Singularity 项目级 Agent 工作约束
 
-## 1. 唯一规范与当前阶段
+## 1. 以唯一规范推进当前阶段
 
-- 唯一 framework/protocol 权威是 `docs/framework.md`，状态为 **V1 发布规范**。旧草案、旧实现、handoff、蓝图和运行记录只作证据与反例。
-- `spec-lock.json` 固定当前规范 digest。规范变化必须先有获批 amendment，再在同一变更中更新规范、lock、相关协议和 conformance。
-- 当前仓库进入 V1 构建阶段，按 `docs/build-plan.md` 从 S1 推进。不得把文件骨架、类型核对或 CI 通过描述成 Task/RSI 功能已经实现。
-- 不继承旧 Singularity、singularity-core、singularity-harness 的接口、状态、兼容层或包结构。不得用代码先形成行为，再回写规范追认。
-- 规范冲突、字段缺失或行为未定义时，停止受影响部分并提出 amendment；独立且已定义的工作可以继续。
+- 以 `docs/framework.md` 作为 framework/protocol 的唯一权威，其状态为 **V1 发布规范**；旧草案、旧实现、handoff、蓝图和运行记录仅用于提供证据与反例。
+- 使用 `spec-lock.json` 固定规范 digest。规范演进先形成获批 amendment，再在同一变更中同步规范、lock、相关协议和 conformance。
+- 按 `docs/build-plan.md` 的切片推进，并以真实行为、证据等级和 Done when 描述进度。文件骨架、类型核对和 CI 通过分别代表其自身证据等级。
+- 用户已授权 S4–S7 连续施工。以 `docs/tasks/s4-s7-start-prompt.md` 为本轮派发入口，完成每片出口后直接推进下一片；任务拆分、同语义修复、文档整理、必要验证与已有协作流程在该授权内自主完成。
+- 当前施工状态由 `docs/build-plan.md`、`docs/conformance.md` 和当前切片任务卡共同给出；标为 historical/superseded 的任务卡保留当时证据，不再下达工作、权限或阶段阻断要求。
+- 新实现从当前规范出发，保持旧 Singularity、singularity-core、singularity-harness 的接口、状态、兼容层和包结构独立于本仓库。
+- 遇到规范冲突、字段缺失或未定义行为时，暂停受影响切片并提交 amendment；继续推进其他已定义且独立的工作。
 
-## 2. 不可绕过的架构边界
+## 2. 保持架构边界
 
-1. 业务概念只保留 Task、Run、Method、Evidence、RsiRound。Task 树是只读投影，不新增 Graph、Workflow、Campaign、Review、Release authority。
-2. 一个 domain journal、一个 command writer、一个 fold、一个 Task wake authority。不得增加第二写入路径、第二事实账本或 transcript mirror。
-3. DSH 拥有 Agent、Session、模型 loop、tool/skill registry、MCP client、prompt/context、persistence 和 sandbox。Singularity 不实现第二个通用模型 loop 或可变资源 registry。
-4. 正式 child Task 使用独立 DSH Agent session。helper 只做有界只读工作，不创建 Task、不调度、不验收、不写合同或 Method。
-5. root 及 descendants 固定同一 Method revision。运行中的合同不可变；新 revision 只影响未来 root。
-6. root acceptance 由 operator/domain 拥有。模型不能自定 verdict/score，不能通过 required、role、output 或 verifier 字段弱化验收。
-7. worker 只创建 direct children。PlanningSketch 不是 Task、Workflow 或调度依据。祖先摘要只是带来源的派生视图，原合同始终是权威。
-8. 领域 Tool 只使用 DSH 原生 MCP server 接入。不得新增 TS 转接层、`entry.execute`、ProcessToolContext、TS process-tool runner 或第二套工具协议。
-9. Method 绑定完整 MCP server；transport 只使用 `docs/framework.md` 冻结且目标 DSH 已验证支持的形式。
-10. Proposer 只提交 MethodPatch。评测、比较、activation 由宿主执行；validation/holdout payload 通过独立视图和对象授权隔离。
-11. 模型可见 prompt 使用正向引导；模型可见预算使用剩余百分比。精确计量只留在宿主。
-12. Round 可连续执行，不引入 Campaign。source replay 只是 smoke evidence，不能单独证明领域改进或自动发布。
+1. 业务概念使用 Task、Run、Method、Evidence、RsiRound；Task 树保持只读投影。
+2. 每个 domain 使用一个 journal、一个 command writer、一个 fold 和一个 Task wake authority；领域事实只进入 journal，对话轨迹留在 DSH session log，并通过 sessionId 与日志区间关联。
+3. DSH 拥有 Agent、Session、模型 loop、tool/skill registry、MCP client、prompt/context、persistence 和 sandbox；Singularity 通过宿主接口组合这些能力。
+4. 正式 child Task 使用独立 DSH Agent session；helper 执行有界只读工作，其产物保持只读。
+5. root 及 descendants 固定同一 Method revision；运行中的合同保持不可变，新 revision 只影响未来 root。
+6. root acceptance 由 operator/domain 拥有；模型提供声明产物，host 根据冻结合同与独立 receipt 分类。
+7. worker 只创建 direct children；PlanningSketch 仅作为模型计划，祖先摘要仅作为带来源的派生视图，原合同始终提供权威内容。
+8. 领域 Tool 通过 DSH 原生 MCP server 接入，Method 绑定完整 server；transport 使用 framework 已冻结且目标 DSH 已验证的形式。
+9. Proposer 只提交 MethodPatch；评测、比较和 activation 由宿主执行，validation/holdout payload 通过独立视图与对象授权隔离。
+10. 模型可见 prompt 使用正向引导，模型可见预算使用剩余百分比；精确计量保留在宿主。
+11. Round 可连续执行，并继续使用 RsiRound 表达；source replay 仅作为 smoke evidence，领域改进由独立多 case 证据证明。
 
-## 3. 变更分类与停止条件
+## 3. 按职责放置代码
 
-### 需要规范 amendment 和用户确认
+保持依赖方向 `runtime → protocol`、`app → runtime`、`domain → protocol public types`。protocol 保持纯 TS，仅允许规范的纯 hash 能力；runtime 复用 DSH，app 只做 composition。
 
-- 新增或改变公开协议字段、authority、状态、fact、命令、工具、模型角色；
-- 改变验收所有者、读取授权、模型可见性、wake 来源、重试/join/replacement/取消语义；
-- 新增 writer、fold、registry、transcript、自动 loop、兼容层或 DSH patch；
-- 升级 DSH/Node、引入新的 MCP transport、改变生产权限或 activation 规则；
-- 用 source replay 替代领域 validation，或把未验证行为写成已完成。
+| 模块 | 负责的职责 | 调用关系 |
+|---|---|---|
+| `protocol/src/*` | 业务类型、schema、guard、纯 reducer、digest、纯视图 | 由 runtime 与 domain 调用 |
+| `runtime/src/store.ts` | 单 journal、CAS、字节级 replay | 由 service 调用 |
+| `runtime/src/service.ts` | normalized command → 单 fact append、唯一 writer、fold 入口 | 由 Run/RSI 命令路径调用 |
+| `runtime/src/errors.ts` | 跨执行模块共享的稳定内部错误与错误码 | 由 agent/run/recovery 调用 |
+| `runtime/src/agent.ts` | DSH create/resume/setup、bounded wait、wake、job drain、session usage/cut | 返回宿主观察，由 Run 编排决定结算 |
+| `runtime/src/run.ts` | Run admission/open/drive、预算/controller、NodeView 与执行编排 | 调用 agent/service/workspace/run-settlement |
+| `runtime/src/run-settlement.ts` | 提交与执行记录的统一结算、CAS/fact commit、结果封存与返回值构造 | 由 run 与 recovery-execution 调用；不拥有 Run admission 或 DSH loop |
+| `runtime/src/recovery-execution.ts` | 既有 Run 的继续、关闭、恢复，以及 frozen journal/Composition/submission 读取 | 复用 run-settlement 与 agent 观察 |
+| `runtime/src/recovery.ts` | retry/resume 宿主入口、固定 retry policy、fresh workspace 检查 | 调用 recovery-execution |
+| `runtime/src/tools.ts` | DSH scoped Task tools 与共享 dispatch guard | 由 Run setup 注册 |
+| `runtime/src/prompt.ts` | 固定 cards、NodeView 类型与模型可见预算展示 | 由 Run/agent composition 调用 |
+| `runtime/src/resources.ts` | Method 冻结资源解析与授权视图 | **planned（S4+；当前树中尚不存在）**，由未来 agent composition 调用 |
+| `runtime/src/workspace.ts` | workspace 准备、no-follow 遍历、输出冻结 | 由 Run 提交路径调用 |
+| `runtime/src/verification.ts` | 独立 verifier、receipt 校验、Evidence/ExecutionRecord 值构建 | 由 run-settlement 结算调用 |
+| `runtime/src/round.ts` | 固定 RsiRound procedure | **planned（S5/S6+；当前树中尚不存在）**，由未来 trace/proposer/evaluation 切片调用 |
 
-Amendment 至少包含：规范条目、最小复现、现有扩展点为何不足、拟改语义、权限与预算影响、兼容性、conformance 变化和用户确认记录。
+新增文件时先将其放入上表对应职责；新职责先核对 framework 的既有对象和模块，再确定最小归属。
 
-### 可在已授权实现任务内完成
+### 正确的结构示例
 
-- 不改变语义的函数拆分、命名、存储实现、性能优化和缺陷修复；
-- 已定义 DomainAdapter 的领域实现和 MethodPatch 范围内的资产变更；
-- 为已定义行为补充测试、文档和诊断。
+以下伪代码展示依赖方向，而不是新增公开接口：
 
-“临时 tool”“兼容 shim”“简单 fallback”“再开一个 driver”都不是豁免理由。受阻时保留可工作的其他部分，明确报告未实现项。
+```ts
+// agent.ts：形成宿主观察，不决定业务 verdict。
+const observation = await driveAgent({ prepared, request, service, mode, controller, ...options })
 
-## 4. 每个编码任务的工作流程
+// run.ts / recovery-execution.ts：根据冻结合同、工具事实和宿主观察，
+// 调用 run-settlement.ts 的同一结算入口。
+const settlement = tools.submission && observation.drainPending === false
+  ? await settleSubmitted(...)
+  : await settleExecutionRecord(...)
 
-1. **先写任务卡**：Goal、Spec refs、允许修改范围、非目标、Done when、检查命令。多包或行为变更先计划，再编辑。
-2. **先读真实依赖**：检查公开类型、所有当前消费者、测试和最近的嵌套 AGENTS.md。不得仅凭旧经验推测接口。
-3. **切最小垂直片段**：一次完成一个可验收行为或一个 conformance scenario。机械重命名与行为修改分开，不顺手重构无关代码。
-4. **先建立失败证据**：优先增加能复现缺陷或违反协议的测试，再实现。不得删除断言、跳过测试、放宽验收或修改规范制造绿色结果。
-5. **保持单一职责**：每个新 abstraction、状态、配置项和依赖都必须指出当前消费者及其保护的不变量；没有当前需要就不添加。
-6. **禁止隐性扩张**：不新增 common/util 杂物层、循环依赖、重复 validator、平行类型体系、死代码、无人使用的 option 或预留扩展点。
-7. **同步文档**：更新受影响的公开类型、README、JSDoc、规范、构建计划和本文件；删除描述旧行为的注释，不写变更历史式注释。
-8. **审查最终 diff**：检查是否越界、是否引入第二权威、是否更新所有消费者、是否有真实执行证据。评审聚焦规范与正确性，不以增加 abstraction 回应所有风格意见。
+// run-settlement.ts：按既有事实和 receipt 完成封存与关闭。
+return finalizeSettlement(...)
+```
 
-并行 Agent 必须修改独立工作区，不共享可写 checkout、workspace、HOME、缓存或未提交变更；不得同时修改同一文件或同一协议切片。
+扩展 child、proposer 或 evaluation 时，沿用这条调用链，让每种状态继续由原有事实和唯一 writer 产生。
 
-## 5. TypeScript、依赖与 DSH 风格
+## 4. 用正向工作法保持薄实现
 
-- 目标宿主固定为 DSH `0.2.2-alpha.2`，Node `>=24.9.0`，pnpm `11.18.0`。不得使用旧 vendored DSH、全局 dsh 或旧 link 依赖冒充目标环境。
-- 采用 `packages/<group>/<package>`、TS ESM、严格类型、`import type`、本地 `.ts` 导入、包 exports、tsconfig references、包级 tests、Cordis effects 和可验证 disposal。
-- `src/types.ts` 只放类型。protocol 不依赖 DSH、FS、网络、进程、时钟或领域包；runtime 不出现领域算法或 suite 分支；app 只做 composition。
-- 依赖方向保持 `runtime → protocol`、`app → runtime`、`domain → protocol public types`。不得反向依赖或跨层读取内部模块。
-- schema 与 TS 类型只设一个权威来源，不得在多个文件手写平行 validator。
-- 新生产依赖必须服务于当前消费者，优先复用 DSH 已有能力，并在 manifest/lockfile 中固定；不得因“常用”而假设依赖存在。
-- 应用程序通过 DSH profile 启动，不另造 CLI、旁路 launcher 或脚本化第二运行时。
+1. **先写任务卡**：包含 Goal、Spec refs、允许范围、非目标、Done when、Structure done when 和检查命令；多包或行为变更先形成最小垂直切片计划。
+2. **先指定当前消费者**：为每个新函数、字段、配置项和分支写明真实调用方、保护的不变量及对应 conformance 场景；候选项先留在任务卡，成熟后随消费者一起引入。
+3. **先读取真实依赖**：核对公开类型、所有当前消费者、测试、DSH 声明和最近的嵌套 AGENTS.md。
+4. **先同语义整理，再接新行为**：当一个文件承载多个独立场景时，先按上表职责做小步拆分，保持协议与运行行为一致，再加入下一场景。
+5. **先建立失败证据**：使用最小复现或 conformance 负例驱动实现，保持原有断言、验收强度和测试启用状态。
+6. **让负例锚定证据**：新失败场景引用 framework、conformance 或已复现日志；真实模型证据用于确定必要行为，fixture 用于高效回归，推测性防护先经过最小复现验证。
+7. **优先复用已有事实**：从 journal、CAS、DSH session/header/tool result 和原生 job/usage 事件派生视图。preview/read receipt 沿用 DSH tool result/CAS，trace 引用 session cut，summary/evaluation usage 沿用 UsageRecord。
+8. **保持测试资产共享**：新模型场景复用现有 profile、chat fixture、wake adapter 和证据读取方式；场景差异留在输入与预期结果。
+9. **以净简化结束切片**：删除零消费者导出、重复投影、平行输入形式、替代写路径和重复 helper，并同步清理旧注释、公开类型、README、构建计划和证据边界。
+10. **审查最终 diff**：确认单一权威、完整消费者、单向运行时依赖和真实执行证据；使用风格评论改善清晰度，而不制造额外 abstraction。
 
-## 6. 验证命令与证据等级
+并行 Agent 使用独立 worktree、独立 `DSH_HOME`、缓存和未提交变更，并按文件与协议切片划分修改范围；宿主 HOME 不作为隔离边界。
 
-当前统一入口：
+### 4.1 结构完成门禁
 
-```text
+- **最小纵切以完整行为与清晰模块归属交付。** 每片同时完成行为验证、职责归位、公开导出审查和依赖方向审查；新职责进入其明确的所属模块。
+- 每张可执行任务卡写出 `Structure done when`，至少包含最终模块归属、公开导出或依赖变化、涉及的超大文件，以及拆分或保留的理由。
+- 生产文件达到 **800 行** 后，新增职责必须在任务卡中给出拆分计划或明确例外；单个切片在已有大文件中增加约 **150 行或 20%**（取较小触发值）时，必须拆出职责，或记录消费者、不变量和暂不拆分的理由。仅增加测试不能替代该记录。
+- 结构整理以净简化和边界清晰为出口：删除无消费者导出、平行入口和重复状态；根据消费者与不变量决定拆分，保持单一 fold、writer 和验收权威。
+
+## 5. 保持 TypeScript、依赖与 DSH 风格一致
+
+- 使用 DSH `0.2.2-alpha.2`、Node `>=24.9.0`、pnpm `11.18.0`；目标环境使用正式安装包和固定 lockfile。
+- 使用 `packages/<group>/<package>`、TS ESM、严格类型、`import type`、本地 `.ts` 导入、包 exports、tsconfig references、包级 tests、Cordis effects 和可验证 disposal。
+- `src/types.ts` 仅承载类型；protocol 与 FS、网络、进程、时钟、DSH 和领域包保持隔离，runtime 与领域算法和 suite 分支保持隔离。
+- schema 与 TS 类型使用一个权威来源，并复用同一 validator。
+- 新生产依赖服务于当前消费者，优先复用 DSH 能力，并在 manifest/lockfile 中固定。
+- 应用通过 DSH profile 启动，组合入口保持在 app。
+
+## 6. 使用统一验证与证据等级
+
+```bash
 pnpm install --frozen-lockfile
 pnpm verify
 ```
 
-`pnpm verify` 是唯一根门禁，依次执行：
+`pnpm verify` 依次执行 `verify:project`、build、typecheck、lint 和 test，是本地与 CI 的唯一根门禁。build 先按 references 生成 protocol 产物，再构建 runtime/app，保证干净 checkout 可验证。
 
-```text
-pnpm verify:project   # node scripts/verify-project.mjs：规范、仓库、CI、架构与 protocol 纯度门禁
-pnpm build            # tsc -b tsconfig.json：按 references 先构建 protocol，再构建 runtime 与 app
-pnpm typecheck        # pnpm --recursive typecheck：所有 workspace 包，覆盖 src 与 test
-pnpm lint             # pnpm --recursive lint：所有 workspace 包
-pnpm test             # pnpm --recursive test：所有 workspace 包
-```
+证据按以下等级记录：
 
-当前根入口已覆盖 app、protocol 与 runtime 的 typecheck、lint、test 和 build。先 build 是为了在干净 checkout（`protocol/dist` 不存在）中先生成 references 产物，typecheck 不依赖未提交的 dist。不得新增绕过根入口的 CI 检查；交付前必须运行根 `pnpm verify`，不能只运行局部测试。
+1. 仓库、类型、schema、reducer、guard 和协议负例。
+2. 真实 Cordis/DSH profile 的声明、dispatch、disposal 和持久状态。
+3. alpha2 的 Agent setup/resume、MCP/skill、concludeTurn、wake、compaction、取消和计量。
+4. 真实模型的 guided Task、递归探索、祖先查询、反馈重规划和连续 Round。
+5. 冻结多 case、validation/holdout、baseline/candidate 隔离及完整成本的领域改进。
 
-证据按以下等级区分：
+最终说明列出实际命令、结果、规范条目、证据 digest 和未验证行为；环境缺失或未执行的场景保持 unproven。
 
-1. **仓库/类型/单元证据**：规范 digest、架构检查、纯 protocol reducer、guard、schema 和负例。
-2. **真实组合证据**：通过实际 Cordis/DSH profile 启动，验证声明与 dispatch 两层门禁、disposal 和持久状态。
-3. **alpha2 集成证据**：真实验证 Agent setup/resume、MCP/skill 可见性、concludeTurn、wake 去重、compaction epoch、取消清理和 prompt/token 计量。
-4. **真实模型证据**：执行普通 guided Task、递归探索、祖先查询、反馈后重规划和连续领域 Round。脚本 Agent 不能替代。
-5. **领域改进证据**：冻结多 case、validation/holdout、baseline/candidate 隔离和完整成本；单题改善或 fixture pass 不属于此等级。
+## 7. 保护权限、数据与不可逆操作
 
-最终说明必须列出实际运行的命令、结果、覆盖的规范条目和未验证行为。测试失败、环境不满足或场景未执行时，明确标记未验证，不得宣布完成。
+- secrets、私有 validation payload、golden answers 和私有 verifier 数据仅进入其授权边界；文档、Composition、日志和证据使用公开引用。
+- 候选 MCP server 在隔离环境运行，配置明确的 filesystem/network/capability/resource limits、timeout 和 cleanup；启动与清理结果按协议结算。
+- 构建任务可在 build-plan 范围内创建分支、提交和 PR，并运行已声明预算内的验证；CI 通过后使用既定自动批准与 squash merge 流程，main 历史保持线性且受保护。
+- S4–S7 必要的小规模模型/领域验证按本轮授权执行：先在任务卡固定 case、请求/token/时间上限和清理条件，再运行并登记全部尝试及费用。更大规模实验按其单独授权执行。
+- 生产部署、生产 Method activation、构建协作流程以外的外部写入和权限扩张按明确的对应授权执行。
+- 环境问题先修复标准路径，并保留可工作的独立切片与明确未验证项；标准检查继续使用根入口。
 
-## 7. 安全、权限与不可逆操作
+## 8. 规范演进与本文件维护
 
-- 不读取、复制或传输 secrets、私有 validation payload、golden answers 或私有 verifier 数据。
-- 候选 MCP server 在隔离环境运行，具有明确 filesystem/network/capability/resource limits、timeout 和 cleanup；启动或清理失败按协议结算，不静默降级。
-- 构建者可在 `docs/build-plan.md` 范围内自主创建分支、提交和 PR，并运行已声明预算内的模型/领域验证；CI 全部成功后，由自动工作流批准，clean PR 直接 squash merge，其余符合条件的 PR 启用 squash auto-merge。不得直接 push main、force push、reset、rebase 或改写历史。
-- 生产部署、Method activation、超出已声明预算的付费实验、其他外部写入或扩大权限仍需明确授权。
-- 不通过破坏性清理绕过测试和环境问题。
-- 标准检查受阻时先修复标准路径，不用旁路脚本替代，不擅自缩小交付范围。
+公开协议字段、authority、状态、fact、命令、工具、模型角色、验收所有者、读取授权、wake 来源、重试/join/replacement/取消语义、writer/fold/registry/transcript、自动 loop、DSH/Node/transport、生产权限和 activation 规则的演进，先形成 amendment 和用户确认。Amendment 包含规范条目、最小复现、既有扩展点分析、拟改语义、权限与预算影响、兼容性和 conformance 变化。
 
-## 8. 本文件的维护
+内部函数拆分、同语义命名/存储/性能/缺陷修复、已定义 DomainAdapter 实现、MethodPatch 资产和已定义行为的测试文档，可沿现有授权切片完成。
 
-保持本文件简短、当前、可执行。只有反复出现的摩擦、仓库无法自明的决定和必须强制的不变量才写入这里；详细协议留在规范，局部规则放在更靠近代码的嵌套 AGENTS.md。嵌套文件不能放宽本文件的架构、权限和证据要求。规范或命令变化时，在同一变更中更新本文件并删除过期规则。
+保持本文件简短、当前、可执行。反复出现的摩擦、仓库无法自明的决定和必须强化的职责边界记录在这里；详细协议留在 framework，局部规则放在更近的嵌套 AGENTS.md。规范或命令变化时同步更新，并及时移除过期规则。
