@@ -1,6 +1,6 @@
 # S2-C3 任务卡：纯 root/child Task admission 合并
 
-- **状态**：已完成（纯 protocol root/child admission 合并）；preview、epoch、FS、runtime 未实现，所有 conformance 保持 `unproven`。
+- **状态**：已完成（纯 protocol root/child admission 合并）；S2 继续，下一 Task/Run reducer。preview、epoch、FS、runtime 未实现，所有 conformance 保持 `unproven`。
 
 ## Goal
 
