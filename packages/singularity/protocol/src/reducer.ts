@@ -226,9 +226,73 @@ interface ReducerRuntime {
   readonly batches: Map<string, BatchRecord>
 }
 
-interface RetryDecision {
+/** Public retry decision; `reason` is diagnostic, never a model verdict. */
+export interface RetryDecision {
   readonly allowed: boolean
   readonly reason: string
+}
+
+/** Frozen inputs for the single retry policy shared by reducer and runtime. */
+export interface RetryPolicyInput {
+  /** Latest Run phase in the Task projection. */
+  readonly runPhase: RunPhase
+  /** Latest Run closure, when closed. */
+  readonly closure?: RunCloseState
+  /** Runs already opened for this Task, including the latest. */
+  readonly runCount: number
+  readonly maxRuns: number
+  readonly maxTokens: number
+  readonly deadlineAt: number
+  /** Host clock in Unix epoch milliseconds. */
+  readonly now: number
+  /** Known subtree input+output tokens, including summary usage. */
+  readonly usageTokens: number
+  /** True when any subtree usage is unknown; retry then fails closed. */
+  readonly usageUnknown: boolean
+}
+
+/**
+ * Applies the fixed retry policy from docs/framework.md §9.2 without reading
+ * a journal, clock, or live registry. Runtime reuses this exact decision and
+ * the reducer calls it for task/closed guards.
+ */
+export function decideRetryPolicy(
+  input: RetryPolicyInput,
+  transientInvalidReasons: readonly string[],
+): RetryDecision {
+  if (input.runPhase !== 'closed' || input.closure === undefined) {
+    return { allowed: false, reason: 'latest Run is not closed' }
+  }
+  const closure = input.closure
+  if (closure.source !== 'run/closed') {
+    return { allowed: false, reason: 'latest Run was cancelled by subtree closure' }
+  }
+  switch (closure.classification) {
+    case 'verified':
+      return { allowed: false, reason: 'latest Run is verified' }
+    case 'cancelled':
+      return { allowed: false, reason: 'cancelled Runs are not retried' }
+    case 'invalid':
+      if (!transientInvalidReasons.includes(closure.reason)) {
+        return { allowed: false, reason: 'invalid reason is not pre-listed as transient' }
+      }
+      break
+    case 'failed':
+      break
+  }
+  if (input.runCount >= input.maxRuns) {
+    return { allowed: false, reason: 'maxRuns is exhausted' }
+  }
+  if (input.now >= input.deadlineAt) {
+    return { allowed: false, reason: 'deadline has been reached' }
+  }
+  if (input.usageUnknown) {
+    return { allowed: false, reason: 'usage is unknown, so budget cannot be proven' }
+  }
+  if (input.usageTokens >= input.maxTokens) {
+    return { allowed: false, reason: 'known token budget is exhausted' }
+  }
+  return { allowed: true, reason: 'retry is permitted' }
 }
 
 interface UsageTotals {
@@ -925,40 +989,21 @@ function retryDecision(
   run: MutableRunRecord,
   now: number,
 ): RetryDecision {
-  if (run.phase !== 'closed' || run.closed === undefined) {
-    return { allowed: false, reason: 'latest Run is not closed' }
-  }
-  const closure = run.closed
-  if (closure.source !== 'run/closed') {
-    return { allowed: false, reason: 'latest Run was cancelled by subtree closure' }
-  }
-  switch (closure.classification) {
-    case 'verified':
-      return { allowed: false, reason: 'latest Run is verified' }
-    case 'cancelled':
-      return { allowed: false, reason: 'cancelled Runs are not retried' }
-    case 'invalid':
-      if (!runtime.context.transientInvalidReasons.includes(closure.reason)) {
-        return { allowed: false, reason: 'invalid reason is not pre-listed as transient' }
-      }
-      break
-    case 'failed':
-      break
-  }
-  if (task.runIds.length >= task.contract.limits.maxRuns) {
-    return { allowed: false, reason: 'maxRuns is exhausted' }
-  }
-  if (now >= task.contract.limits.deadlineAt) {
-    return { allowed: false, reason: 'deadline has been reached' }
-  }
   const totals = subtreeUsage(runtime, task.taskId)
-  if (totals.unknown) {
-    return { allowed: false, reason: 'usage is unknown, so budget cannot be proven' }
-  }
-  if (totals.tokens >= task.contract.limits.maxTokens) {
-    return { allowed: false, reason: 'known token budget is exhausted' }
-  }
-  return { allowed: true, reason: 'retry is permitted' }
+  return decideRetryPolicy(
+    {
+      runPhase: run.phase,
+      closure: run.closed,
+      runCount: task.runIds.length,
+      maxRuns: task.contract.limits.maxRuns,
+      maxTokens: task.contract.limits.maxTokens,
+      deadlineAt: task.contract.limits.deadlineAt,
+      now,
+      usageTokens: totals.tokens,
+      usageUnknown: totals.unknown,
+    },
+    runtime.context.transientInvalidReasons,
+  )
 }
 
 function subtreeUsage(runtime: ReducerRuntime, taskId: string): UsageTotals {
