@@ -77,6 +77,12 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: 0.2.2-alpha.2
         version: 0.2.2-alpha.2(d570a50fd9051dfa7084c71da173b036)
+      '@singularity/protocol':
+        specifier: workspace:*
+        version: link:../../packages/singularity/protocol
+      '@singularity/runtime':
+        specifier: workspace:*
+        version: link:../../packages/singularity/runtime
     devDependencies:
       '@modelcontextprotocol/node':
         specifier: 2.0.0
