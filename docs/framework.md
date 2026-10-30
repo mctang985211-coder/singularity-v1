@@ -134,7 +134,49 @@ Schema 与 TS 类型只选择一个可维护的权威定义源；不要分别手
 
 ## 4. 身份、不可变引用与 Task 业务合同
 
-以下接口定义协议字段；未展开的 Ref 都是 { id, digest }，Digest 为 sha256:<hex>。未知字段、未知版本拒绝，不静默忽略。
+以下接口定义协议字段；所有 Ref 的线形都是 `{ id, digest }`，`Digest` 为 `sha256:<lowercase hex>`。未知字段、未知版本拒绝，不静默忽略。
+
+### 4.0 Digest domain 与 Ref 映射
+
+~~~ts
+interface Ref {
+  readonly id: string
+  readonly digest: Digest
+}
+type ObjectRef = Ref
+type AssetRef = Ref
+type MethodRef = Ref
+type TemplateRef = Ref
+type TaskRef = Ref
+type PreviewRef = Ref
+type EvidenceRef = Ref
+type ExecutionRecordRef = Ref
+type CompositionRef = Ref
+type RoundPlanRef = Ref
+~~~
+
+`Digest = computeDigest(domain, payloadBytes)`，计算式固定为 `SHA256(UTF8("singularity/v1/" + domain + "\n") || payloadBytes)`，结果编码为 `sha256:<lowercase hex>`。结构化对象的 `payloadBytes` 是去掉其最外层 `digest` 字段后的 JCS UTF-8，嵌套引用的 digest 保留；原始文件对象使用原始 bytes；目录/bundle 使用排序 manifest 引用各文件对象，不哈希不稳定的 tar 时间戳。JCS 规则见 §10.1。
+
+Ref 的 domain 由 schema 字段位置决定，线形不携带 domain：
+
+| Ref 类型或字段 | Domain | 规则 |
+|---|---|---|
+| `ObjectRef`、`AssetRef`（inputs、resources、guidance、example、bundle、manifest、config、receipt、planningSketch、feedback 等） | `object` | CAS 原始 bytes；结构化对象为去掉最外层 digest 的 JCS |
+| `MethodRef`（contract.method、method.parent、NodeView.method、RoundPlan.baseMethod 等） | `method` | MethodRevision 去掉最外层 digest 的 JCS |
+| `TemplateRef`（contract.template） | `method` | 其所在 MethodRevision 的 method digest；`id` 在该 revision 的 templates 中存在 |
+| contract refs（`contractDigest`、`ContractSummary.sourceContract`、`TaskRef.digest`、`Evidence.task.digest`、`task/admitted.contract`） | `contract` | TaskContract 去掉最外层 digest 的 JCS |
+| `PreviewRef` / `ackPreview` | `preview` | preview 对象去掉最外层 digest；`ackPreview` 必须等于 `previewRef.digest` |
+| `EvidenceRef`（run/closed、task/closed、NodeView evidenceRef） | `evidence` | Evidence 去掉最外层 digest；ExecutionRecord 不得冒充 |
+| `ExecutionRecordRef` | `object` | ExecutionRecord 去掉最外层 digest |
+| `CompositionRef` | `composition` | Composition 去掉最外层 digest |
+| `RoundPlanRef` | `round-plan` | RoundPlan 去掉最外层 digest |
+| `Fact.prev` / `Fact.digest` | `fact` | fact 去掉最外层 digest |
+| `Fact.commandDigest` | `command` | NormalizedCommand 的 JCS |
+
+- `PreviewRef`、`EvidenceRef`、`ExecutionRecordRef`、`CompositionRef`、`RoundPlanRef` 都是 `Ref` 的语义别名；线形仍是 `{ id, digest }`，domain 由字段位置决定。
+- 未列出的 ref 类型或裸 `Digest` 不猜默认 domain；按 `INVALID_ARGUMENT` 拒绝，直到 amendment 补充。
+- `TemplateRef.digest == MethodRef.digest` 是有意的：template 的权威是冻结的 Method revision，不是独立 CAS 对象。
+- digest 匹配不是读取授权；即使 ref 验证通过，CAS 读取仍受 §12.3/§17.2 scope 限制。
 
 ### 4.1 把“业务义务”与“执行配置”分开
 
@@ -196,7 +238,7 @@ interface TaskContract {
 }
 ~~~
 
-TaskSpec 是模型可以理解的、已由宿主解析后的目标与验收义务；TaskProposal 是模型提交给分解工具的请求；TaskContract 是准入后的冻结实例。模型只能填写 TaskProposal，宿主依据模板的 requiredCriteria、requiredOutputs、acceptancePolicy 和固定资源生成 TaskSpec/TaskContract。模型附加的 `localCriteria` 经过 schema 校验后只能成为 localGuidance；未通过 domain policy 的内容不进入受信 root acceptance。`localOutputs` 只能成为 supporting 输出，不能产生 required deliverable。
+TaskSpec 是模型可以理解的、已由宿主解析后的目标与验收义务；TaskProposal 是模型提交给分解工具的请求；TaskContract 是准入后的冻结实例。模型只能填写 TaskProposal，宿主依据模板的 requiredCriteria、requiredOutputs、acceptancePolicy 和固定资源生成 TaskSpec/TaskContract。模型附加的 `localCriteria` 经过 schema 校验后只能成为 localGuidance；未通过 domain policy 的内容不进入受信 root acceptance。`localOutputs` 只能成为 supporting 输出，不能产生 required deliverable；合并顺序与保留命名空间见 §4.2.1。
 
 准入后任何字段变化都需要另一个 Task；同一 Task 的 retry 不改变目标或验收，也不悄悄读取“最新 Method”。整次 root 执行及 descendants pin 同一个 Method revision。新 revision 只影响新 root。
 
@@ -226,7 +268,7 @@ interface TaskLimits {
   readonly maxRuns: number
   readonly maxStepsPerRun: number
   readonly maxTokens: number           // 本 Task 及子树的总预算
-  readonly deadlineAt: number
+  readonly deadlineAt: number          // Unix epoch ms；行动边界 now < deadlineAt
   readonly maxDepth: number
   readonly maxTasks: number            // 子树累计数量，不因 retry 归零
   readonly maxBatchChildren: number
@@ -257,15 +299,34 @@ Budget 不能在每个 child 重新放大。根预算是最终上限，子任务
 
 maxTokens 计本 Task 子树所有尝试的 inputTokens + outputTokens；cache tokens 若已属于 inputTokens，不重复相加。steps 计实际模型请求，不把一次 tool batch 当成多个模型 step。deadlineAt 为绝对时间，恢复和 retry 不延长。
 
+`at`、`deadlineAt`、`asOf` 统一为 Unix epoch milliseconds（UTC）安全整数，`0 <= value <= Number.MAX_SAFE_INTEGER`；不得用字符串、浮点、`Date`、NaN 或 Infinity。`deadlineAt` 是绝对时间，行动边界只允许 `now < deadlineAt`：`now >= deadlineAt` 不开始新行动，retry/recovery 不延长。无法提供可信时间或检测到时钟回拨时 fail closed，不把回拨解释为更多预算。
+
 首版固定 retry policy：failed 在剩余 maxRuns、根预算和 deadline 内可重试；invalid 仅对领域部署预先列明的 transient infrastructure reasons 重试。cancelled、污染、composition mismatch 和证据损坏不重试。每次 retry 使用新 session/workspace；模型不能修改这项策略。required-child failure 不直接关闭 parent Run：source child 先 terminal，scheduler 写 direct-parent feedback，parent 在 active batch 清空后可以为同一 binding 创建 replacement child。只有 parent 无法继续、显式 stop、no-submission、step limit 或基础设施终结时，当前 parent Run 才按上述 retry policy 关闭。新 parent Run 不自动复用旧 child verdict，必须重新解决本 Run 的 required obligations。
 
 资源 binding 由模板、deployment policy 与 frozen global snapshot 决定。模型提供 skills/tools/method/parentId/verifier 等字段一律拒绝，不能“规范化覆盖掉”后继续。Contract Summary Worker 从冻结合同生成以 `contractDigest` 索引的 ContractSummary；摘要保留 sourceContract 和版本，作为祖先查询的只读便利视图，原合同始终是权威。
+
+### 4.2.1 Output 合并顺序与保留命名空间
+
+root 与 child 准入使用同一个纯函数；合并结果写入冻结 TaskContract，因此合同 digest 由该顺序确定：
+
+~~~text
+base outputs
+→ localOutputs（仅 child；按 proposal 顺序转 role='supporting', required=false）
+→ __skill-drafts（tree, role='skill-draft', required=false）
+→ __mcp-drafts（tree, role='mcp-draft', required=false）
+~~~
+
+- base 顺序严格保留（root: operator/domain 授权 outputs；child: template.requiredOutputs）；local 顺序严格保留；drafts 永远最后，固定 skill 在前、MCP 在后。
+- root 也追加两个 drafts，保持“每个 TaskContract”一致；`includeLearningDrafts` 只控制提交时是否冻结实际目录，不控制是否声明 drafts。
+- 合并后 `id`、`path` 必须唯一；重复 → `INVALID_ARGUMENT`，不覆盖、不去重。base/local 不得使用保留 ID `__skill-drafts`/`__mcp-drafts` 或保留 path `learning-drafts`/`learning-drafts/`；template 使用 draft role/path 在 Method precheck/admission 拒绝。
+- `spec.criteria`、`spec.localGuidance`、`spec.inputs` 保留各自声明/proposal 顺序；localCriteria 不合并进 criteria；acceptance 仍由 host 解析。
+- 失败发生在 append fact 之前：不产生 child、fact 或预算预留。seal 不重排、不追加；admission guard 验证 tail 恰好是两个 drafts。
 
 ### 4.3 AcceptanceRef 的权威
 
 Root 的 criteria、verifier、scorer 来自用户授权的 domain case/operator，不属于 Method。
 
-Child 的 goal、inputs 以及模板允许的局部 guidance 可以由父模型提交 TaskProposal；模板 requiredCriteria、requiredOutputs 和 acceptancePolicy 由宿主强制合并，它们不是 root 的评分标准。`localCriteria` 只进入 TaskSpec.localGuidance，`localOutputs` 只能由 host 转成 `required=false`、`role='supporting'` 的附加输出；二者都不能改变受信 acceptance。child 的验收 provider 由固定 domain acceptance policy 根据冻结业务 spec 解析，模型提供的是实例化数据，不是可执行代码或任意命令。
+Child 的 goal、inputs 以及模板允许的局部 guidance 可以由父模型提交 TaskProposal；模板 requiredCriteria、requiredOutputs 和 acceptancePolicy 由宿主强制合并，它们不是 root 的评分标准。`localCriteria` 只进入 TaskSpec.localGuidance，`localOutputs` 只能由 host 按 §4.2.1 转成 `required=false`、`role='supporting'` 的附加输出；二者都不能改变受信 acceptance。child 的验收 provider 由固定 domain acceptance policy 根据冻结业务 spec 解析，模型提供的是实例化数据，不是可执行代码或任意命令。
 
 因此 RSI 可以改 child template 的目标、预填 criteria、输出结构和分解关系；**不能改已经准入的 Task，不能改 root case、root verifier 或 scorer**。不得把“不能修改 live contract”误解成“不能改未来 child template 的验收描述”。
 
@@ -434,7 +495,7 @@ catalog 超过局部 prompt 上限时必须在 admission 阶段收敛公开集�
 
 每个 TaskContract 都有平台声明的可选 learning-drafts 目录产物。worker 可在这个 workspace 目录写 SKILL.md、MCP server manifest、tool schema、server configuration 和实现源码（例如 Python 或 TS）。
 
-具体做法是在准入后的 spec.outputs 追加两个固定可选 OutputSpec：__skill-drafts → learning-drafts/skills（role=skill-draft）和 __mcp-drafts → learning-drafts/mcp-servers（role=mcp-draft），kind=tree、required=false。原始 root/child 提案不能占用或覆盖这些 ID/path；它们不增加业务验收 criterion。includeLearningDrafts=true 时提交器冻结实际存在的目录，缺省不因没有草稿而失败。
+具体做法是在准入后的 spec.outputs 按 §4.2.1 的顺序追加两个固定可选 OutputSpec：__skill-drafts → learning-drafts/skills（role=skill-draft）和 __mcp-drafts → learning-drafts/mcp-servers（role=mcp-draft），kind=tree、required=false。原始 root/child 提案不能占用或覆盖这些 ID/path；它们不增加业务验收 criterion。includeLearningDrafts=true 时提交器冻结实际存在的目录，缺省不因没有草稿而失败；该 flag 只控制提交时是否冻结实际目录，不控制是否声明 drafts。
 
 - 这些是本次 Task 的附加产物，不是 root 验收必须写的报告。
 - worker 不可注册它们、修改当前 bindings 或把 draft 作为新的 DSH MCP server 挂载。
@@ -579,7 +640,7 @@ response：
 
 ~~~text
 status = preview
-previewRef = ObjectRef
+previewRef = PreviewRef（线形仍为 { id, digest }，digest 使用 preview domain）
 bindingId / templateRef / methodRef / parentRunId
 derived join = binding.join（required 或 probe；模型不可改）
 brief / 完整用例 / 本子任务公开接口
@@ -616,8 +677,8 @@ core + adapter 的准入顺序：
 
 1. active Run、当前 epoch 的 PlanningSketch receipt、预算、深度、Task 数和“当前无 active batch”检查。
 2. 每个 bindingId 确实是本层可见 child binding 或已准入 fallback。
-3. ackPreview 对应当前 Run **已经持久交付**的 prepare result；必须在后续模型 step，不能在同一次 tool batch 中猜测 ack。
-4. instanceSchema、proposal 输入授权、路径和资源总额检查；host 合并 template requiredCriteria/requiredOutputs/acceptancePolicy，把 localCriteria 写入 `TaskSpec.localGuidance`，把 localOutputs 转成 `required=false`、`role='supporting'` 的输出，拒绝模型提交 `required`、acceptance provider/verifier/scorer、deliverable role 或 draft 路径覆盖。
+3. ackPreview 必须等于当前 Run **已经持久交付**的 previewRef.digest，且对应同一 prepare result；必须在后续模型 step，不能在同一次 tool batch 中猜测 ack。
+4. instanceSchema、proposal 输入授权、路径和资源总额检查；host 按 §4.2.1 合并 template requiredCriteria/requiredOutputs/acceptancePolicy，把 localCriteria 写入 `TaskSpec.localGuidance`，把 localOutputs 转成 `required=false`、`role='supporting'` 的输出，拒绝模型提交 `required`、acceptance provider/verifier/scorer、deliverable role、重复 ID/path、保留 ID/path 或 draft role/path。
 5. 由宿主生成 TaskSpec、taskId、parentId、parentRunId、batchId、Method/template refs、bindings、acceptance；若该 batch 是 feedback replan，host 根据 binding 和已 terminal failure 派生 `feedbackRef` 与 `supersedesChildIds`，模型不能提交这两个字段。
 6. append 一个 task/children-admitted fact，含完整 children contracts、join 规则、预算预留。
 7. parent 进入 waiting-children 投影，当前 turn 结束；释放执行槽。
@@ -698,62 +759,253 @@ child 发现输入不足时，通过 `singularity_feedback` 返回结构化建�
 
 ## 10. 最小 fact 协议与 side effect
 
-### 10.1 Envelope
+### 10.1 Envelope、normalized command 与幂等
 
 ~~~ts
 interface Fact {
   readonly v: 1
-  readonly seq: number
-  readonly commandId: string
+  readonly seq: number                 // genesis = 0；见 §10.3
+  readonly commandId: string           // host 分配；模型不可提供
+  readonly commandDigest: Digest       // command domain
   readonly type: FactType
   readonly actor: { readonly kind: 'operator' | 'runtime'; readonly id: string }
-  readonly at: number
+  readonly at: number                  // Unix epoch ms；只用于审计
   readonly data: FactPayload
-  readonly prev: Digest | null
-  readonly digest: Digest
+  readonly prev: Digest | null         // 前一条 fact 的 fact-domain digest
+  readonly digest: Digest              // fact domain
+}
+
+interface NormalizedCommand {
+  readonly v: 1
+  readonly commandId: string
+  readonly tool: string                // singularity_* 或 host operation 名
+  readonly toolVersion: 1
+  readonly actor: { readonly kind: 'operator' | 'runtime'; readonly id: string }
+  readonly scope: {
+    readonly taskId?: string
+    readonly runId?: string
+    readonly sessionId?: string
+  }
+  readonly input: JsonValue            // strict 校验后的原始命令输入
 }
 ~~~
 
-commandId 相同且规范化 command 相同，返回原结果；相同 ID、不同 payload，拒绝 IDEMPOTENCY_CONFLICT。身份由 runtime 绑定到 live Agent/Run，不能相信工具参数中的 actor 字符串。
+- `commandDigest = computeDigest('command', NormalizedCommand)`；`NormalizedCommand` 不存 CAS，不是 `ObjectRef`。
+- `input` 是 strict schema 校验后的原始输入；不得补默认值、重排或“修复”。host-resolved 的当前 state、contract/method digest、当前 PlanningSketch、batch、feedback、预算、`asOf`、`at`、cursor 不进入 digest；它们由 state guard 校验。
+- `commandId` 由 host 绑定；DSH 命令使用跨 resume 稳定的 `(sessionId, toolCallId)` 派生 ID；operator/runtime 命令由 trusted host 生成。模型和工具参数不能提供 `commandId`、actor、domain 或 digest。
+- 一 command 一 fact：成功的 journal command 恰好 append 一条 fact；没有 append 的不是 journal command。一个 command 多条 fact 在 replay 时拒绝。
+- 命令到达时，host 从 journal 构建内存 `commandId -> { commandDigest, seq, factDigest }` 投影（不持久化、不是第二 ledger）：
+  1. 同 `commandId`、同 `commandDigest`：从 fact 重建原结果，不 append、不预留预算、不派 child、不唤醒。
+  2. 同 `commandId`、不同 `commandDigest`：`IDEMPOTENCY_CONFLICT`，无副作用。
+  3. 无记录：走正常 state/budget/guard；成功后 CAS 先写、append 一条带 `commandDigest` 的 fact、fsync、返回结果。
+- 原结果重建：taskId/runId/batchId/child IDs、contract/method/evidence refs、outcome/classification、submission ref 等必须能从 fact 的 `type`/`data` 确定性重建；`remainingBudgetPct`、`asOf` 是可变视图字段，可重新计算。若原结果字段无法从 fact 推导，命令必须在 append 前把它作为 CAS ref 放进 fact；禁止“记不清就重新执行”。fact 引用的 CAS 缺失/损坏时 replay 拒绝启动。
+- 已提交命令在 Run/Task 已 closed 后重放仍返回原结果；幂等匹配不绕过 actor/run 绑定或读取授权。若实现暴露 writer 之外的 in-flight 状态，复用既有 `ACTIVE_JOB`，不新增错误码或持久状态。
 
 canonical JSON 采用 RFC 8785/JCS：数组保留顺序，字符串不作额外 Unicode normalization；拒绝非有限数、重复键和非 JSON 值，不能静默四舍五入超出数值模型的输入。精确的大整数须用 schema 声明的字符串表达。
 
-digest 域分别为 fact、contract、method、object、composition、evidence、preview、round-plan。计算式固定为 SHA256(UTF8("singularity/v1/" + domain + "\n") || payloadBytes)，结果编码为 sha256:<lowercase hex>。结构化 payloadBytes 是去掉其最外层 digest 字段后的 JCS UTF-8；嵌套引用的 digest 保留。原始文件对象使用原始 bytes，目录/bundle 使用排序 manifest 引用各文件对象，不哈希不稳定的 tar 时间戳。
+Digest domain 与计算式见 §4.0；`Fact.digest` 使用 `fact` domain，`Fact.commandDigest` 使用 `command` domain。domain 集合为 §4.0 表中的 9 个；现有 8 个不重排，`command` 追加到末尾。
 
 ### 10.2 事实与完整 payload 范围
 
 下表是本版本的闭合事实集。Evidence、模板、工具代码等大对象存 CAS；fact 引用 digest，不把完整 transcript 重写进 journal。
 
-| Fact | 必备业务内容 | 唯一后续消费者 |
+| Fact | Payload 必备内容 | 唯一后续消费者 |
 |---|---|---|
-| method/registered | 冻结完整 revision 对象引用、parent、来源 proposal | admission/RSI |
-| method/activated | expectedPrevious、previous、next、approval、evaluationRef | 新 root 选 Method |
-| task/admitted | 完整 root contract 引用；summary 由独立索引异步关联 | dispatch/ancestor query |
-| run/opened | taskId、runId、attempt、sessionId、composition、workspace seed、budget reservation | DSH create/resume |
-| task/children-admitted | parentRunId、batchId、所有 child contracts、由 binding 派生的 join、replacement 的 feedbackRef/`supersedesChildIds`、预算预留 | child dispatch/parent projection |
-| run/submitted | runId、冻结 outputs manifest、提交时 transcript offset、preview/read receipts、planningSketchRef、feedbackRefs | verifier/trace |
-| run/closed | runId、classification、reason、EvidenceRef/ExecutionRecordRef、usage、planningSketchRef、feedbackRefs | retry/parent join/trace |
-| task/closed | taskId、outcome、reason、decisiveRunId?、evidenceRefs；subtree cancellation 时含 cancellationCutRef | parent/trace seal |
-| rsi/trace-sealed | rootTaskId、traceRef、完整 usage、最终 session offsets | RSI input |
-| rsi/round-opened | roundId、sourceTrace、baseMethod、冻结 plan、proposerSessionId | proposer |
-| rsi/proposal-submitted | roundId、结构化 patchRef | precheck |
-| rsi/candidate-ready | patchRef、precheck receipt、candidateMethod | paired dispatch |
-| rsi/round-closed | roundId、outcome、comparisonRef 或 rejected/interrupted 原因 | operator/activation |
+| method/registered | revision、parent?、sourceProposal? | admission/RSI |
+| method/activated | expectedPrevious?、previous?、next、approval、evaluationRef? | 新 root 选 Method |
+| task/admitted | taskId、contract（contract domain；完整 root contract） | dispatch/ancestor query |
+| run/opened | taskId、runId、attempt、sessionId、composition、workspaceKey、workspaceSeed、budgetReservation | DSH create/resume |
+| task/children-admitted | parentRunId、batchId、children（完整 child contracts、join、budgetReservation、replacement?） | child dispatch/parent projection |
+| run/submitted | runId、outputs（frozen outputs manifest）、transcriptOffset、previewReceipts、readReceipts、planningSketchRef、feedbackRefs | verifier/trace |
+| run/closed | runId、classification、reason、evidenceRef?、executionRecordRef?、usage、planningSketchRef?、feedbackRefs | retry/parent join/trace |
+| task/closed | taskId、outcome、reason、decisiveRunId?、evidenceRefs、scope?、cancellationCutRef? | parent/trace seal |
+| rsi/trace-sealed | rootTaskId、trace、usage、sessionCuts | RSI input |
+| rsi/round-opened | roundId、sourceTrace、baseMethod、plan、proposerSessionId | proposer |
+| rsi/proposal-submitted | roundId、patch | precheck |
+| rsi/candidate-ready | roundId、patch、precheckReceipt、candidateMethod | paired dispatch |
+| rsi/round-closed | roundId、outcome、comparisonRef?、precheckReceipt?、reason? | operator/activation |
 
-不另写 verification/recorded + evidence/sealed + run/settled 三份终局。verifier 原始结果、artifact manifest 和 final usage 写成一个 Evidence 对象，run/closed 引用它。
+精确 payload 如下；`?` 表示既有语义允许缺失，不把 optional 改成 null。Payload 不重复 `v`，版本由 Fact envelope 拥有。`TaskContract`、`MethodRevision`、`Evidence`、`RoundPlan`、`MethodPatch` 沿用 §4/§5/§15/§17/§18，不在此重定义。未知字段、未知 type、错误 type/data 组合均拒绝。
+
+~~~ts
+type FactType =
+  | 'method/registered'
+  | 'method/activated'
+  | 'task/admitted'
+  | 'run/opened'
+  | 'task/children-admitted'
+  | 'run/submitted'
+  | 'run/closed'
+  | 'task/closed'
+  | 'rsi/trace-sealed'
+  | 'rsi/round-opened'
+  | 'rsi/proposal-submitted'
+  | 'rsi/candidate-ready'
+  | 'rsi/round-closed'
+
+interface MethodRegisteredPayload {
+  readonly revision: MethodRef
+  readonly parent?: MethodRef
+  readonly sourceProposal?: ObjectRef // 初始化/人工导入来源；candidate-ready 不写本 fact
+}
+
+interface MethodActivatedPayload {
+  readonly expectedPrevious?: MethodRef
+  readonly previous?: MethodRef
+  readonly next: MethodRef
+  readonly approval: ObjectRef
+  readonly evaluationRef?: ObjectRef
+}
+
+interface TaskAdmittedPayload {
+  readonly taskId: string
+  readonly contract: ObjectRef // contract domain；完整 root contract
+}
+
+interface RunOpenedPayload {
+  readonly taskId: string
+  readonly runId: string
+  readonly attempt: number
+  readonly sessionId: string
+  readonly composition: CompositionRef
+  readonly workspaceKey: string
+  readonly workspaceSeed: ObjectRef
+  readonly budgetReservation: BudgetReservation
+}
+
+interface ChildrenAdmittedPayload {
+  readonly parentRunId: string
+  readonly batchId: string
+  readonly children: readonly {
+    readonly contract: TaskContract        // 完整 child contract，按 §10.2 保留
+    readonly join: 'required' | 'probe'    // 由 binding 派生
+    readonly budgetReservation: BudgetReservation
+    readonly replacement?: {
+      readonly feedbackRef: ObjectRef
+      readonly supersedesChildIds: readonly string[]
+    }
+  }[]
+}
+
+interface RunSubmittedPayload {
+  readonly runId: string
+  readonly outputs: ObjectRef              // frozen outputs manifest
+  readonly transcriptOffset: { readonly sessionId: string; readonly seq: number }
+  readonly previewReceipts: readonly ObjectRef[]
+  readonly readReceipts: readonly ObjectRef[]
+  readonly planningSketchRef: ObjectRef
+  readonly feedbackRefs: readonly ObjectRef[]
+}
+
+interface RunClosedPayload {
+  readonly runId: string
+  readonly classification: 'verified' | 'failed' | 'invalid' | 'cancelled'
+  readonly reason: string
+  readonly evidenceRef?: EvidenceRef          // verified / criteria-failed
+  readonly executionRecordRef?: ExecutionRecordRef // no-submission / stop / invalid / cancelled
+  readonly usage: UsageRecord                  // 保留独立 usage，不只依赖 result 对象
+  readonly planningSketchRef?: ObjectRef
+  readonly feedbackRefs: readonly ObjectRef[]
+}
+
+interface TaskClosedPayload {
+  readonly taskId: string
+  readonly outcome: 'verified' | 'failed' | 'invalid' | 'cancelled'
+  readonly reason: string
+  readonly decisiveRunId?: string
+  readonly evidenceRefs: readonly EvidenceRef[] // 保留名称；Evidence refs
+  readonly scope?: 'subtree'                    // 仅级联关闭时出现
+  readonly cancellationCutRef?: ObjectRef
+}
+
+interface TraceSealedPayload {
+  readonly rootTaskId: string
+  readonly trace: ObjectRef
+  readonly usage: UsageRecord                   // 完整 source trace usage
+  readonly sessionCuts: readonly SessionCut[]
+}
+
+interface RsiRoundOpenedPayload {
+  readonly roundId: string
+  readonly sourceTrace: ObjectRef
+  readonly baseMethod: MethodRef
+  readonly plan: RoundPlanRef
+  readonly proposerSessionId: string
+}
+
+interface RsiProposalSubmittedPayload {
+  readonly roundId: string
+  readonly patch: ObjectRef
+}
+
+interface RsiCandidateReadyPayload {
+  readonly roundId: string
+  readonly patch: ObjectRef
+  readonly precheckReceipt: ObjectRef
+  readonly candidateMethod: MethodRef
+}
+
+interface RsiRoundClosedPayload {
+  readonly roundId: string
+  readonly outcome: 'improved' | 'no-improvement' | 'insufficient-evidence' | 'rejected' | 'cancelled'
+  readonly comparisonRef?: ObjectRef
+  readonly precheckReceipt?: ObjectRef
+  readonly reason?: string
+}
+
+interface FactPayloadMap {
+  'method/registered': MethodRegisteredPayload
+  'method/activated': MethodActivatedPayload
+  'task/admitted': TaskAdmittedPayload
+  'run/opened': RunOpenedPayload
+  'task/children-admitted': ChildrenAdmittedPayload
+  'run/submitted': RunSubmittedPayload
+  'run/closed': RunClosedPayload
+  'task/closed': TaskClosedPayload
+  'rsi/trace-sealed': TraceSealedPayload
+  'rsi/round-opened': RsiRoundOpenedPayload
+  'rsi/proposal-submitted': RsiProposalSubmittedPayload
+  'rsi/candidate-ready': RsiCandidateReadyPayload
+  'rsi/round-closed': RsiRoundClosedPayload
+}
+
+type FactPayload = FactPayloadMap[FactType]
+~~~
+
+关键约束：
+
+| Fact | 约束 |
+|---|---|
+| method/registered | `revision` 验证 method domain；`parent` 与 revision.parent 一致；candidate-ready 不写本 fact |
+| method/activated | `expectedPrevious`/`previous` 在非首次 activation 出现；`next` 已在只读 catalog；approval 含 expected/next；不移动 live Task |
+| task/admitted | root contract；taskId 与 contract 一致；同一 taskId 只准入一次 |
+| run/opened | Task open、无 active Run；attempt 1-based 且不超过 maxRuns；budget/deadline 不超父预算 |
+| task/children-admitted | parent Run active；children 非空且不超过 maxBatchChildren；完整 child contracts；replacement 仅 source child terminal failure；模型不能提供 binding/join/replacement |
+| run/submitted | Run open；self read/PlanningSketch 有效；无 active child batch；outputs manifest 身份匹配；提交后 latch |
+| run/closed | `evidenceRef` 与 `executionRecordRef` 恰好一个；verified 只引用 Evidence；no-submission/invalid/cancelled 引用 ExecutionRecord；`usage` 独立保存且与 result 内嵌 usage canonical-equal |
+| task/closed | verified 需 decisive Run verified + join；`evidenceRefs` 只放 Evidence；subtree cancellation 由本 fact 独占，不补写 run/closed |
+| rsi/trace-sealed | 全树 terminal、所有 Run closed、agents/processes drained；same rootTaskId 只 seal 一次 |
+| rsi/round-opened | plan 先冻结；base = active head；proposer 尚未发请求 |
+| rsi/proposal-submitted | Round proposing；patch base 一致；每 Round 一个正式 patch |
+| rsi/candidate-ready | precheck 成功；candidate 加入只读 catalog；不写 method/registered |
+| rsi/round-closed | improved/no-improvement 必须有 comparison；rejected 必须有 precheck receipt/reason；不移动 production head |
+
+不另写 verification/recorded + evidence/sealed + run/settled 三份终局。verifier 原始结果、artifact manifest 和 final usage 写成一个 Evidence 对象，run/closed 的 `evidenceRef` 引用它；`run/closed.usage` 仍独立保存最终快照，并与 result 内嵌 usage canonical-equal。
 
 预览交付、PlanningSketch、feedback 和 own-guidance 阅读来自持久 DSH tool results/CAS objects，不增加新的 domain fact。恢复从对应 session 的 tool-call/result 重新解析，receipt 不跨 Run；sealed trace 的 children 章节索引这些对象。
 
 失败/取消时 task/closed 可带 scope='subtree'：reducer 同一次提交关闭目标 Task，将非 terminal descendants 及其未关闭 Runs 置 cancelled；目标自身若仍有未关闭 Run，也以相同 cancellation cause 关闭。已终态节点/Run 保留。这个 fact 是这些取消结论的唯一来源，不再补写同义的 run/closed。取消时的 ExecutionRecord 引用已知 session cut/usage，并标记尚需 drain；runtime 随后取消受影响 Agent/process，晚到结果不得改变 verdict。最终 cut、取消后的尾部 usage 和 cleanup receipt 由 rsi/trace-sealed 统一引用，不覆写旧 Evidence。
 
-这些是字段语义定义；正式 JSON Schema 与 TS fact union 必须从本文冻结的本表生成或校验。实现可以选择生成器和内部文件拆分，但不能改变字段或行为。
+这些是字段语义定义；正式 JSON Schema 与 TS fact union 必须从本文冻结的 payload 定义生成或校验。实现可以选择生成器和内部文件拆分，但不能改变字段、optional 语义或行为。
 
 ### 10.3 原子性与恢复原则
 
+- Journal 是 UTF-8 文件，无 BOM、无文件头；每条 fact 是一行 `JCS(fact)` 的 UTF-8 字节后跟一个 LF (`0x0A`)。行内不得有 CR、空行或前导/尾随空白；JCS 字符串中的换行已转义。
+- `seq` 从 `0` 开始、连续、不跳号、不重复；`prev` 是前一条 fact 的 `digest`，genesis 为 `null`。replay 逐条校验 seq、prev、fact digest 和 commandDigest；任何失败拒绝启动。
+- 空文件是合法未初始化状态。最后一段没有 LF 的字节是 torn tail，可以截去；即使它碰巧是完整 JSON，也截去，因为提交点是“完整行 + fsync”。以 LF 结尾但解析/schema/digest 失败的行是中间损坏，拒绝启动，不能跳过。
 - 一个 fact 的 append、fsync 是命令提交点；children-admitted 一行只在 children count/bytes 上限内使用。
 - CAS 先写临时对象，校验 digest，原子 rename，再写引用 fact。未被事实引用的对象是可回收 orphan，不是业务成功。
 - fsync 后才能发模型请求、派 child 或宣布成功。
-- torn 最后半行可截去；中间损坏拒绝启动，不能跳过。
 - 一次性 verifier 过程可能因进程崩溃无法区分“已跑完但未记录”；外部副作用必须使用确定 operationId 查询，无法核对时结算 invalid，不宣称恰好一次。
 - root trace 只在全树 terminal、所有模型/进程静止后 seal，不因为 UI 显示 closed 就提前冻结不完整 usage。
 - single writer 是领域 authority；存储类不自行实现 business guards。
@@ -1110,7 +1362,7 @@ singularity_stop
 
 MCP server/tool schema 与描述不携带本次 Run 的精确 token、step、wall-clock 或 Task 数；host 在 NodeView、wake 和 tool result 中提供统一剩余百分比，精确值留在 guard 和记录。
 
-上述工具的 schema 均拒绝未知字段。错误通过 DSH 标准 tool failure 返回短 JSON：{ code, nextAction, remainingBudgetPct }；nextAction 是正向可执行动作。协议拒绝码固定为 INVALID_ARGUMENT、READ_SELF_FIRST、PLAN_FIRST、PREVIEW_REQUIRED、PREVIEW_STALE、NEXT_STEP_REQUIRED、CHILD_BATCH_ACTIVE、REQUIRED_FEEDBACK_REPLAN、INPUT_NOT_AUTHORIZED、BINDING_FIXED、LIMIT_EXCEEDED、ACTIVE_JOB、ALREADY_SUBMITTED、RUN_CLOSED、COMPOSITION_MISMATCH、IDEMPOTENCY_CONFLICT。错误不创建 child、不提交产物；已经落盘的相同命令按 commandId 返回原结果。
+上述工具的 schema 均拒绝未知字段。错误通过 DSH 标准 tool failure 返回短 JSON：{ code, nextAction, remainingBudgetPct }；nextAction 是正向可执行动作。协议拒绝码固定为 INVALID_ARGUMENT、READ_SELF_FIRST、PLAN_FIRST、PREVIEW_REQUIRED、PREVIEW_STALE、NEXT_STEP_REQUIRED、CHILD_BATCH_ACTIVE、REQUIRED_FEEDBACK_REPLAN、INPUT_NOT_AUTHORIZED、BINDING_FIXED、LIMIT_EXCEEDED、ACTIVE_JOB、ALREADY_SUBMITTED、RUN_CLOSED、COMPOSITION_MISMATCH、IDEMPOTENCY_CONFLICT。错误不创建 child、不提交产物；已经落盘的相同命令按 commandId + commandDigest 返回原结果。
 
 ### 14.2 状态与工具交集
 
@@ -1167,9 +1419,36 @@ DSH 本体凭据不进入工具子进程。固定 domain broker 可保管 EDA li
 
 Capsule 是 host resource lease，不建立领域状态机；seed、mode、lease key、exit/cleanup status进入 Evidence。创建/销毁失败不改变已有结果为通过，也不可复用受污染环境。
 
-### 15.2 Evidence schema
+### 15.2 Evidence schema 与 supporting CAS 对象
 
 ~~~ts
+interface UsageRecord {
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly steps: number
+  readonly unknownRequests: number       // 未知不等于 0
+  readonly summary?: {                    // Contract Summary Worker 子记录；不新增对象字段
+    readonly ownerTaskId: string
+    readonly sourceContract: Digest
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly steps: number
+    readonly unknownRequests: number
+  }
+}
+
+interface SessionCut {
+  readonly sessionId: string
+  readonly from: number  // inclusive
+  readonly to: number    // exclusive；DSH sequence 语义在实现期验证
+}
+
+interface BudgetReservation {
+  readonly tokens: number
+  readonly steps: number
+  readonly deadlineAt: number  // Unix epoch ms
+}
+
 interface Evidence {
   readonly v: 1
   readonly task: TaskRef
@@ -1178,7 +1457,7 @@ interface Evidence {
   readonly method: MethodRef
   readonly inputs: readonly ObjectRef[]
   readonly outputs: readonly ObjectRef[]
-  readonly composition: ObjectRef
+  readonly composition: CompositionRef
   readonly verification: {
     readonly provider: AssetRef
     readonly operationId: string
@@ -1186,9 +1465,58 @@ interface Evidence {
     readonly privateReceipt?: ObjectRef
   }
   readonly usage: UsageRecord
-  readonly sessionCut: { readonly sessionId: string; readonly from: number; readonly to: number }
+  readonly sessionCut: SessionCut
   readonly environment: { readonly seed: Digest; readonly mode: string }
   readonly digest: Digest
+}
+
+interface ExecutionRecord {
+  readonly v: 1
+  readonly taskId: string
+  readonly runId: string
+  readonly contractDigest: Digest
+  readonly method: MethodRef
+  readonly composition: CompositionRef
+  readonly inputs: readonly ObjectRef[]
+  readonly outputs?: readonly ObjectRef[] // 可缺；partial outputs 不是 acceptance 依据
+  readonly usage: UsageRecord
+  readonly sessionCut: SessionCut
+  readonly reason: string
+  readonly drainPending?: boolean
+  readonly digest: Digest                  // object domain
+}
+
+interface Composition {
+  readonly v: 1
+  readonly dsh: { readonly package: string; readonly version: string; readonly config: ObjectRef }
+  readonly platformPrompt: Digest
+  readonly contract: ObjectRef
+  readonly template: ObjectRef
+  readonly guidance?: ObjectRef
+  readonly skills: readonly ObjectRef[]     // 完整 skill bundle refs
+  readonly mcpServers: readonly {
+    readonly manifest: ObjectRef
+    readonly bundle: ObjectRef
+    readonly schema: ObjectRef
+    readonly config: ObjectRef
+    readonly transport: 'stdio' | 'streamable-http'
+    readonly capabilities: readonly string[]
+  }[]
+  readonly modelRoute: ObjectRef
+  readonly resources: ObjectRef
+  readonly seed: ObjectRef
+  readonly digest: Digest                   // composition domain
+}
+
+interface CancellationCut {
+  readonly v: 1
+  readonly targetTaskId: string
+  readonly affected: readonly {
+    readonly taskId: string
+    readonly runId?: string
+    readonly executionRecordRef?: ObjectRef
+  }[]
+  readonly digest: Digest // object domain
 }
 ~~~
 
@@ -1196,9 +1524,15 @@ privateReceipt 不返回 worker/RSI；publicReceipt 有 criterion ID、pass/fail
 
 ExecutionRecord 用于 no-submission、stop、cancel、基础设施异常：有同样的身份、usage、sessionCut、reason，可缺 verification/outputs；它不能被冒充成 verified Evidence。
 
-`UsageRecord` 必须把模型消耗按 owner 分类保存：普通 Task Run 的 input/output usage 归属该 Task，并向 root subtree 汇总；Contract Summary Worker 的消耗放在 `summary` 子记录中，带 `ownerTaskId`、`sourceContract` 和 known/unknown token counts，归属拥有该合同的 Task，并计入其 root trace 与 evaluation slot 成本；RSI proposer 的消耗归属 Round proposer budget；evaluation slot 内的摘要消耗归属该 slot。feedback tool 和 scheduler feedback 没有模型 usage。usage 已知计数与 unknownRequests 单独表达。未知不等于 0，不能据此宣称节约成本。硬预算以宿主计量/保守预留控制；计量不可用时停止继续购买请求，保留 incomplete usage。
+`run/closed.usage` 是该 Run closure 的最终 usage 快照；若同时引用 Evidence/ExecutionRecord，其内嵌 usage 必须与 fact.usage canonical-equal。两者由同一 writer 在同一 command 中产生，不是两套独立计量。
+
+`UsageRecord` 必须把模型消耗按 owner 分类保存：普通 Task Run 的 input/output usage 归属该 Task，并向 root subtree 汇总；Contract Summary Worker 的消耗放在 `summary` 子记录中，带 `ownerTaskId`、`sourceContract` 和 known/unknown token counts，归属拥有该合同的 Task，并计入其 root trace 与 evaluation slot 成本；RSI proposer 的消耗归属 Round proposer budget；evaluation slot 内的摘要消耗归属该 slot。feedback tool 和 scheduler feedback 没有模型 usage。usage 已知计数与 unknownRequests 单独表达。未知不等于 0，不能据此宣称节约成本。硬预算以宿主计量/保守预留控制；计量不可用时停止继续购买请求，保留 incomplete usage。`summary?` 是本节既有子记录；不增加 `ContractSummary.usage` 字段，不新增 usage fact。RSI proposer usage 仍留在 Round 预算/宿主记录，本规范不为 `rsi/round-closed` 增加 usage 字段。
 
 composition 记录：DSH 确切包/配置 identity、platform prompt digest、Task contract、局部 template/guidance、skills 完整 bundle、MCP server manifest/bundle/schema/config、模型路由、资源 snapshot、初始 seed。后续 direct child input snapshot 用 asOf+refs记录，不伪装为启动前已知。
+
+Receipt、preview/read receipt、precheck receipt、comparison、approval 一律是 CAS `ObjectRef`；fact 不内联 receipt 内容。`privateReceipt` 只在 Evidence 内，不进入 fact、NodeView、ProposerView 或模型输出。
+
+`CancellationCut` 是 `task/closed` 引用的不可变 CAS 快照，不是一套新 facts：它记录目标 Task、受影响的 descendants/Runs 与已知 ExecutionRecord refs；最终 cut 与尾部 usage 由 `rsi/trace-sealed` 统一引用，不覆写旧 Evidence。
 
 ## 16. 从 root terminal 到一个 RSI Round 结束
 
@@ -1615,6 +1949,7 @@ RunPool 只分配执行资源，不决定 workflow。按 admission/ready 顺序�
 | 恢复位置 | 从什么重建 | 必须采取的动作 |
 |---|---|---|
 | run/opened 已写、Agent 未创建 | run/session/workspace 的确定 ID | 若 session 不存在则创建同一 intent，存在则校验后 resume；不另开 attempt |
+| command fact 已 append、结果未返回 | journal 中该 commandId 的 commandDigest 与 fact | 从 fact/CAS 重建原结果；不重复执行、不追加 fact、不预留预算 |
 | start wake 已入队或消费、回执未到 | DSH 持久 message/inbox/turn 边界 | 复用已有 wake，不重发同一普通消息 |
 | children-admitted 后尚未 dispatch | fact 中全部 children contracts | 仅调度缺少 Run 的 child，不能重新准入 |
 | parent 在等待 children | 子树事实和原 parent session | children 尚未全部 terminal 时不唤醒；完成后的 wake 使用稳定 batch key |
