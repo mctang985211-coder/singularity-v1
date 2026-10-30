@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；S2-A（protocol JSON/JCS/digest/schema 基础）、S2-B（Task+Method schema、seal 与 tool errors）、S2-C1（获批闭合 fact payload）、S2-C2（pure command/journal replay）、S2-C3（纯 root/child admission）与 S2-C4（纯 Task/Run reducer）已完成，S2 完成，下一步 S3 单 Task/Run 闭环，Task/RSI 业务实现尚未开始。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；S2-A（protocol JSON/JCS/digest/schema 基础）、S2-B（Task+Method schema、seal 与 tool errors）、S2-C1（获批闭合 fact payload）、S2-C2（pure command/journal replay）、S2-C3（纯 root/child admission）与 S2-C4（纯 Task/Run reducer）已完成，S2 完成；S3-A（单 writer journal 与 CAS）已完成，S3 继续，下一单 Run 执行闭环，Task/RSI 业务实现尚未开始。
 
 ## 权威入口
 
@@ -16,7 +16,7 @@ Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中�
 
 - Node `>=24.9.0`
 - pnpm `11.18.0`
-- DSH `0.2.2-alpha.2`（S1-A–S1-E 已完成真实 DSH 组合验证；S2-A/S2-B/S2-C1/S2-C2/S2-C3/S2-C4 protocol 基础已完成）
+- DSH `0.2.2-alpha.2`（S1-A–S1-E 已完成真实 DSH 组合验证；S2 与 S3-A runtime 存储基础已完成）
 
 ## 验证
 
@@ -25,15 +25,15 @@ pnpm install --frozen-lockfile
 pnpm verify
 ```
 
-`verify` 是本地与 CI 共用的唯一稳定入口，依次执行项目门禁、typecheck、lint、test 和 build：
+`verify` 是本地与 CI 共用的唯一稳定入口，依次执行项目门禁、build、typecheck、lint 和 test：
 
 - `pnpm verify:project`：规范 digest、conformance 登记、仓库/CI 配置、架构禁用项与 protocol 纯度检查；
-- `pnpm typecheck`（`pnpm --recursive typecheck`）：所有 workspace 包的严格 TypeScript 检查，覆盖 app 与 protocol 的 `src`/`test`；
+- `pnpm build`（`tsc -b tsconfig.json`）：先按根 references 构建 protocol、runtime 与 app；干净 checkout 不依赖未提交的 `dist`；
+- `pnpm typecheck`（`pnpm --recursive typecheck`）：所有 workspace 包的严格 TypeScript 检查，覆盖 app、protocol 与 runtime 的 `src`/`test`；
 - `pnpm lint`（`pnpm --recursive lint`）：所有 workspace 包的 ESLint；
-- `pnpm test`（`pnpm --recursive test`）：所有 workspace 包的测试，包括 app 宿主组合与 protocol 单元/负例；
-- `pnpm build`（`tsc -b tsconfig.json`）：按根 references 构建 app 与 protocol，输出各自 `dist`。
+- `pnpm test`（`pnpm --recursive test`）：所有 workspace 包的测试，包括 app 宿主组合、protocol 单元/负例与 runtime 存储测试。
 
-CI 只保留一个 `verify` job。S1-A–S1-E 已完成；S2-A、S2-B、S2-C1、S2-C2、S2-C3、S2-C4 已完成，frozen install 与根 `pnpm verify` 的 project/typecheck/lint/test/build 全通过（protocol tests 178/178、app tests 6/6，合计 184），`git diff --check` 通过。用户 2026-10-30 已确认 K1–K5，K6 仍未证明；framework/spec-lock/amendment/conformance 已在同一变更更新（spec sha256=`6f4a57e7987c8def2b5e12504fb8a6e2599968161f94115a473b8b98ed29fd91`）。S2 完成（C-01/C-05/C-11 纯协议正负例已覆盖）；conformance 整体仍 unproven（CAS 内容/FS/runtime/DSH/真实模型未验证）。下一步 S3 单 Task/Run 闭环；Method/RSI reducer 属后续，Task/RSI 业务功能尚未实现。领域 RSI 收益需要独立证据，不能由仓库检查推断。
+CI 只保留一个 `verify` job。S1-A–S1-E 与 S2（S2-A–S2-C4）已完成；S3-A 已完成，frozen install 与根 `pnpm verify` 全通过（protocol tests 178/178、app tests 6/6、runtime tests 20/20，合计 204），`git diff --check` 通过。S3 继续，下一单 Run 执行闭环；CAS 引用内容 domain-aware replay 校验、跨进程 OS lock、业务结果重建、Agent/verifier/C-02/C-03/C-12 未验证；C-11 仍缺完整场景证据，所有 conformance 保持 unproven。领域 RSI 收益需要独立证据，不能由仓库检查推断。
 
 ## 协作流程
 
