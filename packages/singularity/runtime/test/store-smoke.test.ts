@@ -38,6 +38,10 @@ function ref(id: string, digest: Digest = digestA): Ref {
   return { id, digest }
 }
 
+function roundClosed(commandId: string): RoundClosedData {
+  return { roundId: `round-${commandId}`, outcome: 'cancelled', reason: 'store smoke' }
+}
+
 function normalized(commandId: string, input: JsonValue): NormalizedCommand {
   return {
     v: 1,
@@ -50,13 +54,13 @@ function normalized(commandId: string, input: JsonValue): NormalizedCommand {
   }
 }
 
-type MethodRegisteredData = FactPayloadMap['method/registered']
+type RoundClosedData = FactPayloadMap['rsi/round-closed']
 
 function unsealedFact(args: {
   readonly seq: number
   readonly prev: Digest | null
   readonly commandId: string
-  readonly data?: MethodRegisteredData
+  readonly data?: RoundClosedData
   readonly at?: number
 }): UnsealedFact {
   return {
@@ -64,10 +68,10 @@ function unsealedFact(args: {
     seq: args.seq,
     commandId: args.commandId,
     commandDigest: computeCommandDigest(normalized(args.commandId, { commandId: args.commandId })),
-    type: 'method/registered',
+    type: 'rsi/round-closed',
     actor,
     at: args.at ?? 1_800_000_000_000 + args.seq,
-    data: args.data ?? { revision: ref(`method-${args.commandId}`) },
+    data: args.data ?? roundClosed(args.commandId),
     prev: args.prev,
   }
 }
@@ -263,8 +267,8 @@ void test('CommandService writes CAS objects before one fact and replays the ori
       const command = normalized('command-1', { value: 'one' })
       const first = await service.commit({
         command,
-        type: 'method/registered',
-        data: { revision: ref('method-1') },
+        type: 'rsi/round-closed',
+        data: roundClosed('command-1'),
       })
 
       assert.equal(first.seq, 0)
@@ -278,8 +282,8 @@ void test('CommandService writes CAS objects before one fact and replays the ori
 
       const replayed = await service.commit({
         command,
-        type: 'method/registered',
-        data: { revision: ref('method-1') },
+        type: 'rsi/round-closed',
+        data: roundClosed('command-1'),
       })
       assert.strictEqual(replayed, first)
       assert.equal(tick, 1_800_000_000_001)
@@ -289,11 +293,8 @@ void test('CommandService writes CAS objects before one fact and replays the ori
       const objectDigest = computeDigestBytes('object', objectBytes)
       const second = await service.commit({
         command: normalized('command-2', { value: 'two' }),
-        type: 'method/registered',
-        data: {
-          revision: ref('method-2'),
-          sourceProposal: ref('proposal-1', objectDigest),
-        },
+        type: 'rsi/round-closed',
+        data: { ...roundClosed('command-2'), comparisonRef: ref('proposal-1', objectDigest) },
         objects: [{ id: 'proposal-1', bytes: objectBytes }],
       })
       assert.equal(second.seq, 1)
@@ -307,8 +308,8 @@ void test('CommandService writes CAS objects before one fact and replays the ori
       await rejectsWithCode(
         service.commit({
           command: normalized('command-3', { value: 'three' }),
-          type: 'method/registered',
-          data: { revision: ref('method-3') },
+          type: 'rsi/round-closed',
+          data: roundClosed('command-3'),
           objects: [{ id: '', bytes: objectBytes }],
         }),
         'INVALID_ARGUMENT',
@@ -328,8 +329,8 @@ void test('CommandService rejects digest conflicts and keeps idempotency across 
     const command = normalized('command-1', { value: 'one' })
     const first = await service.commit({
       command,
-      type: 'method/registered',
-      data: { revision: ref('method-1') },
+      type: 'rsi/round-closed',
+      data: roundClosed('command-1'),
     })
     await service.close()
     const committed = await readFile(join(root, JOURNAL_FILENAME))
@@ -338,8 +339,8 @@ void test('CommandService rejects digest conflicts and keeps idempotency across 
     try {
       const replayed = await reopened.commit({
         command,
-        type: 'method/registered',
-        data: { revision: ref('method-1') },
+        type: 'rsi/round-closed',
+        data: roundClosed('command-1'),
       })
       assert.deepEqual(replayed, first)
       assert.deepEqual(await readFile(join(root, JOURNAL_FILENAME)), committed)
@@ -350,8 +351,8 @@ void test('CommandService rejects digest conflicts and keeps idempotency across 
       await rejectsWithCode(
         reopened.commit({
           command: conflicting,
-          type: 'method/registered',
-          data: { revision: ref('method-1') },
+          type: 'rsi/round-closed',
+          data: roundClosed('command-1'),
           objects: [{ id: 'conflict-object', bytes: conflictBytes }],
         }),
         'IDEMPOTENCY_CONFLICT',
@@ -371,8 +372,8 @@ void test('CommandService rejects digest conflicts and keeps idempotency across 
       await rejectsWithCode(
         reopened.commit({
           command: { ...command, actor: { kind: 'runtime', id: 'other-runtime' } },
-          type: 'method/registered',
-          data: { revision: ref('method-1') },
+          type: 'rsi/round-closed',
+          data: roundClosed('command-1'),
         }),
         'INVALID_ARGUMENT',
       )
@@ -398,16 +399,16 @@ void test('CommandService owns one writer per normalized root and releases it on
       const command = normalized('command-owner', { value: 'owner' })
       const fact = await first.commit({
         command,
-        type: 'method/registered',
-        data: { revision: ref('method-owner') },
+        type: 'rsi/round-closed',
+        data: roundClosed('command-owner'),
       })
       await first.close()
 
       reopened = await CommandService.open({ root: `${root}/`, actor, clock })
       const replayed = await reopened.commit({
         command,
-        type: 'method/registered',
-        data: { revision: ref('method-owner') },
+        type: 'rsi/round-closed',
+        data: roundClosed('command-owner'),
       })
       assert.deepEqual(replayed, fact)
     } finally {
@@ -426,8 +427,8 @@ void test('CommandService serializes concurrent commits into one contiguous chai
       const sameCommand = normalized('command-same', { value: 'same' })
       const sameInput = {
         command: sameCommand,
-        type: 'method/registered',
-        data: { revision: ref('method-same') },
+        type: 'rsi/round-closed',
+        data: roundClosed('command-same'),
       } as const
       const [sameA, sameB] = await Promise.all([
         service.commit(sameInput),
@@ -438,13 +439,13 @@ void test('CommandService serializes concurrent commits into one contiguous chai
       const [second, third] = await Promise.all([
         service.commit({
           command: normalized('command-2', { value: 'two' }),
-          type: 'method/registered',
-          data: { revision: ref('method-2') },
+          type: 'rsi/round-closed',
+          data: roundClosed('command-2'),
         }),
         service.commit({
           command: normalized('command-3', { value: 'three' }),
-          type: 'method/registered',
-          data: { revision: ref('method-3') },
+          type: 'rsi/round-closed',
+          data: roundClosed('command-3'),
         }),
       ])
       assert.equal(second.seq, 1)
