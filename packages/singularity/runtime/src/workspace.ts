@@ -96,7 +96,7 @@ interface TreeFile {
   readonly object: Ref
 }
 
-interface SealedTreeManifest {
+export interface SealedTreeManifest {
   readonly v: 1
   readonly kind: 'tree'
   readonly files: readonly TreeFile[]
