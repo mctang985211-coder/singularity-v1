@@ -2471,8 +2471,8 @@ const s4a1InvalidCases: readonly S4A1InvalidCase[] = [
   },
   {
     key: 'template-skills',
-    name: 'template skill bindings in this slice',
-    code: 'UNSUPPORTED_RESOURCES',
+    name: 'a dangling template skill id',
+    code: 'CONTRACT_INVALID',
     async prepare(service, scenario) {
       const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
         ...s4a1FirstTemplate(scenario),
@@ -2495,8 +2495,8 @@ const s4a1InvalidCases: readonly S4A1InvalidCase[] = [
   },
   {
     key: 'contract-skill',
-    name: 'contract skill resources in this slice',
-    code: 'UNSUPPORTED_RESOURCES',
+    name: 'contract skill resources that do not match the pinned Method',
+    code: 'CONTRACT_INVALID',
     async prepare(service, scenario) {
       const resource = await putValue(service, { v: 1, skill: 's4a1' }, nextId('s4a1-resource'))
       return s4a1Variant(service, scenario, {
@@ -2541,8 +2541,8 @@ const s4a1InvalidCases: readonly S4A1InvalidCase[] = [
   },
   {
     key: 'composition-skill',
-    name: 'Composition skill refs in this slice',
-    code: 'UNSUPPORTED_RESOURCES',
+    name: 'Composition skill refs that do not match the pinned Method',
+    code: 'COMPOSITION_MISMATCH',
     async prepare(service, scenario) {
       const resource = await putValue(service, { v: 1, skill: 's4a1' }, nextId('s4a1-resource'))
       return s4a1Variant(service, scenario, { compositionSkills: [resource] })
@@ -2749,8 +2749,8 @@ const s4a1ResumeCases: readonly S4A1ResumeCase[] = [
   },
   {
     key: 'composition-skill',
-    name: 'Composition skill refs in this slice',
-    code: 'UNSUPPORTED_RESOURCES',
+    name: 'Composition skill refs that do not match the pinned Method',
+    code: 'COMPOSITION_MISMATCH',
     async prepare(service, scenario) {
       const resource = await putValue(service, { v: 1, skill: 's4a1' }, nextId('s4a1-resource'))
       return s4a1Variant(service, scenario, { compositionSkills: [resource] })

@@ -33,15 +33,18 @@
 | `protocol/src/*` | 业务类型、schema、guard、纯 reducer、digest、纯视图 | 由 runtime 与 domain 调用 |
 | `runtime/src/store.ts` | 单 journal、CAS、字节级 replay | 由 service 调用 |
 | `runtime/src/service.ts` | normalized command → 单 fact append、唯一 writer、fold 入口 | 由 Run/RSI 命令路径调用 |
-| `runtime/src/errors.ts` | 跨执行模块共享的稳定内部错误与错误码 | 由 agent/run/recovery 调用 |
+| `runtime/src/errors.ts` | 跨执行模块共享的稳定内部错误与错误码，包括 `MethodResourceError` | 由 agent/agent-skills/run/recovery/resources/skill-resources 调用 |
 | `runtime/src/agent.ts` | DSH create/resume/setup、bounded wait、wake、job drain、session usage/cut | 返回宿主观察，由 Run 编排决定结算 |
+| `runtime/src/agent-skills.ts` | Agent scope 原生 skill 注册、`skill` tool 可用性、discovery/definition 的 runtime+opaque winner 校验 | 由 `agent.ts` setup 调用；不拥有 registry |
 | `runtime/src/run.ts` | Run admission/open/drive、预算/controller、NodeView 与执行编排 | 调用 agent/service/workspace/run-settlement |
 | `runtime/src/run-settlement.ts` | 提交与执行记录的统一结算、CAS/fact commit、结果封存与返回值构造 | 由 run 与 recovery-execution 调用；不拥有 Run admission 或 DSH loop |
 | `runtime/src/recovery-execution.ts` | 既有 Run 的继续、关闭、恢复，以及 frozen journal/Composition/submission 读取 | 复用 run-settlement 与 agent 观察 |
 | `runtime/src/recovery.ts` | retry/resume 宿主入口、固定 retry policy、fresh workspace 检查 | 调用 recovery-execution |
-| `runtime/src/tools.ts` | DSH scoped Task tools 与共享 dispatch guard | 由 Run setup 注册 |
+| `runtime/src/tools.ts` | DSH scoped Task tools 与共享 dispatch guard（含未绑定 skill 拒绝） | 由 Run setup 注册 |
 | `runtime/src/prompt.ts` | 固定 cards、NodeView 类型与模型可见预算展示 | 由 Run/agent composition 调用 |
-| `runtime/src/resources.ts` | Method/template/guidance 冻结资源解析与授权视图、structured digest、own guidance 8 KiB、Composition resource equality 与 platform prompt 校验 | 由 run/recovery/agent 调用；app 通过 host 组合注入 `PLATFORM_PROMPT_SERVICE` renderer |
+| `runtime/src/resources.ts` | Method/template/guidance/skill 冻结资源编排与授权视图、structured digest、own guidance 8 KiB、Composition resource equality 与 platform prompt 校验 | 由 run/recovery/agent 调用；app 通过 host 组合注入 `PLATFORM_PROMPT_SERVICE` renderer |
+| `runtime/src/skill-resources.ts` | Method skill 资产解析、bundle/SKILL.md/引用文件校验、discovery 8 KiB 与 result 16 KiB 上限、contract bundle refs 相等 | 由 `resources.ts` 调用；agent 只消费冻结结果 |
+| `runtime/src/resource-bundle.ts` | 只读 sealed tree manifest/CAS 文件读取、路径/排序/structured digest/字节数校验 | 由 `skill-resources.ts` 调用；不写 workspace 或宿主目录 |
 | `runtime/src/workspace.ts` | workspace 准备、no-follow 遍历、输出冻结 | 由 Run 提交路径调用 |
 | `runtime/src/verification.ts` | 独立 verifier、receipt 校验、Evidence/ExecutionRecord 值构建 | 由 run-settlement 结算调用 |
 | `runtime/src/round.ts` | 固定 RsiRound procedure | **planned（S5/S6+；当前树中尚不存在）**，由未来 trace/proposer/evaluation 切片调用 |

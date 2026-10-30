@@ -22,6 +22,7 @@ const TOOL_ERROR_NEXT_ACTIONS: Readonly<Record<string, string>> = {
   INVALID_ARGUMENT: 'Fix the tool arguments and retry with declared fields only.',
   READ_SELF_FIRST: 'Call singularity_read(kind="self") and follow nextCursor through the complete contract, then continue.',
   PLAN_FIRST: 'Call singularity_plan with the current contextEpoch, then continue.',
+  INPUT_NOT_AUTHORIZED: 'Use only skills listed in the session skill catalog.',
   ALREADY_SUBMITTED: 'The submission is already frozen; stop calling tools.',
   RUN_CLOSED: 'This Run is already settling; stop calling tools.',
   ACTIVE_JOB: 'Wait for active jobs to finish or stop them with the listed job tools, then retry submission.',
@@ -37,6 +38,7 @@ export interface RunToolControllerOptions {
   readonly runId: string
   readonly sessionId: string
   readonly workspace: string
+  readonly skillNames: readonly string[]
   readonly writer: CasObjectWriter
   readonly maxOutputBytes: number
   readonly clock: () => number
@@ -112,14 +114,14 @@ export class RunToolController {
    */
   checkGuard(execution: Readonly<ToolExecution>): string | undefined {
     this.refreshEpoch()
-    const code = this.denialCode(execution.name, execution.agent)
+    const code = this.denialCode(execution.name, execution.agent, execution.arguments)
     return code === undefined ? undefined : this.refusal(code)
   }
 
   /** NodeView projects the same submission gate used by actual dispatch. */
   obligations(): NodeView['obligations'] {
     this.refreshEpoch()
-    const code = this.denialCode('singularity_submit', this.agent)
+    const code = this.denialCode('singularity_submit', this.agent, undefined)
     return {
       readSelf: !this.state.readSelf,
       readPlanningSketch: this.state.planningSketchRef === undefined,
@@ -130,11 +132,19 @@ export class RunToolController {
     }
   }
 
-  private denialCode(name: string, agent: Agent | undefined): string | undefined {
+  private denialCode(name: string, agent: Agent | undefined, args: unknown): string | undefined {
     if (this.state.submitted) return 'ALREADY_SUBMITTED'
     if (this.state.stopped !== undefined) return 'RUN_CLOSED'
     if (this.state.submitting) return 'ACTIVE_JOB'
     if (this.agent === undefined || agent !== this.agent) return 'INVALID_ARGUMENT'
+    if (name === 'skill') {
+      const skillName = skillNameOf(args)
+      if (skillName === undefined || !this.options.skillNames.includes(skillName)) {
+        return 'INPUT_NOT_AUTHORIZED'
+      }
+      if (!this.options.checkBudget()) return 'LIMIT_EXCEEDED'
+      return undefined
+    }
     if (name === 'singularity_read' || name === 'singularity_stop') return undefined
     if (!this.options.checkBudget()) return 'LIMIT_EXCEEDED'
     if (!this.state.readSelf) return 'READ_SELF_FIRST'
@@ -479,6 +489,12 @@ function budgetValueSchema() {
       taskSlotsPct: { type: 'number' as const, required: true as const },
     },
   }
+}
+
+function skillNameOf(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const name = (value as { readonly name?: unknown }).name
+  return typeof name === 'string' ? name : undefined
 }
 
 function assertExactKeys(value: unknown, keys: readonly string[]): void {

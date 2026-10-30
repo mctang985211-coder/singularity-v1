@@ -20,29 +20,18 @@ import type {
   TaskTemplate,
 } from '@singularity/protocol'
 
-import { SingleRunError } from './errors.ts'
+import { MethodResourceError } from './errors.ts'
+import { readSkills, sameRef } from './skill-resources.ts'
+import type { FrozenSkillResource } from './skill-resources.ts'
 import type { CasObjectReader } from './workspace.ts'
+
+export { MethodResourceError } from './errors.ts'
 
 /** Host-injected capability that renders the actual scoped DSH system prompt. */
 export const PLATFORM_PROMPT_SERVICE = 'singularity.platformPrompt'
 
 export interface PlatformPromptRenderer {
   render(agentCtx: Context, agent: Agent): Promise<string>
-}
-
-/** Explicit frozen-resource failure; recovery closes these as invalid. */
-export class MethodResourceError extends SingleRunError {
-  readonly resource: 'method' | 'composition'
-
-  constructor(
-    resource: 'method' | 'composition',
-    code: 'COMPOSITION_MISMATCH' | 'CONTRACT_INVALID' | 'UNSUPPORTED_RESOURCES',
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(code, message, options)
-    this.resource = resource
-  }
 }
 
 /** Fixed DSH section identity shared by host assembly and Agent setup. */
@@ -55,12 +44,13 @@ const METHOD_GUIDANCE_MAX_BYTES = 8 * 1024
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
 const textEncoder = new TextEncoder()
 
-/** Frozen Method/template/guidance view consumed by one Run. */
+/** Frozen Method/template/guidance/skill view consumed by one Run. */
 export interface FrozenMethodResources {
   readonly method: MethodRevision
   readonly template: TaskTemplate
   readonly guidance: Ref
   readonly guidanceText: string
+  readonly skills: readonly FrozenSkillResource[]
 }
 
 /**
@@ -90,19 +80,21 @@ export async function loadMethodResources(
     )
   }
   const template = matches[0]
-  if (template.skills.length > 0 || template.tools.length > 0) {
+  if (template.tools.length > 0) {
     throw new MethodResourceError(
       'method',
       'UNSUPPORTED_RESOURCES',
-      'template skills and MCP tool bindings are not mounted in this slice',
+      'template MCP tool bindings are not mounted in this slice',
     )
   }
+  const skills = await readSkills(reader, method, template, contract.resources.skills)
   const guidanceText = await readGuidance(reader, template.guidance)
   return {
     method,
     template,
     guidance: template.guidance,
     guidanceText,
+    skills,
   }
 }
 
@@ -114,7 +106,7 @@ export async function loadMethodResources(
 export async function assertCompositionResources(
   reader: CasObjectReader,
   resources: FrozenMethodResources,
-  composition: Pick<CompositionPayload, 'guidance' | 'template'>,
+  composition: Pick<CompositionPayload, 'guidance' | 'template' | 'skills'>,
 ): Promise<void> {
   const value = await readJson(
     reader,
@@ -158,6 +150,24 @@ export async function assertCompositionResources(
       'COMPOSITION_MISMATCH',
       'Composition guidance must equal the current template guidance in the pinned Method revision',
     )
+  }
+  if (composition.skills.length !== resources.skills.length) {
+    throw new MethodResourceError(
+      'composition',
+      'COMPOSITION_MISMATCH',
+      'Composition skills must equal the current template skill bundles in the pinned Method revision',
+    )
+  }
+  for (let index = 0; index < resources.skills.length; index += 1) {
+    const expected = resources.skills[index]?.bundle
+    const actual = composition.skills[index]
+    if (!sameRef(expected, actual)) {
+      throw new MethodResourceError(
+        'composition',
+        'COMPOSITION_MISMATCH',
+        'Composition skills must equal the current template skill bundles in the pinned Method revision',
+      )
+    }
   }
 }
 

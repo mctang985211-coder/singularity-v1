@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -350,6 +350,105 @@ void test('frozen acceptance rejects a substituted verifier before it receives C
   })
 })
 
+void test('skill dispatch is denied after stop and after submission', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'singularity-skill-guard-work-'))
+  const contract = makeContract()
+  await writeFile(join(workspace, 'out.txt'), 'x', 'utf8')
+  try {
+    await withStore(async store => {
+      const contextEpoch = initialContextEpoch('skill-guard-session')
+      const agent = { session: { id: 'skill-guard-session', snapshotEvents: () => [] } } as unknown as Agent
+      const callId = 'skill-guard-call' as ToolRunContext['callId']
+      const execution = (name: string, args: unknown = {}): ToolRunContext => ({
+        name, agent, arguments: args, callId, rootCallId: callId,
+        token: Symbol() as ToolRunContext['token'], signal: new AbortController().signal,
+        deferContext() {}, concludeTurn() {},
+      })
+      const setup = () => {
+        const definitions = new Map<string, ToolDefinition>()
+        const controller = new RunToolController({
+          contract,
+          runId: 'skill-guard-run',
+          sessionId: 'skill-guard-session',
+          workspace,
+          skillNames: ['allowed-skill'],
+          writer: store,
+          maxOutputBytes: 1024,
+          clock: () => 1000,
+          budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+          checkBudget: () => true,
+          epoch: () => contextEpoch,
+          commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+        })
+        controller.register({ get: () => ({ list: () => [] }), tools: {
+          register: (definition: ToolDefinition) => {
+            definitions.set(definition.name, definition)
+            return () => undefined
+          },
+          guard() {},
+        } } as unknown as Context, agent)
+        return { controller, definitions }
+      }
+      const ready = async (
+        controller: RunToolController,
+        definitions: ReadonlyMap<string, ToolDefinition>,
+      ): Promise<void> => {
+        const readTool = definitions.get('singularity_read')
+        const planTool = definitions.get('singularity_plan')
+        assert.ok(readTool && planTool)
+        let cursor: string | undefined
+        do {
+          const page = await readTool.execute(
+            { kind: 'self', ...(cursor === undefined ? {} : { cursor }) },
+            execution('singularity_read'),
+          ) as { readonly nextCursor?: string }
+          cursor = page.nextCursor
+        } while (cursor !== undefined)
+        await planTool.execute({ sketch: {
+          v: 1,
+          taskId: contract.taskId,
+          runId: 'skill-guard-run',
+          contextEpoch,
+          objective: 'exercise skill guard states',
+          sourceContract: contract.digest,
+          levels: [0, 1].map(level => ({
+            level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
+          })),
+          directPlan: [],
+          assumptions: [],
+        } }, execution('singularity_plan'))
+      }
+
+      const stopped = setup()
+      await ready(stopped.controller, stopped.definitions)
+      assert.equal(stopped.controller.checkGuard(execution('skill', { name: 'allowed-skill' })), undefined)
+      const unbound = stopped.controller.checkGuard(execution('skill', { name: 'other-skill' }))
+      assert.ok(unbound)
+      assert.equal((JSON.parse(unbound) as { readonly code: string }).code, 'INPUT_NOT_AUTHORIZED')
+      const stopTool = stopped.definitions.get('singularity_stop')
+      assert.ok(stopTool)
+      await stopTool.execute({ reason: 'blocked', message: 'stop skill guard' }, execution('singularity_stop'))
+      const afterStop = stopped.controller.checkGuard(execution('skill', { name: 'allowed-skill' }))
+      assert.ok(afterStop)
+      assert.equal((JSON.parse(afterStop) as { readonly code: string }).code, 'RUN_CLOSED')
+
+      const submitted = setup()
+      await ready(submitted.controller, submitted.definitions)
+      const submitTool = submitted.definitions.get('singularity_submit')
+      assert.ok(submitTool)
+      await submitTool.execute(
+        { outputIds: ['out'], includeLearningDrafts: false },
+        execution('singularity_submit'),
+      )
+      const afterSubmit = submitted.controller.checkGuard(execution('skill', { name: 'allowed-skill' }))
+      assert.ok(afterSubmit)
+      assert.equal((JSON.parse(afterSubmit) as { readonly code: string }).code, 'ALREADY_SUBMITTED')
+    })
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
 void test('tool dispatch uses the exact host budget check while preserving read and stop', async () => {
   await withStore(async store => {
     const contract = makeContract(['领域约束'.repeat(4096)])
@@ -362,6 +461,7 @@ void test('tool dispatch uses the exact host budget check while preserving read 
       runId: 'run-guard',
       sessionId: 'session-guard',
       workspace: '/workspace',
+      skillNames: [],
       writer: store,
       maxOutputBytes: 1024,
       clock: () => contract.limits.deadlineAt + 1,
