@@ -21,6 +21,7 @@ import type {
 } from '@singularity/protocol'
 
 import { DomainStore } from './store.ts'
+import type { CasDigestDomain } from './store.ts'
 
 export type CommandServiceErrorCode =
   | 'IDEMPOTENCY_CONFLICT'
@@ -48,6 +49,8 @@ export interface CommandServiceOptions {
 export interface CommandObject {
   readonly id: string
   readonly bytes: Uint8Array
+  /** Digest domain for the object; defaults to `object`. */
+  readonly domain?: CasDigestDomain
 }
 
 /**
@@ -236,7 +239,7 @@ export class CommandService {
       }
 
       for (const object of commandObjectEntries(input.objects)) {
-        await this.store.putObject(object.id, object.bytes)
+        await this.store.putObject(object.id, object.bytes, object.domain ?? 'object')
       }
 
       const fact = await this.store.appendFact(unsealed)
