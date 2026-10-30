@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "apps/singularity/tsconfig.build.json" },
-    { "path": "packages/singularity/protocol/tsconfig.build.json" }
+    { "path": "packages/singularity/protocol/tsconfig.build.json" },
+    { "path": "packages/singularity/runtime/tsconfig.build.json" }
   ]
 }

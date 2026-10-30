@@ -7,7 +7,7 @@
     "node": ">=24.9.0"
   },
   "scripts": {
-    "verify": "pnpm verify:project && pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "verify": "pnpm verify:project && pnpm build && pnpm typecheck && pnpm lint && pnpm test",
     "verify:project": "node scripts/verify-project.mjs",
     "typecheck": "pnpm --recursive typecheck",
     "lint": "pnpm --recursive lint",
