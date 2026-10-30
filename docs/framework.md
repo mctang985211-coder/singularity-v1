@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3 与 A–F 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行的 RSI Round。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001/002 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现遇到未定义行为必须回到规范，不能自行补出新机制。
 
@@ -151,6 +151,7 @@ type TaskRef = Ref
 type PreviewRef = Ref
 type EvidenceRef = Ref
 type ExecutionRecordRef = Ref
+type AcceptanceRef = Ref
 type CompositionRef = Ref
 type RoundPlanRef = Ref
 ~~~
@@ -168,14 +169,17 @@ Ref 的 domain 由 schema 字段位置决定，线形不携带 domain：
 | `PreviewRef` / `ackPreview` | `preview` | preview 对象去掉最外层 digest；`ackPreview` 必须等于 `previewRef.digest` |
 | `EvidenceRef`（run/closed、task/closed、NodeView evidenceRef） | `evidence` | Evidence 去掉最外层 digest；ExecutionRecord 不得冒充 |
 | `ExecutionRecordRef` | `object` | ExecutionRecord 去掉最外层 digest |
+| `AcceptanceRef`（`contract.acceptance`、`DomainAdapter.resolveAcceptance`） | `object` | 冻结的 acceptance policy/provider identity，线形仍为 `{ id, digest }`；不新增 acceptance domain |
 | `CompositionRef` | `composition` | Composition 去掉最外层 digest |
 | `RoundPlanRef` | `round-plan` | RoundPlan 去掉最外层 digest |
 | `Fact.prev` / `Fact.digest` | `fact` | fact 去掉最外层 digest |
 | `Fact.commandDigest` | `command` | NormalizedCommand 的 JCS |
 
-- `PreviewRef`、`EvidenceRef`、`ExecutionRecordRef`、`CompositionRef`、`RoundPlanRef` 都是 `Ref` 的语义别名；线形仍是 `{ id, digest }`，domain 由字段位置决定。
+- `PreviewRef`、`EvidenceRef`、`ExecutionRecordRef`、`AcceptanceRef`、`CompositionRef`、`RoundPlanRef` 都是 `Ref` 的语义别名；线形仍是 `{ id, digest }`，domain 由字段位置决定。
+- `AcceptanceRef` 指向冻结的 acceptance policy/provider identity，使用 `object` domain；`DomainAdapter.resolveAcceptance` 返回同一形状。`PublicReceipt.provider` 是 `object` domain 的 `AssetRef`，必须与 host 从冻结合同解析出的 provider 及 `Evidence.verification.provider` 在 `id` 与 `digest` 上完全相等。不得用 `evidence`、`method` 或新 domain 承载 acceptance。
 - 未列出的 ref 类型或裸 `Digest` 不猜默认 domain；按 `INVALID_ARGUMENT` 拒绝，直到 amendment 补充。
 - `TemplateRef.digest == MethodRef.digest` 是有意的：template 的权威是冻结的 Method revision，不是独立 CAS 对象。
+- digest domain 集合保持 9 个；`AcceptanceRef`、`PublicReceipt`、`SubmissionManifest` 及其对象引用复用 `object`，不新增 `acceptance`、`receipt` 或 `submission` domain。
 - digest 匹配不是读取授权；即使 ref 验证通过，CAS 读取仍受 §12.3/§17.2 scope 限制。
 
 ### 4.1 把“业务义务”与“执行配置”分开
@@ -327,6 +331,8 @@ base outputs
 Root 的 criteria、verifier、scorer 来自用户授权的 domain case/operator，不属于 Method。
 
 Child 的 goal、inputs 以及模板允许的局部 guidance 可以由父模型提交 TaskProposal；模板 requiredCriteria、requiredOutputs 和 acceptancePolicy 由宿主强制合并，它们不是 root 的评分标准。`localCriteria` 只进入 TaskSpec.localGuidance，`localOutputs` 只能由 host 按 §4.2.1 转成 `required=false`、`role='supporting'` 的附加输出；二者都不能改变受信 acceptance。child 的验收 provider 由固定 domain acceptance policy 根据冻结业务 spec 解析，模型提供的是实例化数据，不是可执行代码或任意命令。
+
+`TaskContract.acceptance` 是 `object` domain 的 `AcceptanceRef`，冻结 acceptance policy 与 provider identity；`resolveAcceptance` 不得返回未列 domain 或裸 digest。host 解析出的 provider 必须与 `PublicReceipt.provider`、`Evidence.verification.provider` 在 `id` 和 `digest` 上完全一致；不匹配按 `invalid` 结算，不能补写 closure。`AcceptanceRef` 的对象 schema 仍由领域发布声明，本规范只冻结 ref domain、身份比较和 receipt 绑定规则。
 
 因此 RSI 可以改 child template 的目标、预填 criteria、输出结构和分解关系；**不能改已经准入的 Task，不能改 root case、root verifier 或 scorer**。不得把“不能修改 live contract”误解成“不能改未来 child template 的验收描述”。
 
@@ -733,12 +739,14 @@ Run closed 的 classification：
 
 | outcome | 原因 | 能否推导 Task verified |
 |---|---|---|
-| verified | 固定 verifier 对全部 required criteria 返回 pass | 可进入 join guard |
+| verified | 固定 verifier 对全部 required criteria 返回 pass，且 receipt 身份/摘要匹配、`timedOut=false`、`exit={code:0,signal:null}` | 可进入 join guard |
 | failed | 有效验收 fail；或模型 stop/no-submission/step-limit | 不可 |
-| invalid | provider/tool/verifier 基础设施异常、污染、composition mismatch | 不可；无领域分数 |
+| invalid | provider/tool/verifier 基础设施异常、污染、composition mismatch；或 receipt 缺失/畸形、身份或 digest 不匹配、任一 required criterion 为 invalid、`timedOut=true`、signal 终止、全部 pass 但 exit code 非 0 | 不可；无领域分数 |
 | cancelled | operator/祖先取消 | 不可 |
 
-没有提交的 failed Run 可以有 execution record，但没有 acceptance receipt。不要伪造 verifier receipt 来统一数据外观。
+verified/failed/invalid 由 host 按 §15.3 从 strict `PublicReceipt`、冻结合同、`timedOut` 和原始 `exit` 派生；verifier 自报总 verdict 或 exit=0 本身不能决定分类。timeout 必须用独立 `timedOut` 表达，不得写成 signal 或特殊 exit code。
+
+没有提交的 failed Run 可以有 execution record，但没有 acceptance receipt。不要伪造 verifier receipt 来统一数据外观。已提交但 receipt 缺失、畸形或含 invalid criterion 时，invalid receipt 仅作 operator 诊断，不作为 Evidence，closure 使用 `ExecutionRecord(invalid)`，且不扩展 ExecutionRecord 增加 receipt 字段。
 
 失败 Run 不自动导致 Task terminal：按 root admission 时冻结的 maxRuns/retry policy 决定。新 Run 的方法、Task contract 和祖先总预算不变。
 
@@ -816,7 +824,7 @@ Digest domain 与计算式见 §4.0；`Fact.digest` 使用 `fact` domain，`Fact
 | task/admitted | taskId、contract（contract domain；完整 root contract） | dispatch/ancestor query |
 | run/opened | taskId、runId、attempt、sessionId、composition、workspaceKey、workspaceSeed、budgetReservation | DSH create/resume |
 | task/children-admitted | parentRunId、batchId、children（完整 child contracts、join、budgetReservation、replacement?） | child dispatch/parent projection |
-| run/submitted | runId、outputs（frozen outputs manifest）、transcriptOffset、previewReceipts、readReceipts、planningSketchRef、feedbackRefs | verifier/trace |
+| run/submitted | runId、outputs（strict `SubmissionManifest` ref，§15.3）、transcriptOffset、previewReceipts、readReceipts、planningSketchRef、feedbackRefs | verifier/trace |
 | run/closed | runId、classification、reason、evidenceRef?、executionRecordRef?、usage、planningSketchRef?、feedbackRefs | retry/parent join/trace |
 | task/closed | taskId、outcome、reason、decisiveRunId?、evidenceRefs、scope?、cancellationCutRef? | parent/trace seal |
 | rsi/trace-sealed | rootTaskId、trace、usage、sessionCuts | RSI input |
@@ -981,8 +989,8 @@ type FactPayload = FactPayloadMap[FactType]
 | task/admitted | root contract；taskId 与 contract 一致；同一 taskId 只准入一次 |
 | run/opened | Task open、无 active Run；attempt 1-based 且不超过 maxRuns；budget/deadline 不超父预算 |
 | task/children-admitted | parent Run active；children 非空且不超过 maxBatchChildren；完整 child contracts；replacement 仅 source child terminal failure；模型不能提供 binding/join/replacement |
-| run/submitted | Run open；self read/PlanningSketch 有效；无 active child batch；outputs manifest 身份匹配；提交后 latch |
-| run/closed | `evidenceRef` 与 `executionRecordRef` 恰好一个；verified 只引用 Evidence；no-submission/invalid/cancelled 引用 ExecutionRecord；`usage` 独立保存且与 result 内嵌 usage canonical-equal |
+| run/submitted | Run open；self read/PlanningSketch 有效；无 active child batch；`outputs` 是按 §15.3 构建并冻结的 `SubmissionManifest`，身份匹配；提交后 latch |
+| run/closed | `evidenceRef` 与 `executionRecordRef` 恰好一个；verified 或带 Evidence 的 criteria-failed 引用 Evidence；no-submission/invalid/cancelled 引用 ExecutionRecord；invalid receipt 仅诊断，不得作为 Evidence 或扩展 ExecutionRecord；`usage` 独立保存且与 result 内嵌 usage canonical-equal |
 | task/closed | verified 需 decisive Run verified + join；`evidenceRefs` 只放 Evidence；subtree cancellation 由本 fact 独占，不补写 run/closed |
 | rsi/trace-sealed | 全树 terminal、所有 Run closed、agents/processes drained；same rootTaskId 只 seal 一次 |
 | rsi/round-opened | plan 先冻结；base = active head；proposer 尚未发请求 |
@@ -1101,7 +1109,9 @@ validate Run still open + self read + current PlanningSketch + no active child b
 
 等待 agent.whenIdle 由 turn 之外的 runtime 执行；在 submit 的 tool body 内等待自身 turn 结束会死锁。submit result 只说 submitted，不谎称 verifier 已通过。
 
-若存在后台任务，返回 ACTIVE_JOB 以及可执行的 wait/stop nextAction；如果部署无法保证写入已静止，则不产生可信快照。冻结后 verifier 只消费 CAS，绝不回读可变 agent workspace。
+提交冻结结果是 strict `SubmissionManifest`（§15.3）：`run/submitted.outputs` 和 submit 返回的 `submissionRef` 都引用同一 `object` domain 的 `ObjectRef`。模型只提供声明的非 draft output IDs 和 `includeLearningDrafts`，不能提供 `taskId`/`runId`/`contractDigest`/path/kind/role/required/object ref/digest/checks。非 draft `outputs` 严格按合同声明顺序；`learningDrafts` 固定 skill 在前、MCP 在后；`checks` 先按已冻结非 draft outputs、再按 learningDrafts。`checks` 为必填数组，每个已冻结输出恰好一条，记录 host 在冻结前观测到的 `bytes` 和 `symlinks:'none'`。数组顺序是 manifest digest 的一部分，不得排序、去重或补默认值；同一提交重放必须得到同一 digest。
+
+若存在后台任务，返回 ACTIVE_JOB 以及可执行的 wait/stop nextAction；如果部署无法保证写入已静止，则不产生可信快照。冻结后 verifier 只消费 CAS，绝不回读可变 agent workspace。缺失 required output、越界 path、file/tree 内 symlink 或超出部署 size cap 必须在 manifest 和 `run/submitted` 之前拒绝；已写入但未被 fact 引用的 CAS 对象是 orphan，不是业务成功。size cap 属于部署 policy，不是协议字段；manifest 只记录实际 bytes，`checks.symlinks='none'` 是 host 断言而非密码学证明。
 
 ### 11.5 验收和结算
 
@@ -1122,7 +1132,11 @@ async function verifyAndClose(runId: string) {
 }
 ~~~
 
-validateReceipt 必须检查：verifier ID/digest、contract/input/output digests、每条 required criterion 恰一次、verdict 合法、score 的 metric/unit/finite number、operationId 和原始退出状态。exit=0 本身不足以 verified。
+`domain.verify` 接收 §15.3 的 `VerifyRequest` 并返回 strict `PublicReceipt`。`validateReceipt` 必须检查：provider 与 host 从冻结合同解析出的 acceptance provider 及 `Evidence.verification.provider` 在 `id`/`digest` 上完全相等；`operationId` 等于 `runId + ':verify'` 且与 request/Evidence 一致；`contractDigest` 等于冻结合同；`inputDigests`/`outputDigests` 与授权输入/冻结输出逐位相等；criteria ID 集合恰等于 required criteria 且每条一次；verdict 合法；`reason` 为公开安全文本；metric/score 满足 §15.3 规则；`exit`/`timedOut` 形状合法。
+
+host 分类、exit 与 timeout 的完整规则见 §15.3；本 procedure 只消费 `validateReceipt` 的结果，不在 runtime 另写第二套判定。exit=0 本身不足以 verified，verifier 自报总 verdict 也不被接受。
+
+`invalid` receipt 仅可作 operator 诊断：不得 seal 成 Evidence，不得扩展 `ExecutionRecord` 引用它，不进入 NodeView/ProposerView/公开 trace，也不产生领域分数。no-submission、显式 stop、基础设施 invalid、cancelled 使用现有 `ExecutionRecord`；`run/closed` 仍恰好引用一个结果：verified 或带 Evidence 的 criteria-failed 使用 `evidenceRef`，其余使用 `executionRecordRef`。timeout 必须结算为 `invalid`，不得伪造成 signal 或特殊 exit code。
 
 有效 required criterion fail 是领域 failed，可由固定 scoring policy 得出有限失败分；无提交、缺失/invalid trial 没有可比较分数，不能由 comparator 自行填零。
 
@@ -1257,6 +1271,8 @@ children/<taskId>/<outputId>/...
 ~~~
 
 不 overlay parent 代码，不导入 child 的临时文件或孙节点目录。需要整合时父模型复制或改写为自己的声明产物。挂载 refs 和 asOf 进入当次 context snapshot；最终 Evidence.inputs 包含初始输入及这些追加的 direct outputs。
+
+`Evidence.inputs` 必须与 verifier 授权输入由同一 snapshot 派生，并逐位相等；不得加入未给 verifier 的 audit-only 输入，也不得让 verifier 只收到初始输入而 Evidence.inputs 记录 direct child outputs。`PublicReceipt.inputDigests` 与 `Evidence.inputs[].digest` 逐位相等；`PublicReceipt.outputDigests` 与 `Evidence.outputs[].digest` 逐位相等，后者按 §15.3 的冻结输出顺序派生。digest 相等不是读取授权。
 
 ### 12.4 每种模型视图
 
@@ -1533,6 +1549,166 @@ composition 记录：DSH 确切包/配置 identity、platform prompt digest、Ta
 Receipt、preview/read receipt、precheck receipt、comparison、approval 一律是 CAS `ObjectRef`；fact 不内联 receipt 内容。`privateReceipt` 只在 Evidence 内，不进入 fact、NodeView、ProposerView 或模型输出。
 
 `CancellationCut` 是 `task/closed` 引用的不可变 CAS 快照，不是一套新 facts：它记录目标 Task、受影响的 descendants/Runs 与已知 ExecutionRecord refs；最终 cut 与尾部 usage 由 `rsi/trace-sealed` 统一引用，不覆写旧 Evidence。
+
+### 15.3 Acceptance receipt 与 submission manifest
+
+`PublicReceipt` 与 `SubmissionManifest` 是 `object` domain 的 strict CAS 对象，不是 authority、fact 或第二账本。它们分别由独立 verifier 和 host 产生；worker/模型不能提交其字段、总 verdict、digest 或 checks。两者均拒绝未知字段、未知版本、缺字段和以 `null` 代替 optional；结构化对象 digest 按 §4.0 去掉最外层 `digest` 后计算 JCS。
+
+~~~ts
+interface VerifyRequest {
+  readonly operationId: string
+  readonly task: TaskContract
+  readonly inputs: readonly ObjectRef[]
+  readonly outputs: readonly ObjectRef[]
+}
+
+interface PublicExitStatus {
+  readonly code: number | null   // 进程退出码；signal 终止时为 null
+  readonly signal: string | null // 原始 signal 名；正常退出时为 null
+}
+
+interface PublicCriterionResult {
+  readonly id: string
+  readonly verdict: 'pass' | 'fail' | 'invalid'
+  readonly reason: string
+  readonly metric?: {
+    readonly name: string
+    readonly unit: string
+    readonly value: number      // finite number
+  }
+  readonly score?: number       // finite number；必须伴随 metric
+}
+
+interface PublicReceipt {
+  readonly v: 1
+  readonly provider: AssetRef
+  readonly operationId: string
+  readonly contractDigest: Digest
+  readonly inputDigests: readonly Digest[]
+  readonly outputDigests: readonly Digest[]
+  readonly criteria: readonly PublicCriterionResult[]
+  readonly exit: PublicExitStatus
+  readonly timedOut: boolean
+  readonly digest: Digest       // object domain；最外层 CAS seal
+}
+
+interface SubmittedOutput {
+  readonly id: string
+  readonly path: string
+  readonly kind: 'file' | 'tree'
+  readonly role: 'deliverable' | 'supporting'
+  readonly required: boolean
+  readonly object?: ObjectRef   // required=true 时必填；可选输出未冻结时可缺
+}
+
+interface SubmittedLearningDraft {
+  readonly id: '__skill-drafts' | '__mcp-drafts'
+  readonly path: 'learning-drafts/skills' | 'learning-drafts/mcp-servers'
+  readonly kind: 'tree'
+  readonly role: 'skill-draft' | 'mcp-draft'
+  readonly required: false
+  readonly object: ObjectRef
+}
+
+interface SubmissionCheck {
+  readonly outputId: string
+  readonly bytes: number        // 非负安全整数
+  readonly symlinks: 'none'     // host 在冻结前完成 no-follow 遍历的断言
+}
+
+interface SubmissionManifest {
+  readonly v: 1
+  readonly taskId: string
+  readonly runId: string
+  readonly contractDigest: Digest
+  readonly includeLearningDrafts: boolean
+  readonly outputs: readonly SubmittedOutput[]
+  readonly learningDrafts: readonly SubmittedLearningDraft[]
+  readonly checks: readonly SubmissionCheck[]
+  readonly digest: Digest       // object domain；最外层 CAS seal
+}
+~~~
+
+**PublicReceipt 规则**
+
+1. `v` 只允许 `1`；未知字段、未知版本、缺字段拒绝。
+2. `provider` 使用 `object` domain，且与 §4.3 解析出的 acceptance provider、`Evidence.verification.provider` 在 `id`/`digest` 上完全相等。
+3. `operationId` 非空，必须等于 `VerifyRequest.operationId` 和 `Evidence.verification.operationId`；固定值 `runId + ':verify'`。同一 Run 的恢复/重放不得重新生成；新 Run 使用新的 `runId + ':verify'`。
+4. `contractDigest` 必须等于冻结 `TaskContract.digest` 和 `Evidence.contractDigest`。
+5. `inputDigests` 是 verifier 授权输入 `ObjectRef` 的 digest 有序数组，包含冻结合同输入及已授权的 direct child outputs，必须与 `Evidence.inputs[].digest` 逐位相等并来自同一 snapshot。`outputDigests` 是从 `SubmissionManifest` 派生给 verifier 的冻结输出 `ObjectRef` 的 digest 有序数组，必须与 `Evidence.outputs[].digest` 逐位相等。不排序、不去重、不补默认值。
+6. `criteria` 的 ID 集合必须恰好等于 `TaskSpec.criteria` 中 `required=true` 的 ID 集合；每条恰好一次；缺项、重复、未知 ID、非 required criterion 均拒绝。空 required set 是否允许准入由既有 admission policy 决定；不得增加“空 criterion 自动 verified”的放宽。
+7. `reason` 对所有 verdict 必填且必须是公开可读文本；不得包含隐藏用例答案、fixture 内部路径、golden data 或 private verifier recipe。
+8. `metric`/`score` 只允许出现在 `pass`/`fail` criterion；`invalid` criterion 不得携带 `metric` 或 `score`。`metric.name`/`metric.unit` 非空，`metric.value` 与 `score` 必须是有限 number（拒绝 `NaN`、`Infinity`、字符串和超出 JSON 数值模型的输入）。`score` 必须同时出现 `metric`。
+9. `exit` 是原始进程终止状态：`code` 为整数或 `null`，`signal` 为字符串或 `null`；对实际产生终止状态且未超时的进程，恰好一个非 `null`。`signal` 只记录真实 signal，不能用来表达 timeout。两者都为 `null` 且 `timedOut=false` 使 receipt 无效。
+10. `timedOut` 是必填 boolean，独立于 `exit`。`timedOut=true` 表示 verifier 超时；此时 `exit` 可以是 `{ code: null, signal: null }` 或强制终止后的原始状态，但 host 必须按 `invalid` 结算，不得用 signal 模拟 timeout。
+11. receipt 不包含 `at`/`asOf`/随机 ID/agent ID/usage；这些要么属于 Evidence/DSH 记录，要么会破坏内容寻址和重放幂等。
+12. `digest` 是 `object` domain 的最外层 seal，不是新的业务字段；`PublicReceipt` 本身不是 Evidence，host 把它放入 `Evidence.verification.publicReceipt` 后才形成验收证据。
+13. receipt 不设总 verdict 字段；`verified`/`failed`/`invalid` 只由 host 按本节规则派生，避免 verifier 用总 verdict 绕过逐 criterion 校验。
+
+**Host 分类、exit 与 timeout**
+
+| 条件 | host 结果 |
+|---|---|
+| receipt strict 有效；provider/operationId/contract/input/output digest 全匹配；required criteria 恰好一次且全部 `pass`；`timedOut=false`；`exit={code:0,signal:null}` | `verified` |
+| receipt strict 有效；身份/digest 匹配；至少一条 required criterion 为 `fail`；没有 required criterion 为 `invalid`；`timedOut=false`；`exit.code` 非 null 且 `signal=null` | `failed`；exit code 可以是 0 或非 0，exit=0 不能覆盖 fail |
+| 任一 required criterion 为 `invalid`；或 `timedOut=true`；或 `signal` 非 null；或 `exit` 两者皆 null 且未超时；或 receipt 缺失/畸形；或 provider/operationId/digest 不匹配；或 criteria 缺失/重复/未知/非 required；或 metric/score 非有限；或 `invalid` 携带分数；或全部 pass 但 exit code 非 0 | `invalid` |
+| 没有 submit（no-submission/stop/基础设施终结） | 走 `ExecutionRecord`；不需要 acceptance receipt，也不因“没有 receipt”判 `invalid` |
+
+- exit=0 是 `verified` 的必要但不充分条件：它只有在 receipt 完整、身份/digest 匹配、required criteria 全部 pass、`timedOut=false` 且 `signal=null` 时才成立。
+- exit=0 不能把 fail 变成 verified；非 0 exit 也不能单独决定 failed：有完整 fail receipt 且进程未超时/未被信号终止时为 `failed`，receipt 不完整或全部 pass 却非 0 时为 `invalid`。
+- `timedOut=true` 是基础设施/超时 invalid，不是领域 failed，不给领域分数；不得用 `signal` 或特殊 exit code 代替。
+- `invalid` receipt 仅作诊断：不得 seal 成 Evidence，也不得扩展 `ExecutionRecord` 来引用它；closure 使用现有 `ExecutionRecord(invalid)`。`failed` 可以有有限失败分；`verified` 可以携带公开 metric/score，但不能由模型自报；`invalid` 没有领域分数。
+
+**SubmissionManifest 规则**
+
+1. `v` 只允许 `1`；未知字段、未知版本拒绝。
+2. `taskId`、`runId`、`contractDigest` 必须与当前 open/submitted 的 Run 和冻结合同一致；不得由模型或 submit 参数提供。
+3. `outputs` 包含 `TaskSpec.outputs` 中所有非 draft 输出（`role` 为 `deliverable` 或 `supporting`），顺序严格等于合同声明顺序；不得按 id/path 排序。每个 output 的 `id`/`path`/`kind`/`role`/`required` 原样来自冻结合同；id 与 path 均唯一。
+4. `required=true` 必须有 `object`；可选 supporting 输出未产生时可以没有 `object`，且不得成为 acceptance 依据。
+5. `learningDrafts` 是必填数组，不是 optional 字段。没有冻结 draft 目录时为空数组；有目录时只允许固定 `__skill-drafts`（skill 在前）与 `__mcp-drafts`（MCP 在后），各项必须 `kind='tree'`、`required=false` 且带 `object`。`learningDrafts` 中的 id/path 不得与 `outputs` 重叠。
+6. `includeLearningDrafts` 是必填 boolean。`false` 时 `learningDrafts` 必须为空；`true` 时按实际存在的目录冻结，目录缺失不失败、对应数组为空或只含存在项。
+7. `checks` 是必填数组，不是 optional 字段。每个已冻结输出（`outputs` 中带 `object` 的项，加上 `learningDrafts` 的项）各提供恰好一条，`outputId` 唯一；顺序先按 `outputs` 合同顺序，再按 `learningDrafts` 固定顺序。未冻结的可选输出没有 check 条目；没有冻结输出时 `checks=[]`。
+8. `bytes` 是非负安全整数；`symlinks: 'none'` 表示 host 在冻结前对 file 本体和 tree 每个节点做了 no-follow 检查，未发现 symlink。它不是对 CAS bytes 的密码学证明，见下文证据边界。
+9. manifest 不包含 `at`/`asOf`/随机 ID/agent ID/私有 receipt/validation payload；同样是为了内容寻址和重放幂等。
+10. `digest` 是 `object` domain 的最外层 seal；`run/submitted.outputs` 引用该 manifest 的 `ObjectRef`，`singularity_submit` 返回的 `submissionRef` 也指向同一 ref。manifest 不是新的 fact，也不是第二账本。
+
+**稳定排序与 Evidence 输入**
+
+- 非 draft `outputs`：严格按 `TaskSpec.outputs` 中非 draft 项的声明顺序；base 与 local supporting 的相对顺序不得改变。两个 draft 声明不进入 `outputs`，而是按固定 skill → MCP 顺序进入 `learningDrafts`；这不是对合同声明顺序的重新排序，因为 draft 在合同中本来就固定在最后。
+- `learningDrafts`：固定 skill 在前、MCP 在后；无目录时为空数组。
+- `checks`：先按 `outputs` 中有 `object` 的项，再按 `learningDrafts` 顺序；无冻结输出时为空数组。
+- `PublicReceipt.inputDigests`：按 verifier 授权输入顺序，包含冻结合同输入和已授权的 direct child outputs；`Evidence.inputs` 必须由同一 snapshot 派生并逐位一致。
+- `PublicReceipt.outputDigests`：按 manifest 派生给 verifier 的冻结输出顺序（`outputs` 中有 `object` 的项，再按 `learningDrafts`）；`Evidence.outputs` 必须逐位一致。
+- 数组顺序是 JCS/digest 的一部分；同一组文件但顺序不同必须产生不同 manifest/receipt digest，并按身份不匹配拒绝，不能静默排序后接受。
+- 所有 schema 不包含时间戳或随机值；同一合同、同一冻结 bytes、同一顺序应产生同一 manifest/receipt digest。
+
+**Symlink、size 与证据边界**
+
+Host 在写 manifest 和 `run/submitted` 之前必须完成：
+
+1. 声明的 `path` 必须是 workspace 内相对路径，规范化后不得为绝对路径、不得含 `..`、不得命中保留 draft ID/path。
+2. 对 `file` 使用 no-follow `lstat`，必须是普通文件；对 `tree` 递归 no-follow 遍历，拒绝 symlink、socket、device、FIFO 等非普通文件/目录节点。hardlink 是否拒绝由部署 policy 决定，不由 manifest digest 证明。
+3. 按部署 policy 检查 size cap；框架不冻结 output size 上限，本规范不新增协议级 limit，也不在 manifest 中写 cap/policy。`checks.bytes` 只记录冻结时观测到的总 bytes。
+4. 先在 workspace 中检查，再把 bytes 写入 CAS，重读并校验 object digest；manifest 只在所有 required 输出成功冻结后写入。
+5. 冻结后 verifier 只读 CAS，不回读活动 workspace；因此 workspace 在冻结后的变化不能改变本次 submission。
+
+证据边界：
+
+- manifest digest 能证明 manifest 内容（包括 `checks`、refs、声明顺序）未被篡改，也能通过 object ref 重验冻结 bytes。
+- `checks.symlinks='none'` 和 `bytes` 是 host 写入的断言，不是密码学证明；digest 不能证明 host 真的执行了正确遍历，也不能证明 traversal 与 freeze 之间没有 TOCTOU。可信度来自单一 trusted writer 和冻结前检查，不来自哈希本身。
+- 检查结果放在 manifest 的 required `checks`，不另立 check receipt/账本。若未来需要独立检查 receipt，必须另提 amendment；当前把它作为替代实现会与本节不兼容。
+- 缺失 required output、symlink、越界 path 或 size 超限必须在 manifest/fact 之前拒绝 submit；已写入但未被 fact 引用的 CAS 对象是 orphan，不是业务成功。
+
+**Domain、privateReceipt 与 invalid receipt**
+
+- `AcceptanceRef`、`PublicReceipt.digest`、`PublicReceipt.provider`、`SubmissionManifest.digest` 及 manifest 中输出对象引用都使用 `object` domain；`PublicReceipt.inputDigests`/`outputDigests` 只保存既有 object digest 值。`Evidence.digest` 使用 `evidence`；`ExecutionRecord.digest` 使用 `object`。domain 集合保持 §4.0 的 9 个，不新增 `receipt`、`submission` 或 `acceptance` domain；不得用 `evidence` domain 计算 receipt/manifest，否则会与 EvidenceRef 混淆并破坏“ExecutionRecord 不得冒充 Evidence”的边界。digest 匹配不是读取授权。
+- `privateReceipt` 只作为 `Evidence.verification.privateReceipt?: ObjectRef` 存在，是 opaque CAS object，本规范不冻结其 schema；不进入 `PublicReceipt`、`SubmissionManifest`、fact、NodeView、ProposerView、模型输出、feedback refs 或 submit 结果。public `reason`/`metric`/`score` 必须是公开安全内容；隐藏用例、答案、golden data、private fixture 路径和 private verifier recipe 只能留在 private receipt 或受权 evaluator/verifier scope。一个 Run 可以只有 public receipt 而没有 private receipt；缺失不是失败。host 在生成 public receipt、feedback、祖先查询、RSI trace 和 direct child 结果时必须过滤 private refs；digest 相等不等于读取授权。
+- no-submission、显式 stop、基础设施 invalid、cancelled 使用 `ExecutionRecord`，保留 taskId/runId/contractDigest/method/composition/inputs/usage/sessionCut/reason，可缺 outputs/verification；它不能被冒充成 verified Evidence。没有提交的失败 Run 可以有 ExecutionRecord，但没有 acceptance receipt；不得为了统一数据外观伪造 `PublicReceipt`。`run/closed` 仍恰好引用一个结果：verified 或带 Evidence 的 criteria-failed 使用 `evidenceRef`；no-submission/stop/invalid/cancelled 使用 `executionRecordRef`。
+- 已 submit 但 verifier 超时、基础设施失败或返回含 `invalid` criterion 的 receipt 时：host 按 `invalid` 结算，使用现有 `ExecutionRecord(invalid)`；invalid receipt 仅可作为 operator 诊断留存，不得写入 Evidence，也不得扩展 `ExecutionRecord` 增加 receipt 字段，不进入 NodeView/ProposerView/公开 trace。
+- fresh retry 使用新 Run/session/workspace，合同与 Method 不变；旧 receipt/manifest 不复制、不覆盖、不自动成为新 Run 的验收结果。新 Run 只有重新 submit 并重新验收才可能 verified。
+- `PublicReceipt` 与 `SubmissionManifest` 都是 CAS 对象；host 先写对象，再 append 引用它们的 fact。它们不新增 journal 行、fact type、writer 或 fold。同一 commandId + commandDigest 重放时返回原 `Fact` 及其原 manifest/receipt refs，不重新冻结、不重新验证、不追加 fact。
+- verifier 已完成但 closure 未写时，用固定 `operationId` 和 receipt 身份恢复：身份/digest 可核对则补写 closure；不可核对或超时则 `invalid`，不盲目重复有外部副作用的调用。manifest/receipt 的稳定排序、无时间戳和独立 `timedOut` 使同一提交在重放/重启后产生相同 digest；不同顺序或不同 refs 必须产生不同 digest 并按身份不匹配拒绝。
+- `seq`/`prev`/`commandDigest`/torn-tail 规则不变；CAS 引用内容的 domain-aware replay 校验仍是后续 runtime/reducer 实现工作，本节不声称已补上，也不产生实现或 conformance 证据。
 
 ## 16. 从 root terminal 到一个 RSI Round 结束
 
@@ -1925,7 +2101,7 @@ interface DomainAdapter {
 }
 ~~~
 
-verify 必须在进程外或固定 broker 中执行，receipt 中公开 criterion 与 metric，不公开 private fixtures。compare 只能读取 public Evidence；它不能发 journal fact、创建 Agent、修改 Method 或改变 plan。
+verify 必须在进程外或固定 broker 中执行，接收 §15.3 的 `VerifyRequest` 并返回 strict `PublicReceipt`；receipt 中公开 criterion 与 metric，不公开 private fixtures。`resolveAcceptance` 返回 §4.0 `object` domain 的冻结 acceptance/provider identity，`PublicReceipt.provider` 必须与其及 `Evidence.verification.provider` 完全相等。host 校验 receipt 身份、digest、criteria、`exit`、`timedOut` 并按 §15.3 派生 outcome；verifier 自报总 verdict 或 exit code 不是验收权威。`privateReceipt` 保持 opaque，不进入 worker/RSI/模型视图。compare 只能读取 public Evidence；它不能发 journal fact、创建 Agent、修改 Method 或改变 plan；invalid/missing evidence 不得作为零分。
 
 领域包发布要带：
 
@@ -1954,8 +2130,9 @@ RunPool 只分配执行资源，不决定 workflow。按 admission/ready 顺序�
 | children-admitted 后尚未 dispatch | fact 中全部 children contracts | 仅调度缺少 Run 的 child，不能重新准入 |
 | parent 在等待 children | 子树事实和原 parent session | children 尚未全部 terminal 时不唤醒；完成后的 wake 使用稳定 batch key |
 | prepare 后未 commit | 原 DSH tool result、contextEpoch | 重读即可；无 Task 创建，不需要撤销 |
-| submitted 后未验证 | CAS submission、acceptance identity、operationId | 用固定操作 ID查询/验证同一 snapshot，禁止回读活动 workspace |
-| verifier 完成但 closure 未写 | 固定 verifier receipt 对象 | 身份和摘要可核对则补写；结果不可核对则 invalid，不盲目重复有外部副作用的调用 |
+| submitted 后未验证 | CAS submission、acceptance identity、operationId | 用固定 operationId 查询/验证同一 manifest/input/output snapshot，禁止回读活动 workspace；不重新生成 operationId |
+| verifier 完成但 closure 未写 | 固定 verifier receipt 对象 | provider/operationId/contract/input/output digest 可核对则补写 closure；timedOut、畸形或身份不匹配则 `invalid`，不盲目重复有外部副作用的调用；invalid receipt 仅诊断 |
+| verifier 超时、被信号终止或基础设施失败 | 固定 operationId、`timedOut` 和原始 `exit` | 结算 `ExecutionRecord(invalid)`；不得把 timeout 写成 signal 或特殊 exit code，不产生领域分数，不 seal Evidence |
 | run/closed 后 task 未关闭 | reducer state + join + retry policy | 幂等补做 Task reconcile，不能重新购买该 Run |
 | Task 全终态但 trace 未 seal | 所有 session cuts、尾部 usage | 排空 owned processes，补 seal；缺日志则明确 invalid |
 | proposal 已交付但 candidate 未 ready | patchRef/base digest/固定 build recipe | 重放 pure apply，幂等构建/校验相同 revision |
@@ -1963,6 +2140,8 @@ RunPool 只分配执行资源，不决定 workflow。按 admission/ready 顺序�
 | round closed 后 activation 未执行 | closed comparison + expected previous head | 保留候选，等待 activation operator 的授权；不把 result 存在当成 activation |
 
 resume 必须重新装配并比较 composition，不能只比较 preset 名。DSH compaction/clear 若改变 session 身份或丢失必要 receipt，当前 Run 进入 interrupted/context-limit 路径；不擅自构造“同一 Run 已恢复”。这一行为须用确切 DSH 版本验证。
+
+`SubmissionManifest` 和 `PublicReceipt` 的恢复以稳定 digest 和固定 `operationId` 为锚：先按原 ref/digest 读取 CAS 对象，再核对 contract/input/output digest、criteria 和 timedOut；不得重新冻结提交、重新生成 receipt 或重复有外部副作用的验证调用。manifests/receipts 一旦写入即不可变；修复只能创建新对象或新 Run。`seq`/`prev`/`commandDigest`/torn-tail 的 replay 规则不变。
 
 budget exhaustion：先记录不可继续的原因、禁止新动作，再取消/排空 owned work；关闭非 terminal 子树，保留已 terminal Evidence。之后 seal partial trace，round 记 insufficient-evidence。尾部实际费用继续计入，不能用 deadline 前的粗略数值冒充最终 usage。
 
@@ -2034,6 +2213,8 @@ C-24 single-case gain with validation regression is not improved
 
 真实模型场景至少需要：一个普通领域任务、一个会递归分解的任务、一个空 Method 探索任务、一个 Method improvement 任务；不能用 scripted agent 结果代替 real model evidence。fixture verifier 可用于协议 guard，但不能把 fixture pass 当领域收益。
 
+验收、提交与重放相关场景的边界由 §15.3 冻结：提交只冻结 `SubmissionManifest` 并交给独立 verifier；`PublicReceipt` 由 host 校验身份、digest、required criteria、`exit` 和 `timedOut` 后派生 `verified`/`failed`/`invalid`；exit=0 不充分，timeout 不得伪造成 signal；invalid receipt 仅诊断，不写 Evidence、不扩 `ExecutionRecord`；no-submission 不生成 receipt，fresh retry 不复用旧 verdict；manifest/receipt 的稳定排序与固定 `operationId` 支持幂等重放。以上是协议语义，不提供实现或证据。真实 DSH、真实模型和领域验收证据出现前，全部场景保持 `unproven`；`pnpm verify`、schema 静态校验或文档 digest 一致不能升级状态。
+
 ## 21. 复杂度预算
 
 | 维度 | v1 上限 | 约束 |
@@ -2063,7 +2244,7 @@ C-24 single-case gain with validation regression is not improved
 | 冻结组 | 对应章节 | 规范内容 |
 |---|---|---|
 | 分层与宿主 | 0–3 | 四层、单 writer/fold/wake；DSH 0.2.2-alpha.2；MCP 原生挂载；无第二 Task loop |
-| Task 与验收 | 4、9、11、15 | 冻结 Spec/Contract；按 contract digest 索引的 Contract Summary；root 独立验收；Task/Run 状态机；required replacement/retry/join；固定预算 |
+| Task 与验收 | 4、9、11、15 | 冻结 Spec/Contract；`AcceptanceRef=object`；`PublicReceipt`/`SubmissionManifest` strict schema、host 分类与证据边界；按 contract digest 索引的 Contract Summary；root 独立验收；Task/Run 状态机；required replacement/retry/join；固定预算 |
 | Method 与探索 | 5–6 | 可复用模板目录、有界递归、局部 guidance、公开资源冻结、PlanningSketch、draft 后注册 |
 | 本级 workflow | 7–8 | 多批次、一批可并行；binding 派生 required/probe；preview/next-step ack；feedback replan；原子准入 |
 | 事实与恢复 | 10、19.1 | 13 种闭合 facts；CAS/单 writer；取消级联；稳定身份恢复；有界 drain |
@@ -2077,6 +2258,7 @@ C-24 single-case gain with validation regression is not improved
 
 ~~~text
 版本：V1 发布规范
+修订：2026-10-30 纳入 amendment 002（Acceptance receipt 与 submission manifest；A0–A9 已批准）
 权威文件：SINGULARITY_FRAMEWORK_V1.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威
@@ -2114,6 +2296,15 @@ C-24 single-case gain with validation regression is not improved
 ~~~
 
 遇到未定义行为，先尽量在既有不变量内拒绝/给出明确错误；不能静默添加“临时”行为并回头将其写成事实。确需新语义时暂停依赖该语义的部分，提交 amendment；独立实现工作仍可继续。
+
+当前已批准并纳入的 amendment：
+
+| Amendment | 状态 | 纳入内容 |
+|---|---|---|
+| [001](amendments/001-s2-protocol-closure.md) | 已批准并纳入 | S2 protocol closure（K1–K5）；K6 证据规则不变 |
+| [002](amendments/002-acceptance-and-submission.md) | 2026-10-30 用户批准 A0–A9；已纳入本文与 `spec-lock.json` | `AcceptanceRef=object`、`PublicReceipt`/`SubmissionManifest` strict 字段、host 分类、digest 顺序、`exit`/`timedOut`、`checks`、opaque `privateReceipt`、invalid receipt 仅诊断 |
+
+用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义，但不等于实现、运行验证或 conformance 证据；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的 `proven` 状态仍须后续变更独立完成。规范、lock、相关协议和 conformance 的更新必须与本次批准保持同一语义。
 
 ### 23.3 实现的 review gates
 

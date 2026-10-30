@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；S2-A（protocol JSON/JCS/digest/schema 基础）、S2-B（Task+Method schema、seal 与 tool errors）、S2-C1（获批闭合 fact payload）、S2-C2（pure command/journal replay）、S2-C3（纯 root/child admission）与 S2-C4（纯 Task/Run reducer）已完成，S2 完成；S3-A（单 writer journal 与 CAS）与 PlanningSketch schema 已完成，acceptance/submission amendment 仍待用户确认，S3 验收前规范阻断，不宣称 S3-B 开始或完成。Task/RSI 业务实现尚未开始。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。本仓库已进入 V1 构建阶段。S1 宿主 spike 已完成（S1-A 宿主 composition、S1-B MCP stdio、S1-C MCP streamable-http、S1-D 稳定 wake 去重、S1-E compaction/context epoch）；S2-A（protocol JSON/JCS/digest/schema 基础）、S2-B（Task+Method schema、seal 与 tool errors）、S2-C1（获批闭合 fact payload）、S2-C2（pure command/journal replay）、S2-C3（纯 root/child admission）与 S2-C4（纯 Task/Run reducer）已完成，S2 完成；S3-A（单 writer journal 与 CAS）与 PlanningSketch schema 已完成；用户于 2026-10-30 批准 amendment 002（A0–A9），`docs/framework.md`、`spec-lock.json`、conformance 链接与 Build Plan/README 已同步；S3-B1 acceptance/submission schema 进行中，S3-B 执行未开始。Task/RSI 业务实现尚未开始。
 
 ## 权威入口
 
@@ -16,7 +16,7 @@ Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中�
 
 - Node `>=24.9.0`
 - pnpm `11.18.0`
-- DSH `0.2.2-alpha.2`（S1-A–S1-E 已完成真实 DSH 组合验证；S2、S3-A 与 PlanningSketch schema 已完成；acceptance amendment 待确认）
+- DSH `0.2.2-alpha.2`（S1-A–S1-E 已完成真实 DSH 组合验证；S2、S3-A 与 PlanningSketch schema 已完成；amendment 002 已批准并纳入；S3-B1 schema 进行中，S3-B 执行未开始）
 
 ## 验证
 
@@ -33,7 +33,7 @@ pnpm verify
 - `pnpm lint`（`pnpm --recursive lint`）：所有 workspace 包的 ESLint；
 - `pnpm test`（`pnpm --recursive test`）：所有 workspace 包的测试，包括 app 宿主组合、protocol 单元/负例与 runtime 存储测试。
 
-CI 只保留一个 `verify` job。S1-A–S1-E 与 S2（S2-A–S2-C4）已完成；S3-A 与 PlanningSketch schema 已完成，frozen install 与根 `pnpm verify` 全通过（protocol tests 189/189、app tests 6/6、runtime tests 20/20，合计 215），`git diff --check` 通过。PlanningSketch 只接受有序 `[0,1]`/`[0,1,2]` levels 并严格拒绝 authority 字段。acceptance/submission amendment 仍为草案，Q1–Q11 待用户决定（AcceptanceRef domain、PublicReceipt verdict/digests/metric/exit、SubmissionManifest 拆分/checks、invalid receipt 去向、privateReceipt opaque、conformance 不变）；确认前不实现 receipt/manifest，S3-B 未开始。C-11 仍缺完整场景证据，所有 conformance 保持 unproven。领域 RSI 收益需要独立证据，不能由仓库检查推断。
+CI 只保留一个 `verify` job。S1-A–S1-E 与 S2（S2-A–S2-C4）已完成；S3-A 与 PlanningSketch schema 已完成；amendment 002 已获用户于 2026-10-30 批准并纳入规范，S3-B1 acceptance/submission schema 进行中，S3-B 执行未开始。本次规范同步的 frozen install 与根 `pnpm verify` 全通过（protocol tests 189/189、app tests 6/6、runtime tests 30/30，合计 225），`git diff --check` 通过；spec digest 以 `spec-lock.json` 为准。PlanningSketch 只接受有序 `[0,1]`/`[0,1,2]` levels 并严格拒绝 authority 字段。`AcceptanceRef=object`、`PublicReceipt`/`SubmissionManifest` strict 字段、host 分类、digest 顺序、`exit`/`timedOut`、`checks`、opaque `privateReceipt` 与 invalid receipt 仅诊断已冻结在规范中；protocol/runtime 实现与负例仍属 S3-B1 后续证据。所有 conformance 保持 unproven，C-11 仍缺完整场景证据。领域 RSI 收益需要独立证据，不能由仓库检查推断。
 
 ## 协作流程
 
