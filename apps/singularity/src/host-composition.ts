@@ -4,15 +4,22 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { AgentOptions } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import { loadProfileDirectory } from '@deepseek-ai/dsh-app-boot'
 import { INSTALL_ANCHOR, runProfile } from '@deepseek-ai/dsh/profile-boot'
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
-import type { CompositionPayload, JsonValue } from '@singularity/protocol'
+import type { CompositionPayload, JsonValue, TaskContract } from '@singularity/protocol'
 import { canonicalize, computeDigest } from '@singularity/protocol'
-import { renderWorkerCard } from '@singularity/runtime'
-import type { CasObjectWriter } from '@singularity/runtime'
+import {
+  METHOD_GUIDANCE_ORDER,
+  METHOD_GUIDANCE_SECTION,
+  PLATFORM_PROMPT_SERVICE,
+  assertCompositionResources,
+  loadMethodResources,
+  renderWorkerCard,
+} from '@singularity/runtime'
+import type { CasObjectReader, CasObjectWriter } from '@singularity/runtime'
 
 const REQUIRED_DSH_VERSION = '0.2.2-alpha.2'
 const PROFILE_NAME = 'singularity'
@@ -36,9 +43,13 @@ export interface SpikeProfile {
 }
 
 export interface SingleRunCompositionInput {
-  readonly writer: CasObjectWriter
+  readonly store: CasObjectReader & CasObjectWriter
   readonly id: string
-  readonly base: Omit<CompositionPayload, 'dsh' | 'platformPrompt' | 'modelRoute' | 'resources'>
+  readonly contract: TaskContract
+  readonly base: Omit<
+    CompositionPayload,
+    'contract' | 'dsh' | 'guidance' | 'modelRoute' | 'platformPrompt' | 'resources' | 'template'
+  >
   readonly agentOptions: AgentOptions
 }
 
@@ -83,6 +94,19 @@ export async function buildSingleRunComposition(
   const provider = input.agentOptions.provider
   const model = input.agentOptions.model
   if (provider === undefined || model === undefined) throw new Error('composition requires provider and model')
+  const methodResources = await loadMethodResources(input.store, input.contract)
+  const template = await input.store.putObject(
+    `${input.id}:template`,
+    jsonBytes(methodResources.template as unknown as JsonValue),
+    'object',
+  )
+  const composition = {
+    ...input.base,
+    contract: { id: input.contract.taskId, digest: input.contract.digest },
+    template,
+    guidance: methodResources.guidance,
+  }
+  await assertCompositionResources(input.store, methodResources, composition)
   const resolved = await ctx.llm.resolveModelInfo(provider, model)
   const call = await ctx.llm.resolveCallConfig({ provider, model, ...input.agentOptions })
   const config = [...ctx.loader.entries()]
@@ -92,22 +116,28 @@ export async function buildSingleRunComposition(
       name: entry.options.name,
       config: publicConfig(entry.fiber?.effectiveConfig, `loader.${entry.id}`),
     }))
-  const assembly = await ctx.systemPrompt.assemble()
+  const disposeGuidance = ctx.systemPrompt.section({
+    name: METHOD_GUIDANCE_SECTION,
+    order: METHOD_GUIDANCE_ORDER,
+    text: methodResources.guidanceText,
+    interpolate: false,
+  })
+  const assembly = await ctx.systemPrompt.assemble().finally(disposeGuidance)
   const prompt = renderPrompt(assembly)
-  const dshConfig = await input.writer.putObject(
+  const dshConfig = await input.store.putObject(
     `${input.id}:dsh-config`,
     jsonBytes({ v: 1, dshVersion: REQUIRED_DSH_VERSION, profile: PROFILE_NAME, entries: config }),
   )
-  const modelRoute = await input.writer.putObject(
+  const modelRoute = await input.store.putObject(
     `${input.id}:model-route`,
     jsonBytes(publicConfig({ v: 1, call, resolved })),
   )
-  const resources = await input.writer.putObject(
+  const resources = await input.store.putObject(
     `${input.id}:resources`,
     jsonBytes(publicConfig({ v: 1, tools: ctx.tools.schemas() })),
   )
   return {
-    ...input.base,
+    ...composition,
     dsh: { package: '@deepseek-ai/dsh', version: REQUIRED_DSH_VERSION, config: dshConfig },
     platformPrompt: computeDigest('object', { v: 1, text: prompt }),
     modelRoute,
@@ -194,6 +224,15 @@ export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promi
       text: renderWorkerCard(false),
       interpolate: false,
     })
+    // Runtime verifies this exact scoped assembly digest before Agent
+    // publication. The renderer stays app-owned so runtime adds no DSH prompt
+    // dependency and no second renderer.
+    const disposePlatformPrompt = booted.ctx.provide(PLATFORM_PROMPT_SERVICE, {
+      async render(agentCtx: Context, agent: Agent): Promise<string> {
+        const assembly = await agentCtx.systemPrompt.assemble({ scope: agent })
+        return renderPrompt(assembly)
+      },
+    })
 
     let disposal: Promise<void> | undefined
     return {
@@ -204,6 +243,7 @@ export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promi
           try {
             await booted.shutdown.shutdown(0)
           } finally {
+            disposePlatformPrompt()
             disposeWorkerCard()
             await releaseHome(home, previousHome, ownedHome)
           }

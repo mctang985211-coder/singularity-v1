@@ -20,6 +20,7 @@ import {
   sealMethodRevision,
   sealPublicReceipt,
   sealSubmissionManifest,
+  sealTaskContract,
   validateEvidence,
 } from '@singularity/protocol'
 import type {
@@ -36,8 +37,9 @@ import type {
 } from '@singularity/protocol'
 
 import { retrySingleRun, resumeSingleRun } from '../src/recovery.ts'
+import { PLATFORM_PROMPT_SERVICE } from '../src/resources.ts'
 import { executeSingleRun } from '../src/run.ts'
-import { DomainStore, DomainStoreError } from '../src/store.ts'
+import { DomainStore, DomainStoreError, OBJECTS_DIRNAME } from '../src/store.ts'
 import { CommandService } from '../src/service.ts'
 import { buildExecutionRecord } from '../src/verification.ts'
 import type { RunVerifier, VerifierRequest } from '../src/verification.ts'
@@ -52,6 +54,7 @@ const CRITERION_ID = 'declared-output'
 const OUTPUT_ID = 'out'
 const OUTPUT_PATH = 'out.txt'
 const FIXED_NOW = 1_700_000_000_000
+const FAKE_PLATFORM_PROMPT = 's3c-recovery-platform-prompt'
 
 const agentOptions = {
   provider: 'fixture-provider',
@@ -163,7 +166,7 @@ async function buildScenario(
   const dshConfig = await putValue(service, { v: 1, config: 'profile' }, 'dsh-config:s3c')
   const modelRoute = await putValue(service, { v: 1, route: 'fixture' }, 'model-route:s3c')
   const resources = await putValue(service, { v: 1, resources: [] }, 'resources:s3c')
-  const compositionTemplate = await putValue(service, { v: 1, templateId: 'template:s3c' }, 'composition-template:s3c')
+  const compositionTemplate = await putValue(service, method.templates[0], 'composition-template:s3c', 'object')
 
   const contract = admitRootTask({
     taskId: options.taskId,
@@ -210,12 +213,15 @@ async function buildScenario(
     },
   })
 
+  const currentTemplate = method.templates.at(0)
+  if (currentTemplate === undefined) throw new Error('scenario Method has no template')
   const composition: CompositionPayload = {
     v: 1,
     dsh: { package: '@deepseek-ai/dsh', version: '0.2.2-alpha.2', config: dshConfig },
-    platformPrompt: computeDigest('object', { platformPrompt: 's3c-recovery' }),
+    platformPrompt: computeDigest('object', { v: 1, text: FAKE_PLATFORM_PROMPT }),
     contract: { id: contract.taskId, digest: contract.digest },
     template: compositionTemplate,
+    guidance: currentTemplate.guidance,
     skills: [],
     mcpServers: [],
     modelRoute,
@@ -483,6 +489,15 @@ interface FakeContextOptions {
   readonly work?: (agent: Agent, tools: ReadonlyMap<string, {
     execute(args: unknown, execution: ToolExecution): unknown
   }>) => Promise<void>
+  /** Scoped system prompt sections registered by Agent setup. */
+  readonly sections?: {
+    name: string
+    order: number
+    text: string
+    interpolate?: boolean
+  }[]
+  /** Text returned by the fake host platform-prompt renderer. */
+  readonly platformPromptText?: string
 }
 
 function makeFakeContext(options: FakeContextOptions): {
@@ -532,7 +547,9 @@ function makeFakeContext(options: FakeContextOptions): {
     get: (name: string) => name === 'jobs' ? options.jobs : undefined,
     on() {},
     systemPrompt: {
-      section() {},
+      section(section: { name: string; order: number; text: string; interpolate?: boolean }) {
+        options.sections?.push(section)
+      },
       context() {},
     },
     tools: {
@@ -552,7 +569,10 @@ function makeFakeContext(options: FakeContextOptions): {
 
   const ctx = {
     get: (name: string) => name === 'jobs' ? options.jobs
-      : name === 'sessionPersistence' ? sessionPersistence : undefined,
+      : name === 'sessionPersistence' ? sessionPersistence
+        : name === PLATFORM_PROMPT_SERVICE
+          ? { render: () => Promise.resolve(options.platformPromptText ?? FAKE_PLATFORM_PROMPT) }
+          : undefined,
     agents: {
       get: () => undefined,
       async create(createOptions: {
@@ -1929,6 +1949,1102 @@ void test('resumeSingleRun creates the same session intent when persistence is a
     assert.equal(await readFile(join(workspace, 'input.txt'), 'utf8'), 'fixture input bytes\n')
     assert.equal(state.followupCalls, 1)
     assert.equal(result.classification, 'failed')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// S4-A1 — Method revision pin and current-layer guidance
+// ---------------------------------------------------------------------------
+
+const S4A1_CURRENT_GUIDANCE = 'S4-A1 current template guidance marker.'
+const S4A1_OTHER_GUIDANCE = 'S4-A1 other template guidance marker must stay hidden.'
+const S4A1_GUIDANCE_BYTES = 8 * 1024
+const s4a1Encoder = new TextEncoder()
+
+interface MethodVariant {
+  readonly method: MethodRevision
+  readonly ref: Ref
+}
+
+async function s4a1PutMethod(
+  service: CommandService,
+  method: MethodRevision,
+): Promise<MethodVariant> {
+  const ref = await putValue(service, method, method.id, 'method')
+  return { method, ref }
+}
+
+function s4a1FirstTemplate(scenario: Scenario): MethodRevision['templates'][number] {
+  const template = scenario.method.templates.at(0)
+  if (template === undefined) throw new Error('S4-A1 scenario has no current template')
+  return template
+}
+
+function s4a1ResealMethod(
+  scenario: Scenario,
+  templates: MethodRevision['templates'],
+  id = scenario.method.id,
+): MethodRevision {
+  return sealMethodRevision({
+    v: 1,
+    id,
+    ...(scenario.method.parent === undefined ? {} : { parent: scenario.method.parent }),
+    ...(scenario.method.entryTemplateId === undefined
+      ? {}
+      : { entryTemplateId: scenario.method.entryTemplateId }),
+    templates,
+    skills: scenario.method.skills,
+    tools: scenario.method.tools,
+  })
+}
+
+function s4a1ContractPayload(scenario: Scenario): {
+  readonly v: 1
+  readonly taskId: string
+  readonly spec: TaskContract['spec']
+  readonly origin: TaskContract['origin']
+  readonly method: TaskContract['method']
+  readonly template: TaskContract['template']
+  readonly resources: TaskContract['resources']
+  readonly acceptance: TaskContract['acceptance']
+  readonly environment: TaskContract['environment']
+  readonly limits: TaskContract['limits']
+} {
+  return {
+    v: 1,
+    taskId: scenario.contract.taskId,
+    spec: scenario.contract.spec,
+    origin: scenario.contract.origin,
+    method: scenario.contract.method,
+    template: scenario.contract.template,
+    resources: scenario.contract.resources,
+    acceptance: scenario.contract.acceptance,
+    environment: scenario.contract.environment,
+    limits: scenario.contract.limits,
+  }
+}
+
+function s4a1Guidance(text: string): { readonly v: 1; readonly text: string } {
+  return { v: 1, text }
+}
+
+function s4a1NonCanonical(value: unknown): Uint8Array {
+  return s4a1Encoder.encode(JSON.stringify(value))
+}
+
+async function s4a1TamperObject(
+  root: string,
+  ref: Ref,
+  replacement: Uint8Array,
+): Promise<void> {
+  await writeFile(join(root, OBJECTS_DIRNAME, ref.digest.slice('sha256:'.length)), replacement)
+}
+
+function s4a1WithoutGuidance(composition: CompositionPayload): CompositionPayload {
+  return {
+    v: composition.v,
+    dsh: composition.dsh,
+    platformPrompt: composition.platformPrompt,
+    contract: composition.contract,
+    template: composition.template,
+    skills: composition.skills,
+    mcpServers: composition.mcpServers,
+    modelRoute: composition.modelRoute,
+    resources: composition.resources,
+    seed: composition.seed,
+  }
+}
+
+async function s4a1Variant(
+  service: CommandService,
+  scenario: Scenario,
+  options: {
+    readonly method?: MethodVariant
+    readonly contractMethod?: Ref
+    readonly contractTemplate?: { readonly id: string; readonly digest: string }
+    readonly contractResources?: TaskContract['resources']
+    readonly compositionTemplate?: Ref
+    readonly compositionGuidance?: Ref
+    readonly compositionSkills?: readonly Ref[]
+    readonly compositionMcpServers?: CompositionPayload['mcpServers']
+    readonly omitCompositionGuidance?: boolean
+  } = {},
+): Promise<{
+  readonly scenario: Scenario
+  readonly method: MethodRevision
+  readonly contract: TaskContract
+  readonly composition: CompositionPayload
+}> {
+  const selected = options.method ?? { method: scenario.method, ref: scenario.contract.method }
+  const pinnedId = options.contractTemplate?.id ?? scenario.contract.template.id
+  const template = selected.method.templates.find(candidate => candidate.id === pinnedId)
+  const templateRef = options.compositionTemplate ?? await putValue(
+    service,
+    template ?? { v: 1, templateId: pinnedId },
+    nextId('s4a1-composition-template'),
+    'object',
+  )
+  const guidanceRef = options.omitCompositionGuidance
+    ? undefined
+    : options.compositionGuidance ?? template?.guidance
+  const contract = sealTaskContract({
+    ...s4a1ContractPayload(scenario),
+    ...(options.contractResources === undefined ? {} : { resources: options.contractResources }),
+    method: options.contractMethod ?? selected.ref,
+    template: options.contractTemplate ?? { id: pinnedId, digest: selected.method.digest },
+  })
+  const composition: CompositionPayload = {
+    v: 1,
+    dsh: scenario.composition.dsh,
+    platformPrompt: scenario.composition.platformPrompt,
+    contract: { id: contract.taskId, digest: contract.digest },
+    template: templateRef,
+    skills: [...(options.compositionSkills ?? scenario.composition.skills)],
+    mcpServers: [...(options.compositionMcpServers ?? scenario.composition.mcpServers)],
+    modelRoute: scenario.composition.modelRoute,
+    resources: scenario.composition.resources,
+    seed: scenario.composition.seed,
+    ...(guidanceRef === undefined ? {} : { guidance: guidanceRef }),
+  }
+  await putValue(service, contract, contract.taskId, 'contract')
+  return {
+    scenario: {
+      ...scenario,
+      contract,
+      method: selected.method,
+      composition,
+    },
+    method: selected.method,
+    contract,
+    composition,
+  }
+}
+
+interface S4A1InvalidCase {
+  readonly key: string
+  readonly name: string
+  readonly code: string
+  prepare(
+    service: CommandService,
+    scenario: Scenario,
+    root: string,
+  ): Promise<{
+    readonly scenario: Scenario
+    readonly method: MethodRevision
+    readonly contract: TaskContract
+    readonly composition: CompositionPayload
+  }>
+}
+
+const s4a1InvalidCases: readonly S4A1InvalidCase[] = [
+  {
+    key: 'method-missing',
+    name: 'a missing Method revision',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      return s4a1Variant(service, scenario, {
+        contractMethod: {
+          id: 'method:missing-s4a1',
+          digest: computeDigest('method', { v: 1, id: 'method:missing-s4a1' }),
+        },
+      })
+    },
+  },
+  {
+    key: 'template-pin',
+    name: 'a TemplateRef digest that is not the pinned Method',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const other = await s4a1PutMethod(service, s4a1ResealMethod(
+        scenario,
+        scenario.method.templates,
+        'method:s4a1-other-pin',
+      ))
+      return s4a1Variant(service, scenario, {
+        contractTemplate: {
+          id: scenario.contract.template.id,
+          digest: other.ref.digest,
+        },
+      })
+    },
+  },
+  {
+    key: 'template-dangling',
+    name: 'a dangling current template id',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const otherGuidance = await putValue(
+        service,
+        s4a1Guidance(S4A1_OTHER_GUIDANCE),
+        nextId('s4a1-other-guidance'),
+      )
+      const otherMethod = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        id: 'template:s4a1-other',
+        guidance: otherGuidance,
+      }]))
+      return s4a1Variant(service, scenario, {
+        method: otherMethod,
+        contractTemplate: {
+          id: scenario.contract.template.id,
+          digest: otherMethod.method.digest,
+        },
+      })
+    },
+  },
+  {
+    key: 'composition-template',
+    name: 'a Composition template ref for another object',
+    code: 'COMPOSITION_MISMATCH',
+    async prepare(service, scenario) {
+      const other = await putValue(
+        service,
+        { v: 1, not: 'the pinned template' },
+        nextId('s4a1-other-template'),
+      )
+      return s4a1Variant(service, scenario, { compositionTemplate: other })
+    },
+  },
+  {
+    key: 'composition-guidance',
+    name: 'a Composition guidance ref for another object',
+    code: 'COMPOSITION_MISMATCH',
+    async prepare(service, scenario) {
+      const other = await putValue(
+        service,
+        s4a1Guidance(S4A1_OTHER_GUIDANCE),
+        nextId('s4a1-other-guidance'),
+      )
+      return s4a1Variant(service, scenario, { compositionGuidance: other })
+    },
+  },
+  {
+    key: 'guidance-missing',
+    name: 'a missing guidance CAS object',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const missing: Ref = {
+        id: 'guidance:s4a1-missing',
+        digest: computeDigest('object', s4a1Guidance(S4A1_CURRENT_GUIDANCE)),
+      }
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: missing,
+      }]))
+      return s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: missing,
+      })
+    },
+  },
+  {
+    key: 'guidance-digest',
+    name: 'a guidance ref whose digest does not match its object',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const stored = await putValue(
+        service,
+        s4a1Guidance(S4A1_CURRENT_GUIDANCE),
+        nextId('s4a1-guidance'),
+      )
+      const wrong: Ref = {
+        id: stored.id,
+        digest: computeDigest('object', s4a1Guidance(`${S4A1_CURRENT_GUIDANCE} changed`)),
+      }
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: wrong,
+      }]))
+      return s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: wrong,
+      })
+    },
+  },
+  {
+    key: 'guidance-utf8',
+    name: 'guidance bytes that are not strict UTF-8',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const invalid = await putBytes(service, new Uint8Array([0xff, 0xfe, 0xfd]), nextId('s4a1-guidance'))
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: invalid,
+      }]))
+      return s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: invalid,
+      })
+    },
+  },
+  {
+    key: 'guidance-object',
+    name: 'guidance JSON that is not the frozen text object',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const invalid = await putValue(
+        service,
+        { v: 1, text: 42 },
+        nextId('s4a1-guidance'),
+      )
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: invalid,
+      }]))
+      return s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: invalid,
+      })
+    },
+  },
+  {
+    key: 'guidance-oversized',
+    name: 'guidance above 8192 bytes',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const oversized = await putValue(
+        service,
+        s4a1Guidance('x'.repeat(S4A1_GUIDANCE_BYTES + 1)),
+        nextId('s4a1-guidance'),
+      )
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: oversized,
+      }]))
+      return s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: oversized,
+      })
+    },
+  },
+  {
+    key: 'guidance-oversized-multibyte',
+    name: 'multi-byte guidance above 8192 bytes',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const oversized = await putValue(
+        service,
+        s4a1Guidance(`${'界'.repeat(2730)}abc`),
+        nextId('s4a1-guidance'),
+      )
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: oversized,
+      }]))
+      return s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: oversized,
+      })
+    },
+  },
+  {
+    key: 'method-id',
+    name: 'a MethodRef id that differs from the frozen revision id',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const stored = await s4a1PutMethod(service, scenario.method)
+      return s4a1Variant(service, scenario, {
+        contractMethod: { id: 'method:s4a1-wrong-id', digest: stored.ref.digest },
+      })
+    },
+  },
+  {
+    key: 'method-digest',
+    name: 'a MethodRef digest that differs from the structured revision digest',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const method = s4a1ResealMethod(scenario, scenario.method.templates)
+      const reversed = Object.fromEntries(Object.entries(method).reverse())
+      const ref = await putBytes(
+        service,
+        s4a1NonCanonical(reversed),
+        nextId('s4a1-method'),
+      )
+      return s4a1Variant(service, scenario, {
+        contractMethod: { id: method.id, digest: ref.digest },
+        contractTemplate: {
+          id: scenario.contract.template.id,
+          digest: ref.digest,
+        },
+      })
+    },
+  },
+  {
+    key: 'template-valid-different',
+    name: 'another valid TaskTemplate body',
+    code: 'COMPOSITION_MISMATCH',
+    async prepare(service, scenario) {
+      const different = await putValue(
+        service,
+        { ...s4a1FirstTemplate(scenario), brief: 'A different but valid template body.' },
+        nextId('s4a1-valid-template'),
+        'object',
+      )
+      return s4a1Variant(service, scenario, { compositionTemplate: different })
+    },
+  },
+  {
+    key: 'guidance-noncanonical',
+    name: 'non-canonical guidance bytes with a raw-byte ref',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const nonCanonical = await putBytes(
+        service,
+        s4a1NonCanonical({ v: 1, text: S4A1_CURRENT_GUIDANCE }),
+        nextId('s4a1-guidance'),
+      )
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: nonCanonical,
+      }]))
+      return s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: nonCanonical,
+      })
+    },
+  },
+  {
+    key: 'template-noncanonical',
+    name: 'non-canonical template bytes with a raw-byte ref',
+    code: 'COMPOSITION_MISMATCH',
+    async prepare(service, scenario) {
+      const reversed = Object.fromEntries(
+        Object.entries(s4a1FirstTemplate(scenario)).reverse(),
+      )
+      const nonCanonical = await putBytes(
+        service,
+        s4a1NonCanonical(reversed),
+        nextId('s4a1-template'),
+      )
+      return s4a1Variant(service, scenario, { compositionTemplate: nonCanonical })
+    },
+  },
+  {
+    key: 'guidance-tamper',
+    name: 'tampered guidance CAS bytes',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario, root) {
+      const guidance = await putValue(
+        service,
+        s4a1Guidance(S4A1_CURRENT_GUIDANCE),
+        nextId('s4a1-guidance'),
+      )
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance,
+      }]))
+      const variant = await s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: guidance,
+      })
+      await s4a1TamperObject(
+        root,
+        guidance,
+        s4a1Encoder.encode(canonicalize(s4a1Guidance('tampered guidance bytes'))),
+      )
+      return variant
+    },
+  },
+  {
+    key: 'template-tamper',
+    name: 'tampered Composition template CAS bytes',
+    code: 'COMPOSITION_MISMATCH',
+    async prepare(service, scenario, root) {
+      const template = s4a1FirstTemplate(scenario)
+      const ref = await putValue(
+        service,
+        template,
+        nextId('s4a1-template'),
+        'object',
+      )
+      const variant = await s4a1Variant(service, scenario, { compositionTemplate: ref })
+      await s4a1TamperObject(
+        root,
+        ref,
+        s4a1Encoder.encode(canonicalize({ ...template, brief: 'tampered template bytes' })),
+      )
+      return variant
+    },
+  },
+  {
+    key: 'template-skills',
+    name: 'template skill bindings in this slice',
+    code: 'UNSUPPORTED_RESOURCES',
+    async prepare(service, scenario) {
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        skills: ['skill:s4a1'],
+      }]))
+      return s4a1Variant(service, scenario, { method })
+    },
+  },
+  {
+    key: 'template-tools',
+    name: 'template MCP tool bindings in this slice',
+    code: 'UNSUPPORTED_RESOURCES',
+    async prepare(service, scenario) {
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        tools: ['tool:s4a1'],
+      }]))
+      return s4a1Variant(service, scenario, { method })
+    },
+  },
+  {
+    key: 'contract-skill',
+    name: 'contract skill resources in this slice',
+    code: 'UNSUPPORTED_RESOURCES',
+    async prepare(service, scenario) {
+      const resource = await putValue(service, { v: 1, skill: 's4a1' }, nextId('s4a1-resource'))
+      return s4a1Variant(service, scenario, {
+        contractResources: {
+          baseTools: [...scenario.contract.resources.baseTools],
+          skills: [resource],
+          mcpServers: [...scenario.contract.resources.mcpServers],
+        },
+      })
+    },
+  },
+  {
+    key: 'contract-mcp',
+    name: 'contract MCP resources in this slice',
+    code: 'UNSUPPORTED_RESOURCES',
+    async prepare(service, scenario) {
+      const resource = await putValue(service, { v: 1, mcp: 's4a1' }, nextId('s4a1-resource'))
+      return s4a1Variant(service, scenario, {
+        contractResources: {
+          baseTools: [...scenario.contract.resources.baseTools],
+          skills: [...scenario.contract.resources.skills],
+          mcpServers: [resource],
+        },
+      })
+    },
+  },
+  {
+    key: 'contract-exploration',
+    name: 'contract exploration resources in this slice',
+    code: 'UNSUPPORTED_RESOURCES',
+    async prepare(service, scenario) {
+      const resource = await putValue(service, { v: 1, exploration: 's4a1' }, nextId('s4a1-resource'))
+      return s4a1Variant(service, scenario, {
+        contractResources: {
+          baseTools: [...scenario.contract.resources.baseTools],
+          skills: [...scenario.contract.resources.skills],
+          mcpServers: [...scenario.contract.resources.mcpServers],
+          exploration: resource,
+        },
+      })
+    },
+  },
+  {
+    key: 'composition-skill',
+    name: 'Composition skill refs in this slice',
+    code: 'UNSUPPORTED_RESOURCES',
+    async prepare(service, scenario) {
+      const resource = await putValue(service, { v: 1, skill: 's4a1' }, nextId('s4a1-resource'))
+      return s4a1Variant(service, scenario, { compositionSkills: [resource] })
+    },
+  },
+  {
+    key: 'composition-mcp',
+    name: 'Composition MCP server refs in this slice',
+    code: 'UNSUPPORTED_RESOURCES',
+    async prepare(service, scenario) {
+      const resource = await putValue(service, { v: 1, mcp: 's4a1' }, nextId('s4a1-resource'))
+      return s4a1Variant(service, scenario, {
+        compositionMcpServers: [{
+          manifest: resource,
+          bundle: resource,
+          schema: resource,
+          config: resource,
+          transport: 'stdio',
+          capabilities: [],
+        }],
+      })
+    },
+  },
+]
+
+for (const invalid of s4a1InvalidCases) {
+  void test(`S4-A1 create rejects ${invalid.name} before Agent`, async () => {
+    const root = await mkdtemp(join(tmpdir(), `s4a1-${invalid.key}-root-`))
+    const workspace = await mkdtemp(join(tmpdir(), `s4a1-${invalid.key}-work-`))
+    try {
+      const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+      let variant: Awaited<ReturnType<typeof s4a1Variant>>
+      try {
+        const scenario = await buildScenario(service, {
+          taskId: `task-s4a1-${invalid.key}`,
+          maxRuns: 1,
+        })
+        variant = await invalid.prepare(service, scenario, root)
+      } finally {
+        await service.close()
+      }
+      const { ctx, state } = makeFakeContext({ resume: 'ok' })
+      const before = await readFacts(root)
+      await assert.rejects(
+        executeSingleRun({
+          ctx,
+          journalRoot: root,
+          workspace,
+          runId: `run-s4a1-${invalid.key}`,
+          sessionId: `session-s4a1-${invalid.key}`,
+          admission: {
+            contract: variant.contract,
+            attempt: 1,
+            budgetReservation: {
+              tokens: 100_000,
+              steps: 4,
+              deadlineAt: variant.contract.limits.deadlineAt,
+            },
+          },
+          composition: variant.composition,
+          agentOptions,
+          maxOutputBytes: 1024,
+          verifier: {
+            provider: variant.scenario.provider,
+            verify() { throw new Error('invalid Method resources must not verify') },
+          },
+          clock: () => FIXED_NOW + 1000,
+        }),
+        (error: unknown) => error instanceof Error && 'code' in error && error.code === invalid.code,
+      )
+      assert.equal(state.createCalls.length + state.resumeCalls.length, 0)
+      assert.deepEqual(await readFacts(root), before, 'invalid resources must not append facts')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+}
+
+void test('S4-A1 8192-byte guidance is mounted at the fixed section name and order', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's4a1-boundary-root-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's4a1-boundary-work-'))
+  const boundaryText = `${'界'.repeat(2730)}ab`
+  assert.equal(s4a1Encoder.encode(boundaryText).byteLength, S4A1_GUIDANCE_BYTES)
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let variant: Awaited<ReturnType<typeof s4a1Variant>>
+    try {
+      const scenario = await buildScenario(service, { taskId: 'task-s4a1-boundary', maxRuns: 1 })
+      const guidance = await putValue(
+        service,
+        s4a1Guidance(boundaryText),
+        nextId('s4a1-guidance'),
+      )
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance,
+      }]))
+      variant = await s4a1Variant(service, scenario, {
+        method,
+        compositionGuidance: guidance,
+      })
+    } finally {
+      await service.close()
+    }
+    const sections: { name: string; order: number; text: string; interpolate?: boolean }[] = []
+    const { ctx, state } = makeFakeContext({ resume: 'ok', sections })
+    const result = await executeSingleRun({
+      ctx,
+      journalRoot: root,
+      workspace,
+      runId: 'run-s4a1-boundary',
+      sessionId: 'session-s4a1-boundary',
+      admission: {
+        contract: variant.contract,
+        attempt: 1,
+        budgetReservation: {
+          tokens: 100_000,
+          steps: 4,
+          deadlineAt: variant.contract.limits.deadlineAt,
+        },
+      },
+      composition: variant.composition,
+      agentOptions,
+      maxOutputBytes: 1024,
+      verifier: {
+        provider: variant.scenario.provider,
+        verify() { throw new Error('no submission') },
+      },
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(state.createCalls.length, 1)
+    assert.equal(result.classification, 'failed')
+    const guidanceSection = sections.find(section => section.name === 'singularity:method-guidance')
+    assert.ok(guidanceSection, 'Agent setup must register the method guidance section')
+    assert.equal(guidanceSection.order, 200)
+    assert.equal(guidanceSection.interpolate, false)
+    assert.equal(s4a1Encoder.encode(guidanceSection.text).byteLength, S4A1_GUIDANCE_BYTES)
+    assert.equal(guidanceSection.text, boundaryText)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+interface S4A1ResumeCase {
+  readonly key: string
+  readonly name: string
+  readonly code: string
+  prepare(
+    service: CommandService,
+    scenario: Scenario,
+  ): Promise<{
+    readonly scenario: Scenario
+    readonly method: MethodRevision
+    readonly contract: TaskContract
+    readonly composition: CompositionPayload
+  }>
+}
+
+const s4a1ResumeCases: readonly S4A1ResumeCase[] = [
+  {
+    key: 'guidance-object',
+    name: 'guidance that is not the text object',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const invalid = await putValue(service, { v: 1, text: 42 }, nextId('s4a1-guidance'))
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: invalid,
+      }]))
+      return s4a1Variant(service, scenario, { method, compositionGuidance: invalid })
+    },
+  },
+  {
+    key: 'guidance-oversized',
+    name: 'guidance above 8192 bytes',
+    code: 'CONTRACT_INVALID',
+    async prepare(service, scenario) {
+      const oversized = await putValue(
+        service,
+        s4a1Guidance('z'.repeat(S4A1_GUIDANCE_BYTES + 1)),
+        nextId('s4a1-guidance'),
+      )
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: oversized,
+      }]))
+      return s4a1Variant(service, scenario, { method, compositionGuidance: oversized })
+    },
+  },
+  {
+    key: 'composition-template',
+    name: 'a Composition template ref for another object',
+    code: 'COMPOSITION_MISMATCH',
+    async prepare(service, scenario) {
+      const other = await putValue(
+        service,
+        { v: 1, not: 'the pinned template' },
+        nextId('s4a1-other-template'),
+      )
+      return s4a1Variant(service, scenario, { compositionTemplate: other })
+    },
+  },
+  {
+    key: 'composition-skill',
+    name: 'Composition skill refs in this slice',
+    code: 'UNSUPPORTED_RESOURCES',
+    async prepare(service, scenario) {
+      const resource = await putValue(service, { v: 1, skill: 's4a1' }, nextId('s4a1-resource'))
+      return s4a1Variant(service, scenario, { compositionSkills: [resource] })
+    },
+  },
+]
+
+for (const resumeCase of s4a1ResumeCases) {
+  void test(`S4-A1 resume rejects ${resumeCase.name} before Agent or verifier`, async () => {
+    const root = await mkdtemp(join(tmpdir(), `s4a1-resume-${resumeCase.key}-root-`))
+    const workspace = await mkdtemp(join(tmpdir(), `s4a1-resume-${resumeCase.key}-work-`))
+    const runId = `run-s4a1-resume-${resumeCase.key}`
+    const sessionId = `session-s4a1-resume-${resumeCase.key}`
+    try {
+      const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+      let variant: Awaited<ReturnType<typeof s4a1Variant>>
+      try {
+        const scenario = await buildScenario(service, {
+          taskId: `task-s4a1-resume-${resumeCase.key}`,
+          maxRuns: 1,
+        })
+        variant = await resumeCase.prepare(service, scenario)
+        await admitTask(service, variant.scenario)
+        await openRun(service, variant.scenario, {
+          runId,
+          sessionId,
+          attempt: 1,
+        })
+      } finally {
+        await service.close()
+      }
+      const { ctx, state } = makeFakeContext({ resume: 'ok' })
+      let verifierCalls = 0
+      const result = await resumeSingleRun({
+        ctx,
+        journalRoot: root,
+        workspace,
+        runId,
+        composition: variant.composition,
+        agentOptions,
+        maxOutputBytes: 1024,
+        verifier: {
+          provider: variant.scenario.provider,
+          verify() {
+            verifierCalls += 1
+            throw new Error('invalid Method resources must not verify')
+          },
+        },
+        transientInvalidReasons: [],
+        clock: () => FIXED_NOW + 1000,
+      })
+      assert.equal(result.compositionMatched, true)
+      assert.equal(result.sessionAction, 'none')
+      assert.equal(result.classification, 'invalid')
+      assert.equal(result.evidence, undefined)
+      assert.ok(result.executionRecord)
+      assert.match(result.executionRecord.reason, /^resource-invalid:/)
+      assert.equal(state.createCalls.length + state.resumeCalls.length, 0)
+      assert.equal(verifierCalls, 0)
+      const facts = await readFacts(root)
+      const closed = factsOfType(facts, 'run/closed')
+      assert.equal(closed.length, 1)
+      assert.equal(closed[0]?.data.classification, 'invalid')
+      assert.match(closed[0]?.data.reason ?? '', /^resource-invalid:/)
+      const taskClosed = factsOfType(facts, 'task/closed')
+      assert.equal(taskClosed.length, 1)
+      assert.equal(taskClosed[0]?.data.outcome, 'invalid')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+}
+
+void test('S4-A1 resume with a Composition that dropped guidance closes invalid before Agent', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's4a1-resume-missing-composition-guidance-root-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's4a1-resume-missing-composition-guidance-work-'))
+  const runId = 'run-s4a1-resume-missing-composition-guidance'
+  const sessionId = 'session-s4a1-resume-missing-composition-guidance'
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let variant: Awaited<ReturnType<typeof s4a1Variant>>
+    try {
+      const scenario = await buildScenario(service, {
+        taskId: 'task-s4a1-resume-missing-composition-guidance',
+        maxRuns: 1,
+      })
+      variant = await s4a1Variant(service, scenario)
+      await admitTask(service, variant.scenario)
+      await openRun(service, variant.scenario, { runId, sessionId, attempt: 1 })
+    } finally {
+      await service.close()
+    }
+    const withoutGuidance = s4a1WithoutGuidance(variant.composition)
+    const { ctx, state } = makeFakeContext({ resume: 'ok' })
+    const result = await resumeSingleRun({
+      ctx,
+      journalRoot: root,
+      workspace,
+      runId,
+      composition: withoutGuidance,
+      agentOptions,
+      maxOutputBytes: 1024,
+      verifier: {
+        provider: variant.scenario.provider,
+        verify() { throw new Error('composition mismatch must not verify') },
+      },
+      transientInvalidReasons: [],
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(result.compositionMatched, false)
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.sessionAction, 'none')
+    assert.equal(result.executionRecord?.reason, 'composition-mismatch')
+    assert.equal(state.createCalls.length + state.resumeCalls.length, 0)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+void test('S4-A1 create closes invalid when the actual scoped platformPrompt differs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's4a1-platform-create-root-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's4a1-platform-create-work-'))
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId: 'task-s4a1-platform-create', maxRuns: 1 })
+    } finally {
+      await service.close()
+    }
+    const { ctx, state } = makeFakeContext({
+      resume: 'ok',
+      platformPromptText: 'wrong platform prompt',
+    })
+    const result = await executeSingleRun({
+      ctx,
+      journalRoot: root,
+      workspace,
+      runId: 'run-s4a1-platform-create',
+      sessionId: 'session-s4a1-platform-create',
+      admission: {
+        contract: scenario.contract,
+        attempt: 1,
+        budgetReservation: {
+          tokens: 100_000,
+          steps: 4,
+          deadlineAt: scenario.contract.limits.deadlineAt,
+        },
+      },
+      composition: scenario.composition,
+      agentOptions,
+      maxOutputBytes: 1024,
+      verifier: {
+        provider: scenario.provider,
+        verify() { throw new Error('platform prompt mismatch must not verify') },
+      },
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.evidence, undefined)
+    assert.equal(state.followupCalls, 0, 'platform prompt mismatch must not send a wake')
+    assert.equal(state.createCalls.length, 1)
+    assert.equal(state.disposed, 0, 'setup failure must not publish a disposable Agent')
+    assert.match(result.executionRecord?.reason ?? '', /^COMPOSITION_MISMATCH:/)
+    const facts = await readFacts(root)
+    assert.equal(factsOfType(facts, 'run/submitted').length, 0)
+    assert.equal(factsOfType(facts, 'run/closed')[0]?.data.classification, 'invalid')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+void test('S4-A1 resume closes invalid when the actual scoped platformPrompt differs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's4a1-platform-resume-root-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's4a1-platform-resume-work-'))
+  const runId = 'run-s4a1-platform-resume'
+  const sessionId = 'session-s4a1-platform-resume'
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId: 'task-s4a1-platform-resume', maxRuns: 1 })
+      await admitTask(service, scenario)
+      await openRun(service, scenario, { runId, sessionId, attempt: 1 })
+    } finally {
+      await service.close()
+    }
+    const { ctx, state } = makeFakeContext({
+      resume: 'ok',
+      platformPromptText: 'wrong platform prompt on resume',
+    })
+    let verifierCalls = 0
+    const result = await resumeSingleRun({
+      ctx,
+      journalRoot: root,
+      workspace,
+      runId,
+      composition: scenario.composition,
+      agentOptions,
+      maxOutputBytes: 1024,
+      verifier: {
+        provider: scenario.provider,
+        verify() {
+          verifierCalls += 1
+          throw new Error('platform prompt mismatch must not verify')
+        },
+      },
+      transientInvalidReasons: [],
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(result.compositionMatched, true)
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.sessionAction, 'none')
+    assert.equal(result.evidence, undefined)
+    assert.equal(state.resumeCalls.length, 1)
+    assert.equal(state.followupCalls, 0)
+    assert.equal(verifierCalls, 0)
+    assert.match(result.executionRecord?.reason ?? '', /^COMPOSITION_MISMATCH:/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+void test('S4-A1 submitted recovery settles resource-invalid without verifier or model', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's4a1-submitted-resource-root-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's4a1-submitted-resource-work-'))
+  const runId = 'run-s4a1-submitted-resource'
+  const sessionId = 'session-s4a1-submitted-resource'
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let variant: Awaited<ReturnType<typeof s4a1Variant>>
+    let submittedFactDigest: string
+    try {
+      const scenario = await buildScenario(service, {
+        taskId: 'task-s4a1-submitted-resource',
+        maxRuns: 1,
+      })
+      const invalid = await putValue(service, { v: 1, text: 42 }, nextId('s4a1-guidance'))
+      const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
+        ...s4a1FirstTemplate(scenario),
+        guidance: invalid,
+      }]))
+      variant = await s4a1Variant(service, scenario, { method, compositionGuidance: invalid })
+      await admitTask(service, variant.scenario)
+      await openRun(service, variant.scenario, { runId, sessionId, attempt: 1 })
+      await submitRun(service, variant.scenario, { runId, sessionId })
+      const submitted = factsOfType(service.facts(), 'run/submitted')
+      assert.equal(submitted.length, 1)
+      const firstSubmitted = submitted[0]
+      assert.ok(firstSubmitted)
+      submittedFactDigest = firstSubmitted.digest
+    } finally {
+      await service.close()
+    }
+    const { ctx, state } = makeFakeContext({ resume: 'ok' })
+    let verifierCalls = 0
+    const result = await resumeSingleRun({
+      ctx,
+      journalRoot: root,
+      workspace,
+      runId,
+      composition: variant.composition,
+      agentOptions,
+      maxOutputBytes: 1024,
+      verifier: {
+        provider: variant.scenario.provider,
+        verify() {
+          verifierCalls += 1
+          throw new Error('resource-invalid submitted recovery must not verify')
+        },
+      },
+      transientInvalidReasons: [],
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(result.compositionMatched, true)
+    assert.equal(result.recoveredSubmission, true)
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.evidence, undefined)
+    assert.equal(result.evidenceRef, undefined)
+    assert.ok(result.executionRecord)
+    assert.match(result.executionRecord.reason, /^resource-invalid:/)
+    assert.equal(state.createCalls.length + state.resumeCalls.length, 0)
+    assert.equal(verifierCalls, 0)
+    const facts = await readFacts(root)
+    const submitted = factsOfType(facts, 'run/submitted')
+    assert.equal(submitted.length, 1)
+    assert.equal(submitted[0]?.digest, submittedFactDigest, 'the frozen submission fact is unchanged')
+    assert.equal(factsOfType(facts, 'run/closed')[0]?.data.classification, 'invalid')
+    assert.equal(factsOfType(facts, 'task/closed')[0]?.data.outcome, 'invalid')
+    assert.equal(factsOfType(facts, 'run/closed')[0]?.data.reason.startsWith('resource-invalid:'), true)
   } finally {
     await rm(root, { recursive: true, force: true })
     await rm(workspace, { recursive: true, force: true })

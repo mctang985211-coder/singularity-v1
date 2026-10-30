@@ -224,15 +224,13 @@ async function makeScenario(
     }
 
     const contract = admitRootTask(rootAdmission)
-    const compositionTemplate = await seedObject(store, 'composition-template:s3b2', method.templates[0])
     const composition = await buildSingleRunComposition(ctx, {
-      writer: store,
+      store,
       id: 's3b2',
+      contract,
       agentOptions: agentOptions(),
       base: {
         v: 1,
-        contract: { id: contract.taskId, digest: contract.digest },
-        template: compositionTemplate,
         skills: [],
         mcpServers: [],
         seed,

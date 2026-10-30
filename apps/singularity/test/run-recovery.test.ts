@@ -23,7 +23,9 @@ import {
   seal,
   sealMethodRevision,
   sealPublicReceipt,
+  sealTaskContract,
   submissionManifestSchema,
+  taskTemplateSchema,
   validateEvidence,
   validatePublicReceipt,
 } from '@singularity/protocol'
@@ -39,6 +41,7 @@ import type {
   RootAdmissionInput,
   SubmissionManifest,
   TaskContract,
+  TaskContractPayload,
 } from '@singularity/protocol'
 import {
   CommandService,
@@ -64,6 +67,7 @@ import {
   messageTexts,
   startChatCompletionsFixture,
   toolSchemaNames,
+  wireText,
 } from './fixtures/chat-completions.ts'
 import type {
   CapturedChatRequest,
@@ -134,11 +138,22 @@ async function makeScenario(
     readonly maxRuns: number
     readonly deadlineAt?: number
     readonly maxStepsPerRun?: number
+    readonly guidanceText?: string
+    readonly otherGuidanceText?: string
   },
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
   try {
-    const guidance = await seedObject(store, 'guidance:s3c', { v: 1, text: 'Write the declared output.' })
+    const guidance = await seedObject(store, 'guidance:s3c', {
+      v: 1,
+      text: options.guidanceText ?? 'Write the declared output.',
+    })
+    const otherGuidance = options.otherGuidanceText === undefined
+      ? undefined
+      : await seedObject(store, 'guidance:s3c-other', {
+        v: 1,
+        text: options.otherGuidanceText,
+      })
     const example = await seedObject(store, 'example:s3c', { v: 1, goal: 'fixture example' })
     const acceptancePolicy = await seedObject(store, 'acceptance-policy:s3c', { v: 1, kind: 'fixture-policy' })
     const verifierObject = seal('object', {
@@ -149,23 +164,33 @@ async function makeScenario(
     await store.putObject(PROVIDER_ID, jsonBytes(verifierObject), 'object')
     const provider: Ref = { id: PROVIDER_ID, digest: verifierObject.digest }
 
+    const currentTemplate = {
+      id: 'template:s3c',
+      brief: 'Produce one declared file.',
+      guidance,
+      example,
+      instanceSchema: {},
+      requiredCriteria: [],
+      requiredOutputs: [],
+      acceptancePolicy,
+      skills: [],
+      tools: [],
+      children: [],
+    }
     const method = sealMethodRevision({
       v: 1,
       id: 'method:s3c',
       entryTemplateId: 'template:s3c',
-      templates: [{
-        id: 'template:s3c',
-        brief: 'Produce one declared file.',
-        guidance,
-        example,
-        instanceSchema: {},
-        requiredCriteria: [],
-        requiredOutputs: [],
-        acceptancePolicy,
-        skills: [],
-        tools: [],
-        children: [],
-      }],
+      templates: otherGuidance === undefined
+        ? [currentTemplate]
+        : [
+          currentTemplate,
+          {
+            ...currentTemplate,
+            id: 'template:s3c-other',
+            guidance: otherGuidance,
+          },
+        ],
       skills: [],
       tools: [],
     })
@@ -235,15 +260,13 @@ async function makeScenario(
     }
 
     const contract = admitRootTask(rootAdmission)
-    const compositionTemplate = await seedObject(store, 'composition-template:s3c', method.templates[0])
     const composition = await buildSingleRunComposition(ctx, {
-      writer: store,
+      store,
       id: 's3c',
+      contract,
       agentOptions: agentOptions(),
       base: {
         v: 1,
-        contract: { id: contract.taskId, digest: contract.digest },
-        template: compositionTemplate,
         skills: [],
         mcpServers: [],
         seed,
@@ -483,6 +506,19 @@ function captureAgentContexts(
   })
 }
 
+/** Captures the full scoped system prompt assembled by Agent setup. */
+function captureAgentPrompts(
+  spike: Awaited<ReturnType<typeof bootSpikeProfile>>,
+  sessionId: string,
+  prompts: string[],
+): () => void {
+  return spike.ctx.on('agent/created', async ({ agent }) => {
+    if (String(agent.session.id) !== sessionId) return
+    const assembly = await spike.ctx.systemPrompt.assemble({ scope: agent })
+    prompts.push(renderPrompt(assembly))
+  })
+}
+
 function toolCallNames(events: readonly SessionEvent[]): string[] {
   const names: string[] = []
   for (const event of events) {
@@ -505,10 +541,59 @@ function agentOptions(): AgentOptions {
   }
 }
 
-async function currentComposition(ctx: Context, storeRoot: string, base: CompositionPayload): Promise<CompositionPayload> {
+function compositionBase(composition: CompositionPayload): Omit<
+  CompositionPayload,
+  'contract' | 'dsh' | 'guidance' | 'modelRoute' | 'platformPrompt' | 'resources' | 'template'
+> {
+  return {
+    v: composition.v,
+    skills: composition.skills,
+    mcpServers: composition.mcpServers,
+    seed: composition.seed,
+  }
+}
+
+function methodPayload(method: MethodRevision): Parameters<typeof sealMethodRevision>[0] {
+  return {
+    v: 1,
+    id: method.id,
+    ...(method.parent === undefined ? {} : { parent: method.parent }),
+    ...(method.entryTemplateId === undefined ? {} : { entryTemplateId: method.entryTemplateId }),
+    templates: method.templates,
+    skills: method.skills,
+    tools: method.tools,
+  }
+}
+
+function contractPayload(contract: TaskContract): TaskContractPayload {
+  return {
+    v: 1,
+    taskId: contract.taskId,
+    spec: contract.spec,
+    origin: contract.origin,
+    method: contract.method,
+    template: contract.template,
+    resources: contract.resources,
+    acceptance: contract.acceptance,
+    environment: contract.environment,
+    limits: contract.limits,
+  }
+}
+
+async function currentComposition(
+  ctx: Context,
+  storeRoot: string,
+  scenario: Scenario,
+): Promise<CompositionPayload> {
   const store = await DomainStore.open({ root: storeRoot })
   try {
-    return await buildSingleRunComposition(ctx, { writer: store, id: 's3c', agentOptions: agentOptions(), base })
+    return await buildSingleRunComposition(ctx, {
+      store,
+      id: 's3c',
+      contract: scenario.contract,
+      agentOptions: agentOptions(),
+      base: compositionBase(scenario.composition),
+    })
   } finally {
     await store.close()
   }
@@ -994,7 +1079,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
       sessionId: firstSessionId,
       runId: firstRunId,
       admission: active.runAdmission,
-      composition: await currentComposition(spike.ctx, storeRoot, active.composition),
+      composition: await currentComposition(spike.ctx, storeRoot, active),
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
       verifier: {
@@ -1045,7 +1130,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
         runId: secondRunId,
         sessionId: secondSessionId,
         workspace: secondWorkspace,
-        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
+        composition: await currentComposition(spike.ctx, storeRoot, active),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: passingVerifier(active, secondRunId, secondWorkspace, verifierCalls),
@@ -1180,10 +1265,11 @@ void test('resume with a changed full composition writes invalid without any age
     let changedComposition: CompositionPayload
     try {
       changedComposition = await buildSingleRunComposition(spike.ctx, {
-        writer: store,
+        store,
         id: 's3c',
+        contract: active.contract,
         agentOptions: changedOptions,
-        base: active.composition,
+        base: compositionBase(active.composition),
       })
       const configText = textDecoder.decode((await store.readObject(changedComposition.dsh.config)).bytes)
       assert.equal(configText.includes('fixture-key'), false)
@@ -1197,7 +1283,11 @@ void test('resume with a changed full composition writes invalid without any age
       })
       try {
         await assert.rejects(buildSingleRunComposition(spike.ctx, {
-          writer: store, id: 's3c', agentOptions: changedOptions, base: active.composition,
+          store,
+          id: 's3c',
+          contract: active.contract,
+          agentOptions: changedOptions,
+          base: compositionBase(active.composition),
         }), /headers is not public composition data/)
         assert.equal(sensitiveReads, 0, 'credential-bearing field accessors must not be evaluated')
       } finally {
@@ -1318,7 +1408,7 @@ void test('resume with the original composition reuses the admitted wake without
         journalRoot: storeRoot,
         runId,
         workspace,
-        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
+        composition: await currentComposition(spike.ctx, storeRoot, active),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: {
@@ -1396,7 +1486,7 @@ void test('resume after submission verifies the same CAS snapshot and operationI
         journalRoot: storeRoot,
         runId,
         workspace,
-        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
+        composition: await currentComposition(spike.ctx, storeRoot, active),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: passingVerifier(active, runId, workspace, verifierCalls),
@@ -1563,7 +1653,7 @@ void test('live C-03 no-submission then fresh retry verified (fixture when LIVE=
           ...active.runAdmission,
           budgetReservation: { ...active.runAdmission.budgetReservation, steps: 1 },
         },
-        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
+        composition: await currentComposition(spike.ctx, storeRoot, active),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: {
@@ -1640,7 +1730,7 @@ void test('live C-03 no-submission then fresh retry verified (fixture when LIVE=
         runId: secondRunId,
         sessionId: secondSessionId,
         workspace: secondWorkspace,
-        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
+        composition: await currentComposition(spike.ctx, storeRoot, active),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: passingVerifier(active, secondRunId, secondWorkspace, verifierCalls),
@@ -1806,7 +1896,7 @@ void test('live C-03 no-submission then fresh retry verified (fixture when LIVE=
           journalRoot: storeRoot,
           runId: secondRunId,
           workspace: secondWorkspace,
-          composition: await currentComposition(spike.ctx, storeRoot, active.composition),
+          composition: await currentComposition(spike.ctx, storeRoot, active),
           agentOptions: agentOptions(),
           maxOutputBytes: 1024 * 1024,
           verifier: {
@@ -2005,7 +2095,7 @@ void test('live C-12 original composition resume reuses the consumed start wake 
         journalRoot: storeRoot,
         runId,
         workspace,
-        composition: await currentComposition(spike.ctx, storeRoot, active.composition),
+        composition: await currentComposition(spike.ctx, storeRoot, active),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
         verifier: {
@@ -2148,10 +2238,11 @@ void test('live C-12 composition mismatch closes invalid before Agent, verifier,
     let changedComposition: CompositionPayload
     try {
       changedComposition = await buildSingleRunComposition(spike.ctx, {
-        writer: store,
+        store,
         id: 's3c-changed',
+        contract: active.contract,
         agentOptions: changedOptions,
-        base: active.composition,
+        base: compositionBase(active.composition),
       })
     } finally {
       await store.close()
@@ -2263,4 +2354,449 @@ void test('live C-12 composition mismatch closes invalid before Agent, verifier,
       await runScenario(harness.spike, harness.workspace, harness.storeRoot, harness.fixture, false)
     })
   }
+})
+
+// ---------------------------------------------------------------------------
+// S4-A1 — Method revision pin and current-layer guidance
+// ---------------------------------------------------------------------------
+
+const S4A1_CURRENT_MARKER = 'S4-A1 CURRENT GUIDANCE MARKER'
+const S4A1_OTHER_MARKER = 'S4-A1 OTHER GUIDANCE MARKER'
+
+void test('S4-A1 host derives template/guidance from the pinned Method and the first real DSH request carries only current guidance', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a1-create-${String(process.pid)}-${String(Date.now())}`
+  const sessionId = `${taskId}-session`
+  await withHarness(
+    (_request, index) => ({ content: 'S4-A1 finished without submitting.', usage: fixtureUsage(index) }),
+    async ({ spike, fixture, workspace, storeRoot }) => {
+      const scenario = await makeScenario(storeRoot, spike.ctx, {
+        taskId,
+        maxRuns: 1,
+        guidanceText: S4A1_CURRENT_MARKER,
+        otherGuidanceText: S4A1_OTHER_MARKER,
+      })
+      assert.equal(scenario.method.templates.length, 2)
+      const currentTemplate = scenario.method.templates[0]
+      assert.ok(currentTemplate)
+      assert.deepEqual(scenario.composition.guidance, currentTemplate.guidance)
+
+      const prompts: string[] = []
+      const contexts: string[] = []
+      const disposePrompts = captureAgentPrompts(spike, sessionId, prompts)
+      const disposeContexts = captureAgentContexts(spike, sessionId, contexts)
+      try {
+        const result = await executeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          workspace,
+          sessionId,
+          runId: `${taskId}-run`,
+          admission: scenario.runAdmission,
+          composition: scenario.composition,
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024 * 1024,
+          verifier: {
+            provider: scenario.provider,
+            verify() { throw new Error('no submission') },
+          },
+          transientInvalidReasons: [],
+        })
+        assert.equal(result.classification, 'failed')
+      } finally {
+        disposePrompts()
+        disposeContexts()
+      }
+
+      assert.equal(fixture.requests.length, 1, 'the create path buys exactly one request')
+      const texts = messageTexts(fixture.requests[0] ?? {})
+      assert.ok(
+        texts.some(text => text.includes(S4A1_CURRENT_MARKER)),
+        'the first wire request must contain the current template guidance',
+      )
+      assert.equal(
+        texts.some(text => text.includes(S4A1_OTHER_MARKER)),
+        false,
+        'another template guidance must not be injected',
+      )
+      assert.equal(prompts.length, 1)
+      const prompt = prompts[0]
+      assert.ok(prompt)
+      assert.equal(
+        scenario.composition.platformPrompt,
+        computeDigest('object', { v: 1, text: prompt }),
+        'the frozen platformPrompt must equal the actual scoped system prompt',
+      )
+      const systemMessage = fixture.requests[0]?.messages?.find(message => message.role === 'system')
+      assert.ok(systemMessage, 'the first wire request must carry the assembled system prompt')
+      assert.equal(
+        wireText(systemMessage.content),
+        prompt,
+        'the first wire request system prompt must equal the actual scoped assembly',
+      )
+      assert.equal(contexts.length, 1)
+      assert.ok(
+        contexts[0]?.includes(
+          '"ownTemplate":{"id":"template:s3c","brief":"Produce one declared file."}',
+        ),
+        'NodeView ownTemplate.brief must come from the pinned template, not the goal summary',
+      )
+
+      const store = await DomainStore.open({ root: storeRoot })
+      try {
+        const { bytes } = await store.readObject(scenario.composition.template, 'object')
+        const template = parseProtocolValue(
+          taskTemplateSchema,
+          parseJsonText(textDecoder.decode(bytes)),
+        )
+        assert.deepEqual(template, currentTemplate)
+      } finally {
+        await store.close()
+      }
+    },
+  )
+})
+
+void test('S4-A1 original composition resume re-verifies the Method guidance in the resumed Agent setup', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a1-resume-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  await withHarness(
+    (_request, index) => ({ content: 'seeded wake acknowledged', usage: fixtureUsage(index) }),
+    async ({ spike, fixture, workspace, storeRoot }) => {
+      const scenario = await makeScenario(storeRoot, spike.ctx, {
+        taskId,
+        maxRuns: 1,
+        guidanceText: S4A1_CURRENT_MARKER,
+        otherGuidanceText: S4A1_OTHER_MARKER,
+      })
+      await seedOpenRun(storeRoot, scenario, { runId, sessionId })
+      const seededEvents = await seedConsumedStartWake(spike, {
+        taskId,
+        runId,
+        sessionId,
+        workspace,
+        live: false,
+      })
+      assert.equal(fixture.requests.length, 1, 'the seed request is the only purchased request')
+
+      const prompts: string[] = []
+      const histories: (readonly SessionEvent[])[] = []
+      const disposePrompts = captureAgentPrompts(spike, sessionId, prompts)
+      const disposeHistory = spike.ctx.on('agent/created', ({ agent }) => {
+        if (String(agent.session.id) !== sessionId) return undefined
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- alpha2 exposes no replacement raw reader
+        histories.push(agent.session.snapshotEvents())
+        return undefined
+      })
+      const resumeEvents = recordSessionEvents(spike, sessionId)
+      const spy = spyAgents(spike.ctx)
+      let result
+      try {
+        result = await resumeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          runId,
+          workspace,
+          composition: await currentComposition(spike.ctx, storeRoot, scenario),
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024 * 1024,
+          verifier: {
+            provider: scenario.provider,
+            verify() { throw new Error('no submission') },
+          },
+          transientInvalidReasons: [],
+        })
+      } finally {
+        spy.restore()
+        disposePrompts()
+        disposeHistory()
+        resumeEvents.dispose()
+      }
+
+      assert.equal(spy.create, 0, 'resume must reuse the persisted session')
+      assert.equal(spy.resume, 1)
+      assert.equal(fixture.requests.length, 1, 'resume must not buy another model request')
+      assert.equal(result.compositionMatched, true)
+      assert.equal(result.sessionAction, 'resumed')
+      assert.equal(prompts.length, 1, 'the resumed Agent setup must assemble one scoped prompt')
+      assert.ok(
+        prompts[0]?.includes(S4A1_CURRENT_MARKER),
+        'the resumed scoped prompt must contain the current template guidance',
+      )
+      assert.equal(
+        prompts[0]?.includes(S4A1_OTHER_MARKER),
+        false,
+        'another template guidance must not be mounted on resume',
+      )
+      assert.equal(
+        scenario.composition.platformPrompt,
+        computeDigest('object', { v: 1, text: prompts[0] }),
+      )
+      assert.equal(
+        resumeEvents.events.filter(event => event.type === 'turn/start').length,
+        0,
+        'resume must not open another model turn',
+      )
+      assert.equal(
+        resumeEvents.events.filter(event => event.type === 'assistant/message').length,
+        0,
+        'resume must not buy another assistant message',
+      )
+      assert.equal(userMessageIds(resumeEvents.events).length, 0)
+      assert.equal(histories.length, 1)
+      const history = histories[0]
+      assert.ok(history)
+      assert.deepEqual(
+        history.slice(0, seededEvents.length),
+        seededEvents,
+        'resume must preserve the persisted history prefix byte-for-byte',
+      )
+      const appended = history.slice(seededEvents.length)
+      assert.ok(appended.length > 0)
+      assert.equal(
+        appended.every(event => event.type === 'session/end-seed'),
+        true,
+        'resume may only append the existing end-seed boundary',
+      )
+    },
+  )
+})
+
+void test('S4-A1 resume rejects a missing guidance CAS before Agent or model', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a1-missing-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  await withHarness(
+    (_request, index) => ({ content: 'missing guidance must not reach the model', usage: fixtureUsage(index) }),
+    async ({ spike, fixture, workspace, storeRoot }) => {
+      const scenario = await makeScenario(storeRoot, spike.ctx, {
+        taskId,
+        maxRuns: 1,
+        guidanceText: S4A1_CURRENT_MARKER,
+      })
+      await seedOpenRun(storeRoot, scenario, { runId, sessionId })
+      const guidance = scenario.method.templates[0]?.guidance
+      assert.ok(guidance)
+      const store = await DomainStore.open({ root: storeRoot })
+      try {
+        const objectPath = join(store.objectsPath, guidance.digest.slice('sha256:'.length))
+        await rm(objectPath)
+      } finally {
+        await store.close()
+      }
+      const spy = spyAgents(spike.ctx)
+      try {
+        await assert.rejects(resumeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          runId,
+          workspace,
+          composition: scenario.composition,
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024 * 1024,
+          verifier: {
+            provider: scenario.provider,
+            verify() { throw new Error('missing guidance must not verify') },
+          },
+          transientInvalidReasons: [],
+        }))
+      } finally {
+        spy.restore()
+      }
+      assert.equal(spy.create + spy.resume, 0, 'missing guidance must be rejected before Agent setup')
+      assert.equal(fixture.requests.length, 0, 'missing guidance must not buy a model request')
+    },
+  )
+})
+
+void test('S4-A1 resume cannot switch to another Method revision', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a1-switch-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  await withHarness(
+    (_request, index) => ({ content: 'seeded wake acknowledged', usage: fixtureUsage(index) }),
+    async ({ spike, fixture, workspace, storeRoot }) => {
+      const scenario = await makeScenario(storeRoot, spike.ctx, {
+        taskId,
+        maxRuns: 1,
+        guidanceText: S4A1_CURRENT_MARKER,
+      })
+      await seedOpenRun(storeRoot, scenario, { runId, sessionId })
+      await seedConsumedStartWake(spike, {
+        taskId,
+        runId,
+        sessionId,
+        workspace,
+        live: false,
+      })
+      assert.equal(fixture.requests.length, 1)
+
+      const store = await DomainStore.open({ root: storeRoot })
+      let switchedComposition: CompositionPayload
+      try {
+        const otherGuidance = await seedObject(store, 'guidance:s4a1-switched', {
+          v: 1,
+          text: S4A1_OTHER_MARKER,
+        })
+        const current = scenario.method.templates[0]
+        assert.ok(current)
+        const otherMethod = sealMethodRevision({
+          ...methodPayload(scenario.method),
+          id: 'method:s4a1-switched',
+          entryTemplateId: current.id,
+          templates: [{
+            ...current,
+            guidance: otherGuidance,
+          }],
+        })
+        await store.putObject(otherMethod.id, jsonBytes(otherMethod), 'method')
+        const otherContract = sealTaskContract({
+          ...contractPayload(scenario.contract),
+          method: { id: otherMethod.id, digest: otherMethod.digest },
+          template: {
+            id: scenario.contract.template.id,
+            digest: otherMethod.digest,
+          },
+        })
+        switchedComposition = await buildSingleRunComposition(spike.ctx, {
+          store,
+          id: 's4a1-switched',
+          contract: otherContract,
+          agentOptions: agentOptions(),
+          base: compositionBase(scenario.composition),
+        })
+      } finally {
+        await store.close()
+      }
+
+      const spy = spyAgents(spike.ctx)
+      let result
+      try {
+        result = await resumeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          runId,
+          workspace,
+          composition: switchedComposition,
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024 * 1024,
+          verifier: {
+            provider: scenario.provider,
+            verify() { throw new Error('a switched Method pin must not verify') },
+          },
+          transientInvalidReasons: [],
+        })
+      } finally {
+        spy.restore()
+      }
+      assert.equal(spy.create + spy.resume, 0, 'a switched pin must not create or resume an Agent')
+      assert.equal(fixture.requests.length, 1, 'a switched pin must not buy another request')
+      assert.equal(result.compositionMatched, false)
+      assert.equal(result.classification, 'invalid')
+      assert.equal(result.executionRecord?.reason, 'composition-mismatch')
+    },
+  )
+})
+
+void test('S4-A1 create rejects an actual scoped platformPrompt mismatch before any model request', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a1-platform-create-${String(process.pid)}-${String(Date.now())}`
+  await withHarness(
+    (_request, index) => ({ content: 'platform mismatch must not reach the model', usage: fixtureUsage(index) }),
+    async ({ spike, fixture, workspace, storeRoot }) => {
+      const scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1 })
+      const wrongComposition: CompositionPayload = {
+        ...scenario.composition,
+        platformPrompt: computeDigest('object', { v: 1, text: 'wrong platform prompt' }),
+      }
+      const created: string[] = []
+      const disposeCreated = spike.ctx.on('agent/created', ({ agent }) => {
+        created.push(String(agent.session.id))
+        return undefined
+      })
+      let result
+      try {
+        result = await executeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          workspace,
+          sessionId: `${taskId}-session`,
+          runId: `${taskId}-run`,
+          admission: scenario.runAdmission,
+          composition: wrongComposition,
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024 * 1024,
+          verifier: {
+            provider: scenario.provider,
+            verify() { throw new Error('platform mismatch must not verify') },
+          },
+          transientInvalidReasons: [],
+        })
+      } finally {
+        disposeCreated()
+      }
+      assert.equal(created.length, 0, 'platform mismatch must not publish an Agent')
+      assert.equal(fixture.requests.length, 0, 'platform mismatch must not buy a model request')
+      assert.equal(result.classification, 'invalid')
+      assert.equal(result.evidence, undefined)
+      assert.match(result.executionRecord?.reason ?? '', /^COMPOSITION_MISMATCH:/)
+      const facts = await readFacts(storeRoot)
+      assert.equal(factsOfType(facts, 'run/submitted').length, 0)
+      assert.equal(factsOfType(facts, 'run/closed')[0]?.data.classification, 'invalid')
+    },
+  )
+})
+
+void test('S4-A1 resume rejects an actual scoped platformPrompt mismatch before Agent publication', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4a1-platform-resume-${String(process.pid)}-${String(Date.now())}`
+  const runId = `${taskId}-run-1`
+  const sessionId = `${taskId}-session-1`
+  await withHarness(
+    (_request, index) => ({ content: 'platform mismatch must not reach the model', usage: fixtureUsage(index) }),
+    async ({ spike, fixture, workspace, storeRoot }) => {
+      const scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1 })
+      const wrongComposition: CompositionPayload = {
+        ...scenario.composition,
+        platformPrompt: computeDigest('object', { v: 1, text: 'wrong platform prompt on resume' }),
+      }
+      await seedOpenRun(storeRoot, scenario, {
+        runId,
+        sessionId,
+        composition: wrongComposition,
+      })
+      const spy = spyAgents(spike.ctx)
+      const created: string[] = []
+      const disposeCreated = spike.ctx.on('agent/created', ({ agent }) => {
+        created.push(String(agent.session.id))
+        return undefined
+      })
+      let result
+      try {
+        result = await resumeSingleRun({
+          ctx: spike.ctx,
+          journalRoot: storeRoot,
+          runId,
+          workspace,
+          composition: wrongComposition,
+          agentOptions: agentOptions(),
+          maxOutputBytes: 1024 * 1024,
+          verifier: {
+            provider: scenario.provider,
+            verify() { throw new Error('platform mismatch must not verify') },
+          },
+          transientInvalidReasons: [],
+        })
+      } finally {
+        spy.restore()
+        disposeCreated()
+      }
+      assert.equal(spy.resume, 1, 'resume must reach the Agent setup for this check')
+      assert.equal(created.length, 0, 'platform mismatch must not publish an Agent')
+      assert.equal(fixture.requests.length, 0, 'platform mismatch must not buy a model request')
+      assert.equal(result.compositionMatched, true)
+      assert.equal(result.classification, 'invalid')
+      assert.equal(result.sessionAction, 'none')
+      assert.equal(result.evidence, undefined)
+      assert.match(result.executionRecord?.reason ?? '', /^COMPOSITION_MISMATCH:/)
+    },
+  )
 })

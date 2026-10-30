@@ -25,6 +25,7 @@ import type {
   SubmissionManifest,
   TaskContract,
   TaskRunState,
+  TaskTemplate,
   UsageRecord,
 } from '@singularity/protocol'
 
@@ -35,6 +36,12 @@ import { SingleRunError } from './errors.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
 import { clampPercent, renderNodeView } from './prompt.ts'
 import type { NodeView } from './prompt.ts'
+import {
+  MethodResourceError,
+  assertCompositionResources,
+  loadMethodResources,
+} from './resources.ts'
+import type { FrozenMethodResources } from './resources.ts'
 import {
   buildExecutionResult,
   commitFact,
@@ -120,8 +127,8 @@ export interface ExecuteSingleRunResult {
 
 /** Shared continuation result; recovery adds composition/session flags. */
 export interface ContinueOpenedRunResult extends ExecuteSingleRunResult {
-  /** `created` uses the same session intent when persistence is absent. */
-  readonly sessionAction: 'created' | 'resumed'
+  /** `created` uses the same session intent when persistence is absent; `none` closed invalid. */
+  readonly sessionAction: 'created' | 'none' | 'resumed'
   /** Stable wake outcome; `already-admitted` never buys another request. */
   readonly wakeOutcome?: WakeDeliveryOutcome
 }
@@ -146,6 +153,7 @@ export interface PreparedRun {
   readonly contract: TaskContract
   readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
   readonly workspace: string
+  readonly methodResources: FrozenMethodResources
   readonly runtime: RuntimeContext
 }
 
@@ -184,6 +192,8 @@ async function openSingleRun(
     throw new SingleRunError('CONTRACT_INVALID', 'single-Run execution requires a root TaskContract')
   }
   const compositionPayload = parseProtocolValue(compositionPayloadSchema, request.composition)
+  const methodResources = await loadMethodResources(service, contract)
+  await assertCompositionResources(service, methodResources, compositionPayload)
   validateComposition(compositionPayload, contract)
 
   const baseToolNames = await resolveBaseToolNames(contract, service)
@@ -263,6 +273,7 @@ async function openSingleRun(
     compositionRef,
     runOpened,
     workspace,
+    methodResources,
     baseToolNames,
     lastAttempt: lastAttemptFromState(state, contract.taskId, request.runId),
     request,
@@ -296,6 +307,7 @@ function buildPreparedRun(options: {
   readonly compositionRef: Ref
   readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
   readonly workspace: string
+  readonly methodResources: FrozenMethodResources
   readonly baseToolNames: readonly string[]
   readonly lastAttempt: NodeView['lastAttempt']
   readonly request: ExecuteSingleRunRequest
@@ -304,6 +316,7 @@ function buildPreparedRun(options: {
     contract: options.contract,
     runOpened: options.runOpened,
     workspace: options.workspace,
+    methodResources: options.methodResources,
     runtime: buildRuntimeContext(
       options.request,
       options.actor,
@@ -362,7 +375,13 @@ export async function drivePreparedRun(
     checkBudget,
     stopBudget,
     startBudget,
-    renderView: () => renderNodeView(buildNodeView(runtime, request, controller, budget())),
+    renderView: () => renderNodeView(buildNodeView(
+      runtime,
+      prepared.methodResources.template,
+      request,
+      controller,
+      budget(),
+    )),
   })
   const { snapshot } = observation
   const tools = controller.snapshot()
@@ -465,35 +484,39 @@ function validateComposition(
 ): void {
   if (composition.contract.id !== contract.taskId
     || composition.contract.digest !== contract.digest) {
-    throw new SingleRunError(
+    throw new MethodResourceError(
+      'composition',
       'COMPOSITION_MISMATCH',
       'composition.contract must reference the frozen root contract',
     )
   }
   if (composition.seed.id !== contract.environment.seed.id
     || composition.seed.digest !== contract.environment.seed.digest) {
-    throw new SingleRunError(
+    throw new MethodResourceError(
+      'composition',
       'COMPOSITION_MISMATCH',
       'composition.seed must equal contract.environment.seed',
     )
   }
   if (composition.dsh.version !== '0.2.2-alpha.2') {
-    throw new SingleRunError(
+    throw new MethodResourceError(
+      'composition',
       'COMPOSITION_MISMATCH',
       `DSH version must be 0.2.2-alpha.2, received ${JSON.stringify(composition.dsh.version)}`,
     )
   }
-  if (composition.skills.length > 0 || composition.mcpServers.length > 0
-    || composition.guidance !== undefined) {
-    throw new SingleRunError(
+  if (composition.skills.length > 0 || composition.mcpServers.length > 0) {
+    throw new MethodResourceError(
+      'composition',
       'UNSUPPORTED_RESOURCES',
-      'this single-Run slice does not mount skills, MCP servers, or composition guidance',
+      'this single-Run slice does not mount skills or MCP servers',
     )
   }
   if (contract.resources.skills.length > 0
     || contract.resources.mcpServers.length > 0
     || contract.resources.exploration !== undefined) {
-    throw new SingleRunError(
+    throw new MethodResourceError(
+      'composition',
       'UNSUPPORTED_RESOURCES',
       'contract skills, MCP servers, and exploration resources are not mounted in this slice',
     )
@@ -641,6 +664,7 @@ async function commitRunSubmitted(
 
 function buildNodeView(
   runtime: RuntimeContext,
+  template: TaskTemplate,
   request: ExecuteSingleRunRequest,
   controller: RunToolController,
   budget: RemainingBudgetPct,
@@ -661,7 +685,7 @@ function buildNodeView(
       mode: 'guided',
     },
     method: runtime.contract.method,
-    ownTemplate: { id: runtime.contract.template.id, brief: runtime.contract.spec.goal.summary },
+    ownTemplate: { id: template.id, brief: template.brief },
     documents: [],
     skills: [],
     tools: runtime.baseToolNames.map(name => ({ name })),
