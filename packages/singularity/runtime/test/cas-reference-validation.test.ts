@@ -189,7 +189,7 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
   })
   const methodRef = await putSealed(store, 'method-rich', 'method', method)
 
-  const acceptanceRef = ref('acceptance-pending-amendment', digestB)
+  const acceptanceRef = await objectRef('acceptance-policy')
   const contractPayload = {
     v: 1 as const,
     taskId: 'task-root',
@@ -233,7 +233,6 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
   })
 
   const compositionConfigRef = await objectRef('composition-dsh-config')
-  const compositionContractRef = await objectRef('composition-contract-object')
   const compositionTemplateRef = await objectRef('composition-template-object')
   const compositionGuidanceRef = await objectRef('composition-guidance')
   const compositionSkillRef = await objectRef('composition-skill')
@@ -249,7 +248,7 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
     v: 1,
     dsh: { package: 'dsh', version: '0.2.2-alpha.2', config: compositionConfigRef },
     platformPrompt: digestA,
-    contract: compositionContractRef,
+    contract: contractRef,
     template: compositionTemplateRef,
     guidance: compositionGuidanceRef,
     skills: [compositionSkillRef],
@@ -301,7 +300,6 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
   const approvalRef = await putRaw(store, 'method-approval')
   const evaluationRef = await putRaw(store, 'method-evaluation')
   const proposalSourceRef = await putRaw(store, 'method-source-proposal')
-  const workspaceSeedRef = await putRaw(store, 'workspace-seed')
   const cutRef = await putRaw(store, 'cancellation-cut')
 
   const facts: Fact[] = []
@@ -348,7 +346,7 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
     sessionId: 'session-1',
     composition: compositionRef,
     workspaceKey: 'workspace-root',
-    workspaceSeed: workspaceSeedRef,
+    workspaceSeed: compositionSeedRef,
     budgetReservation: { tokens: 100, steps: 1, deadlineAt: limits.deadlineAt },
   })
   await append('task/children-admitted', {
@@ -517,13 +515,14 @@ void test('sealed structured objects use their self digest under the requested C
   })
 })
 
-void test('replay validates all 13 fact types, nested refs, acceptance skip, and orphan tolerance', async () => {
+void test('replay validates all 13 fact types, nested refs, acceptance domain, and orphan tolerance', async () => {
   await withRoot(async (root) => {
     const store = await DomainStore.open({ root })
     const graph = await buildGraph(store)
     try {
       assert.deepEqual(await store.replay(), graph.facts)
-      await assert.rejects(access(store.objectPath(graph.acceptanceRef.digest)))
+      await access(store.objectPath(graph.acceptanceRef.digest))
+      await putRaw(store, 'orphan-object')
     } finally {
       await store.close()
     }
@@ -545,6 +544,7 @@ void test('nested method, contract, composition, and execution refs reject missi
     { name: 'method template guidance', select: (graph: Graph) => graph.guidanceRef },
     { name: 'composition dsh config', select: (graph: Graph) => graph.compositionConfigRef },
     { name: 'execution input', select: (graph: Graph) => graph.executionInputRef },
+    { name: 'contract acceptance', select: (graph: Graph) => graph.acceptanceRef },
   ] as const
 
   for (const scenario of scenarios) {

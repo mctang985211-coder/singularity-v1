@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { digestSchema, seal, verifyDigest } from './digest.ts'
 import type { Digest } from './digest.ts'
+import { sessionCutSchema, usageRecordSchema } from './fact.ts'
 import { refSchema } from './refs.ts'
 import type { Ref } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
@@ -560,4 +561,147 @@ function sameDraftDeclaration(draft: SubmittedLearningDraft, declared: OutputSpe
     draft.role === declared.role &&
     draft.required === declared.required
   )
+}
+
+/**
+ * Host-built data request from docs/framework.md §15.3. Runtime extends this
+ * shape with a read-only CAS reader; this protocol type deliberately contains
+ * no function, DSH, filesystem, or clock dependency.
+ */
+export interface VerifyRequest {
+  /** Fixed `runId + ':verify'` identity for one submission. */
+  readonly operationId: string
+  /** Frozen TaskContract the verifier must check. */
+  readonly task: TaskContract
+  /** Authorized input snapshot in frozen contract order. */
+  readonly inputs: readonly Ref[]
+  /** Frozen output snapshot in submission-manifest order. */
+  readonly outputs: readonly Ref[]
+}
+
+/** Environment identity recorded in Evidence; never a second seed authority. */
+export const evidenceEnvironmentSchema = closedObject({
+  seed: digestSchema,
+  mode: z.string().min(1),
+})
+
+export type EvidenceEnvironment = z.infer<typeof evidenceEnvironmentSchema>
+
+/** Verification identity in Evidence; privateReceipt remains opaque. */
+export const evidenceVerificationSchema = closedObject({
+  provider: refSchema,
+  operationId: z.string().min(1),
+  publicReceipt: refSchema,
+  privateReceipt: refSchema.optional(),
+})
+
+export type EvidenceVerification = z.infer<typeof evidenceVerificationSchema>
+
+const evidencePayloadBaseShape = {
+  v: z.literal(1),
+  task: refSchema,
+  runId: z.string().min(1),
+  contractDigest: digestSchema,
+  method: refSchema,
+  inputs: z.array(refSchema),
+  outputs: z.array(refSchema),
+  composition: refSchema,
+  verification: evidenceVerificationSchema,
+  usage: usageRecordSchema,
+  sessionCut: sessionCutSchema,
+  environment: evidenceEnvironmentSchema,
+}
+
+/** Evidence body before the `evidence` domain seal is attached. */
+export const evidencePayloadSchema = closedObject(evidencePayloadBaseShape).superRefine(
+  (evidence, ctx) => {
+    if (evidence.task.digest !== evidence.contractDigest) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['task', 'digest'],
+        message: 'Evidence task digest must equal the frozen contract digest',
+      })
+    }
+  },
+)
+
+export type EvidencePayload = z.infer<typeof evidencePayloadSchema>
+
+/** Sealed acceptance evidence; ExecutionRecord cannot impersonate this shape. */
+export const evidenceSchema = evidencePayloadSchema.extend({
+  digest: digestSchema,
+})
+
+export type Evidence = z.infer<typeof evidenceSchema>
+
+/** Validates and seals Evidence in the `evidence` digest domain. */
+export function sealEvidence(payload: unknown): Evidence {
+  const body = parseProtocolValue(evidencePayloadSchema, payload)
+  return seal('evidence', body)
+}
+
+/** Accepts only strict Evidence whose `evidence` domain digest matches. */
+export function verifyEvidence(value: unknown): value is Evidence {
+  try {
+    const evidence = parseProtocolValue(evidenceSchema, value)
+    return verifyDigest('evidence', evidence)
+  } catch {
+    return false
+  }
+}
+
+/** Frozen contract and run identity used to check an Evidence object. */
+export interface EvidenceExpectation {
+  readonly contract: TaskContract
+  readonly runId: string
+  readonly composition: Ref
+}
+
+export type EvidenceValidation =
+  | { readonly valid: true; readonly evidence: Evidence }
+  | { readonly valid: false; readonly reason: string }
+
+/**
+ * Checks Evidence identity against the frozen contract and Run. Usage,
+ * session cut, and receipt refs are validated by the runtime that owns their
+ * snapshot; this function never reads CAS.
+ */
+export function validateEvidence(
+  value: unknown,
+  expected: EvidenceExpectation,
+): EvidenceValidation {
+  let evidence: Evidence
+  try {
+    evidence = parseProtocolValue(evidenceSchema, value)
+  } catch (error) {
+    return { valid: false, reason: `Evidence is not a strict sealed object: ${errorMessage(error)}` }
+  }
+  if (!verifyDigest('evidence', evidence)) {
+    return { valid: false, reason: 'Evidence digest is not a valid evidence-domain seal' }
+  }
+  if (!verifyTaskContract(expected.contract)) {
+    return { valid: false, reason: 'expected contract is not a valid sealed TaskContract' }
+  }
+  if (evidence.task.id !== expected.contract.taskId) {
+    return { valid: false, reason: 'Evidence task id does not match the frozen contract' }
+  }
+  if (evidence.task.digest !== expected.contract.digest) {
+    return { valid: false, reason: 'Evidence task digest does not match the frozen contract' }
+  }
+  if (evidence.contractDigest !== expected.contract.digest) {
+    return { valid: false, reason: 'Evidence contractDigest does not match the frozen contract' }
+  }
+  if (evidence.runId !== expected.runId) {
+    return { valid: false, reason: 'Evidence runId does not match the Run' }
+  }
+  if (!sameRef(evidence.method, expected.contract.method)) {
+    return { valid: false, reason: 'Evidence method does not match the frozen contract method' }
+  }
+  if (!sameRef(evidence.composition, expected.composition)) {
+    return { valid: false, reason: 'Evidence composition does not match the opened Run composition' }
+  }
+  if (evidence.environment.seed !== expected.contract.environment.seed.digest) {
+    return { valid: false, reason: 'Evidence environment seed does not match the frozen contract seed' }
+  }
+  return { valid: true, evidence }
 }

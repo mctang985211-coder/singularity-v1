@@ -713,8 +713,8 @@ class ReferenceValidator {
     if (contract.origin.kind === 'root') {
       await this.validateRef(contract.origin.requestRef, 'object')
     }
-    // TaskContract.acceptance is AcceptanceRef; its domain is pending
-    // amendment 002 and is deliberately not guessed or validated here.
+    // Amendment 002 fixes AcceptanceRef in the object domain.
+    await this.validateRef(contract.acceptance, 'object')
   }
 
   private async validateMethodRevisionValue(
@@ -743,7 +743,9 @@ class ReferenceValidator {
     composition: Composition | CompositionPayload,
   ): Promise<void> {
     await this.validateRef(composition.dsh.config, 'object')
-    await this.validateRef(composition.contract, 'object')
+    // Composition.contract carries the contract-domain id/digest compared by
+    // the Task/Run reducer; it is not an object-domain copy of the contract.
+    await this.validateStructured(composition.contract, 'contract', 'task-contract')
     await this.validateRef(composition.template, 'object')
     if (composition.guidance !== undefined) {
       await this.validateRef(composition.guidance, 'object')
