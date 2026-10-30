@@ -1034,6 +1034,9 @@ void test('single Run verified: self-read, plan, native bash output, independent
         requiredCriteria: [CRITERION_ID],
       })
       assert.equal(receiptValidation.verdict, 'verified')
+      if (live) {
+        console.log(`S3-B2 live evidence: ${evidence.digest}`)
+      }
     } finally {
       await store.close()
     }
