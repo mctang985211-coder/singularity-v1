@@ -97,6 +97,8 @@ const digest = createHash('sha256').update(specification).digest('hex')
 check(digest === lock.sha256, `specification digest mismatch: expected ${lock.sha256}, found ${digest}`)
 check(specification.includes('版本：1.0'), 'framework must declare version 1.0')
 check(specification.includes('状态：V1 发布规范'), 'framework must declare the V1 release status')
+check(specification.includes('权威文件：docs/framework.md'), 'framework release entry must name docs/framework.md')
+check(!/\]\(\/(?:home|Users)\//.test(specification), 'framework source references must be portable')
 
 const scenarioCounts = new Map()
 for (const match of specification.matchAll(/C-(\d{2})/g)) {
@@ -126,6 +128,8 @@ check(agents.includes('V1 发布规范'), 'AGENTS.md must recognize the V1 relea
 check(!agents.includes('SINGULARITY_FRAMEWORK_V1_REVISED_DRAFT.md'), 'AGENTS.md retains a superseded draft reference')
 check(!agents.includes('当前施工阻断项'), 'AGENTS.md retains a resolved blocker section')
 check(agents.includes('pnpm verify'), 'AGENTS.md must document the root verification command')
+check(agents.includes('Structure done when'), 'AGENTS.md must retain the structural completion gate')
+check((await text('.github/pull_request_template.md')).includes('Structure done when'), 'PR template must retain the structural completion gate')
 
 const ci = await text('.github/workflows/ci.yml')
 check(/^\s+verify:\s*$/m.test(ci), 'CI must retain the stable verify job')

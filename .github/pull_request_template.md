@@ -9,6 +9,13 @@
 
 ## Done when
 
+## Structure done when
+
+- Final module ownership and current consumers:
+- Public exports and runtime dependency changes:
+- Large production files touched (before/after lines), responsibility split or justified exception:
+- Removed duplicate paths, projections, helpers, and stale documentation:
+
 ## Verification evidence
 
 List the commands actually run and their results. Include real DSH/model evidence only when it was actually executed.

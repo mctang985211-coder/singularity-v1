@@ -11,5 +11,9 @@
     "tsBuildInfoFile": "dist/tsconfig.build.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["test"]
+  "exclude": ["test"],
+  "references": [
+    { "path": "../../packages/singularity/protocol/tsconfig.build.json" },
+    { "path": "../../packages/singularity/runtime/tsconfig.build.json" }
+  ]
 }

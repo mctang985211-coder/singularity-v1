@@ -11,5 +11,8 @@
     "tsBuildInfoFile": "dist/tsconfig.build.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["test"]
+  "exclude": ["test"],
+  "references": [
+    { "path": "../protocol/tsconfig.build.json" }
+  ]
 }

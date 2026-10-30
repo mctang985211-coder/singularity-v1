@@ -454,10 +454,9 @@ void test('alpha2 agent composition keeps declarations, dispatch, persistence, a
   let resumed: AgentHandle | undefined
   let disposeCreatedListener: (() => boolean) | undefined
   try {
-    let baseURL: string
+    let baseURL: string | undefined
     let apiKey: string
     if (live) {
-      baseURL = requireEnv('SINGULARITY_SPIKE_BASE_URL')
       apiKey = requireEnv('SINGULARITY_SPIKE_API_KEY')
     } else {
       const replies: readonly FixtureReply[] = [
@@ -483,7 +482,7 @@ void test('alpha2 agent composition keeps declarations, dispatch, persistence, a
       apiKey = 'fixture-key'
     }
 
-    spike = await bootSpikeProfile({ home, baseURL, apiKey })
+    spike = await bootSpikeProfile({ home, ...(baseURL === undefined ? {} : { baseURL }), apiKey })
     assert.equal(spike.dshVersion, '0.2.2-alpha.2')
     const ctx = spike.ctx
     assert.ok(ctx.llm.listProviders().some(provider => provider.id === 'singularity-local'), 'profile must mount the singularity-local pi-ai route')

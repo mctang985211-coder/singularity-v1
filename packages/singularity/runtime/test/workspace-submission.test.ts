@@ -116,7 +116,7 @@ void test('freezes files, trees, drafts, checks, and a strict manifest in CAS', 
         '__skill-drafts',
         '__mcp-drafts',
       ])
-      assert.deepEqual(frozen.checks.map(check => check.outputId), [
+      assert.deepEqual(frozen.manifest.checks.map(check => check.outputId), [
         'out-file',
         'out-tree',
         '__skill-drafts',
@@ -170,7 +170,7 @@ void test('optional outputs may be absent and drafts stay empty when disabled', 
       })
       assert.equal(frozen.manifest.outputs[1]?.object, undefined)
       assert.deepEqual(frozen.manifest.learningDrafts, [])
-      assert.equal(frozen.checks.length, 1)
+      assert.equal(frozen.manifest.checks.length, 1)
     })
   })
 })
@@ -262,6 +262,40 @@ void test('tree traversal rejects a symlinked node without freezing it', async (
     })
   })
 })
+
+for (const kind of ['file', 'tree', 'draft'] as const) {
+  void test(`rejects a symlinked ancestor of a ${kind} output`, async () => {
+    await withStore(async store => {
+      await withWorkspace(async workspace => {
+        await withWorkspace(async outside => {
+          const draft = kind === 'draft'
+          const ancestor = draft ? 'learning-drafts' : 'linked'
+          await writeFile(join(outside, 'result.txt'), 'outside-file')
+          await mkdir(join(outside, 'tree'))
+          await writeFile(join(outside, 'tree', 'result.txt'), 'outside-tree')
+          await mkdir(join(outside, 'skills'))
+          await writeFile(join(outside, 'skills', 'SKILL.md'), '# outside')
+          await symlink(outside, join(workspace, ancestor))
+          const outputs = draft
+            ? [output('__skill-drafts', 'learning-drafts/skills', 'tree', 'skill-draft', false)]
+            : [output('out', `linked/${kind === 'file' ? 'result.txt' : 'tree'}`, kind, 'deliverable', true)]
+          await assert.rejects(
+            freezeSubmission({
+              contract: contract(outputs),
+              runId: `run-ancestor-link-${kind}`,
+              workspace,
+              outputIds: draft ? [] : ['out'],
+              includeLearningDrafts: draft,
+              maxOutputBytes: 1024,
+              writer: store,
+            }),
+            (error: unknown) => error instanceof SubmissionError && error.code === 'OUTPUT_SYMLINK',
+          )
+        })
+      })
+    })
+  })
+}
 
 void test('prepareWorkspace copies only copy-to-work inputs from CAS', async () => {
   await withStore(async store => {

@@ -108,6 +108,9 @@ importers:
       '@deepseek-ai/dsh-agent':
         specifier: 0.2.2-alpha.2
         version: 0.2.2-alpha.2(c09e321863b8ebb6167f522cda8f63dc)
+      '@deepseek-ai/dsh-jobs':
+        specifier: 0.2.2-alpha.2
+        version: 0.2.2-alpha.2(129cff676f73a8e20a87400267cd5db8)
       '@deepseek-ai/dsh-llm':
         specifier: 0.2.2-alpha.2
         version: 0.2.2-alpha.2(@deepseek-ai/cordis@4.0.6-alpha.1)

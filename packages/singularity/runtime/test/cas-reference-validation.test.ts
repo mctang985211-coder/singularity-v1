@@ -8,9 +8,14 @@ import {
   canonicalize,
   computeDigest,
   computeDigestBytes,
+  evidenceSchema,
+  parseProtocolValue,
   seal,
   sealFact,
   sealMethodRevision,
+  sealSubmissionManifest,
+  sealEvidence,
+  sealPublicReceipt,
   sealTaskContract,
 } from '@singularity/protocol'
 import type {
@@ -112,6 +117,11 @@ interface Graph {
   readonly compositionConfigRef: Ref
   readonly executionInputRef: Ref
   readonly acceptanceRef: Ref
+  readonly evidenceRef: Ref
+  readonly publicReceiptRef: Ref
+  readonly privateReceiptRef: Ref
+  readonly manifestOutputRef: Ref
+  readonly evidenceOutputRef: Ref
 }
 
 /**
@@ -285,7 +295,24 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
   })
   const executionRef = await putSealed(store, 'execution-1', 'object', execution)
 
-  const evidenceRef = await putRaw(store, 'evidence-1', 'evidence')
+  const manifestOutputRef = await objectRef('manifest-output')
+  const evidenceOutputRef = await objectRef('evidence-output')
+  const publicReceipt = sealPublicReceipt({
+    v: 1, provider: acceptanceRef, operationId: 'run-1:verify',
+    contractDigest: contract.digest, inputDigests: [inputObjectRef.digest],
+    outputDigests: [evidenceOutputRef.digest], criteria: [],
+    exit: { code: 0, signal: null }, timedOut: false,
+  })
+  const publicReceiptRef = await putSealed(store, 'receipt-1', 'object', publicReceipt)
+  const privateReceiptRef = await objectRef('private-receipt')
+  const evidence = sealEvidence({
+    v: 1, task: { id: contract.taskId, digest: contract.digest }, runId: 'run-1',
+    contractDigest: contract.digest, method: methodRef, inputs: [inputObjectRef],
+    outputs: [evidenceOutputRef], composition: compositionRef,
+    verification: { provider: acceptanceRef, operationId: 'run-1:verify', publicReceipt: publicReceiptRef, privateReceipt: privateReceiptRef },
+    usage, sessionCut, environment: { seed: seedRef.digest, mode: 'test' },
+  })
+  const evidenceRef = await putSealed(store, 'evidence-1', 'evidence', evidence)
   const roundPlanRef = await putRaw(store, 'round-plan-1', 'round-plan')
   const traceRef = await putRaw(store, 'trace-1')
   const sourceTraceRef = await putRaw(store, 'source-trace-1')
@@ -294,7 +321,12 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
   const comparisonRef = await putRaw(store, 'comparison-1')
   const sketchRef = await putRaw(store, 'sketch-1')
   const feedbackRef = await putRaw(store, 'feedback-1')
-  const outputManifestRef = await putRaw(store, 'outputs-manifest')
+  const outputManifestRef = await putSealed(store, 'outputs-manifest', 'object', sealSubmissionManifest({
+    v: 1, taskId: contract.taskId, runId: 'run-1', contractDigest: contract.digest,
+    includeLearningDrafts: false,
+    outputs: [{ id: 'output', path: 'out.txt', kind: 'file', role: 'deliverable', required: false, object: manifestOutputRef }],
+    learningDrafts: [], checks: [{ outputId: 'output', bytes: 1, symlinks: 'none' }],
+  }))
   const previewReceiptRef = await putRaw(store, 'preview-receipt')
   const readReceiptRef = await putRaw(store, 'read-receipt')
   const approvalRef = await putRaw(store, 'method-approval')
@@ -437,6 +469,11 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
     compositionConfigRef,
     executionInputRef,
     acceptanceRef,
+    evidenceRef,
+    publicReceiptRef,
+    privateReceiptRef,
+    manifestOutputRef,
+    evidenceOutputRef,
   }
 }
 
@@ -623,7 +660,7 @@ void test('an empty journal remains valid and a wrong-domain memory ref does not
   })
 })
 
-void test('CommandService writes domain-tagged objects and restart replay validates them', async () => {
+void test('CommandService putObject writes domain-tagged objects and restart replay validates them', async () => {
   await withRoot(async (root) => {
     const serviceActor: FactActor = { kind: 'operator', id: 'operator-service-reference' }
     const command: NormalizedCommand = {
@@ -633,26 +670,19 @@ void test('CommandService writes domain-tagged objects and restart replay valida
       toolVersion: 1,
       actor: serviceActor,
       scope: {},
-      input: { evidence: true },
+      input: { method: true },
     }
-    const bytes = encoder.encode('evidence domain object bytes')
-    const evidenceRef: Ref = {
-      id: 'evidence-domain-object',
-      digest: computeDigestBytes('evidence', bytes),
-    }
+    const method = sealMethodRevision({ v: 1, id: 'method-domain-object', templates: [], skills: [], tools: [] })
+    const bytes = encoder.encode(canonicalize(method))
+    const methodRef: Ref = { id: method.id, digest: method.digest }
 
     const first = await CommandService.open({ root, actor: serviceActor, clock: () => at })
     try {
+      assert.deepEqual(await first.putObject(methodRef.id, bytes, 'method'), methodRef)
       const fact = await first.commit({
         command,
-        type: 'task/closed',
-        data: {
-          taskId: 'task-service-reference',
-          outcome: 'verified',
-          reason: 'verified evidence',
-          evidenceRefs: [evidenceRef],
-        },
-        objects: [{ id: evidenceRef.id, bytes, domain: 'evidence' }],
+        type: 'method/registered',
+        data: { revision: methodRef },
       })
       assert.equal(fact.seq, 0)
     } finally {
@@ -663,13 +693,8 @@ void test('CommandService writes domain-tagged objects and restart replay valida
     try {
       const replayed = await restarted.commit({
         command,
-        type: 'task/closed',
-        data: {
-          taskId: 'task-service-reference',
-          outcome: 'verified',
-          reason: 'verified evidence',
-          evidenceRefs: [evidenceRef],
-        },
+        type: 'method/registered',
+        data: { revision: methodRef },
       })
       assert.equal(replayed.seq, 0)
     } finally {
@@ -703,28 +728,29 @@ void test('commit rejects invalid refs before fsync without consuming seq and ig
       const sizeBefore = (await stat(journalPath)).size
 
       const orphanBytes = encoder.encode('orphan written before failed commit')
+      const orphanRef = await service.putObject('orphan-object', orphanBytes)
       const missingContract: Ref = { id: 'missing-contract', digest: digestB }
       await rejectsWithCode(
         service.commit({
           command: makeCommand('command-missing-ref'),
           type: 'task/admitted',
           data: { taskId: 'task-missing', contract: missingContract },
-          objects: [{ id: 'orphan-object', bytes: orphanBytes }],
         }),
         'OBJECT_MISSING',
       )
       assert.deepEqual(await readFile(journalPath), journalBefore)
       assert.equal((await stat(journalPath)).size, sizeBefore)
       assert.equal(service.facts().length, 1)
+      assert.deepEqual(await inspector.readObject(orphanRef), { bytes: orphanBytes })
 
       const wrongBytes = encoder.encode('wrong domain object')
       const wrongDigest = computeDigestBytes('evidence', wrongBytes)
+      await service.putObject('wrong-domain', wrongBytes, 'evidence')
       await rejectsWithCode(
         service.commit({
           command: makeCommand('command-wrong-domain'),
           type: 'task/admitted',
           data: { taskId: 'task-wrong', contract: { id: 'wrong-domain', digest: wrongDigest } },
-          objects: [{ id: 'wrong-domain', bytes: wrongBytes, domain: 'evidence' }],
         }),
         'OBJECT_DOMAIN_MISMATCH',
       )
@@ -789,4 +815,108 @@ void test('fact helpers seal a verifiable chain before replay validation', () =>
     prev: null,
   })
   assert.equal(fact.digest, computeDigest('fact', fact))
+})
+
+void test('replay rejects a sealed manifest whose file or tree leaf is missing', async t => {
+  for (const kind of ['file', 'tree'] as const) {
+    await t.test(kind, async () => withRoot(async root => {
+      const store = await DomainStore.open({ root })
+      const nestedBytes = encoder.encode('nested output')
+      const nestedRef = await store.putObject('nested-output', nestedBytes)
+      const object = kind === 'file' ? nestedRef : await putSealed(store, 'tree-output', 'object', seal('object', {
+        v: 1, kind: 'tree', files: [{ path: 'leaf.txt', bytes: nestedBytes.byteLength, object: nestedRef }],
+    }))
+    const manifest = sealSubmissionManifest({
+      v: 1,
+      taskId: 'task-nested-manifest',
+      runId: 'run-nested-manifest',
+      contractDigest: digestA,
+      includeLearningDrafts: false,
+      outputs: [{
+        id: 'output-1', path: 'out.txt', kind, role: 'deliverable',
+        required: false, object,
+      }],
+      learningDrafts: [],
+      checks: [{ outputId: 'output-1', bytes: nestedBytes.byteLength, symlinks: 'none' }],
+    })
+    const manifestRef = await putSealed(store, 'nested-manifest', 'object', manifest)
+    await store.appendFact({
+      v: 1,
+      seq: 0,
+      commandId: 'command-nested-manifest',
+      commandDigest: digestA,
+      type: 'run/submitted',
+      actor,
+      at,
+      data: {
+        runId: 'run-nested-manifest', outputs: manifestRef,
+        transcriptOffset: { sessionId: 'session-nested-manifest', seq: 0 },
+        previewReceipts: [], readReceipts: [],
+        planningSketchRef: await putRaw(store, 'nested-sketch'), feedbackRefs: [],
+      },
+      prev: null,
+    })
+    await store.close()
+    await unlink(store.objectPath(nestedRef.digest))
+    await rejectsWithCode(DomainStore.open({ root }), 'OBJECT_MISSING')
+    }))
+  }
+})
+
+void test('replay verifies Evidence outputs and public/private receipt refs', async t => {
+  for (const key of ['evidenceOutputRef', 'publicReceiptRef', 'privateReceiptRef'] as const) {
+    await t.test(key, async () => withRoot(async root => {
+      const store = await DomainStore.open({ root })
+      const graph = await buildGraph(store)
+      await store.close()
+      await unlink(store.objectPath(graph[key].digest))
+      await rejectsWithCode(DomainStore.open({ root }), 'OBJECT_MISSING')
+    }))
+  }
+})
+
+void test('append and replay reject wrong-domain refs nested in Evidence and PublicReceipt', async t => {
+  for (const kind of ['evidence-output', 'receipt-provider'] as const) {
+    await t.test(kind, async () => withRoot(async root => {
+      const store = await DomainStore.open({ root })
+      try {
+        const graph = await buildGraph(store)
+        const evidence = parseProtocolValue(evidenceSchema,
+          JSON.parse(new TextDecoder().decode((await store.readObject(graph.evidenceRef, 'evidence')).bytes)))
+        let value = evidence
+        const wrongRef = await putRaw(store, 'wrong-nested-domain', 'evidence')
+        if (kind === 'evidence-output') {
+          const body = { ...evidence }
+          delete (body as { digest?: string }).digest
+          value = sealEvidence({ ...body, outputs: [wrongRef] })
+        } else {
+          const receipt = sealPublicReceipt({
+            v: 1, provider: wrongRef, operationId: 'run-1:verify', contractDigest: evidence.contractDigest,
+            inputDigests: [], outputDigests: [], criteria: [], exit: { code: 0, signal: null }, timedOut: false,
+          })
+          const receiptRef = await putSealed(store, 'wrong-provider-receipt', 'object', receipt)
+          const body = { ...evidence }
+          delete (body as { digest?: string }).digest
+          value = sealEvidence({ ...body, verification: { ...body.verification, publicReceipt: receiptRef } })
+        }
+        const valueRef = await putSealed(store, 'wrong-nested-evidence', 'evidence', value)
+        const previous = graph.facts[graph.facts.length - 1]
+        const fact = sealFact({
+          v: 1, seq: graph.facts.length, commandId: `command-${kind}`, commandDigest: digestA,
+          type: 'task/closed', actor, at, prev: previous.digest,
+          data: { taskId: 'task-root', outcome: 'verified', reason: 'nested domain', evidenceRefs: [valueRef] },
+        })
+        const journalBefore = await readFile(store.journalPath)
+        const unsealed = { ...fact }
+        delete (unsealed as { digest?: string }).digest
+        await rejectsWithCode(store.appendFact(unsealed), 'OBJECT_DOMAIN_MISMATCH')
+        assert.deepEqual(await readFile(store.journalPath), journalBefore)
+        await store.close()
+        await writeFile(store.journalPath, `${journalBefore.toString()}${canonicalize(fact)}\n`)
+        await rejectsWithCode(DomainStore.open({ root }), 'OBJECT_DOMAIN_MISMATCH')
+      } finally {
+        await store.close()
+      }
+    }))
+  }
 })

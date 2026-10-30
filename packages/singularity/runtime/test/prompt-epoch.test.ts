@@ -70,11 +70,15 @@ function makeView(): NodeView {
 
 void test('worker card and NodeView stay inside the fixed prompt budgets', () => {
   const plain = renderWorkerCard(false)
-  const exploration = renderWorkerCard(true)
   assert.ok(new TextEncoder().encode(plain).byteLength <= WORKER_CARD_MAX_BYTES)
-  assert.ok(new TextEncoder().encode(exploration).byteLength <= WORKER_CARD_MAX_BYTES)
-  assert.ok(plain.startsWith(WORKER_CARD))
-  assert.ok(exploration.includes(EXPLORATION_CARD))
+  assert.ok(new TextEncoder().encode(`${WORKER_CARD}\n\n${EXPLORATION_CARD}`).byteLength <= WORKER_CARD_MAX_BYTES)
+  assert.deepEqual([...new Set(plain.match(/singularity_\w+/g))].sort(), [
+    'singularity_plan',
+    'singularity_read',
+    'singularity_stop',
+    'singularity_submit',
+  ])
+  assert.throws(() => renderWorkerCard(true), /requires S4/)
 
   const rendered = renderNodeView(makeView())
   assert.ok(new TextEncoder().encode(rendered).byteLength <= NODE_VIEW_MAX_BYTES)

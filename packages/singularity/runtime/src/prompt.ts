@@ -99,17 +99,33 @@ Use the fixed explore-child example for a direct child and preserve useful
 discoveries as drafts. Registering and binding capabilities belongs to a later
 Method revision.`
 
+// S3 implements only read(self/status), plan, submit and stop. Keep the complete
+// normative cards above intact; switch to them only when S4 mounts their full
+// resources and child tool surface. Do not instruct a worker to call absent tools.
+const S3_WORKER_CARD = `You execute one Singularity Task as one level of a larger workflow.
+Start with singularity_read(kind="self"). Follow every nextCursor until the
+complete contract is read, then call singularity_plan with a light 2–3-level
+sketch and the current contextEpoch. Keep directPlan empty when childOptions
+is empty. Work toward the current goal using the authorized workspace inputs
+and the tools listed in NodeView. Use singularity_read(kind="status") when the
+current Run status helps, and refresh the sketch when useful.
+
+Preserve reusable discoveries under learning-drafts when they help future
+work. When the declared outputs are ready, call singularity_submit; the
+independent verifier records acceptance. When the current goal cannot be
+completed, call singularity_stop with a concrete blocker.`
+
 /** Hard prompt caps from docs/framework.md §14.3. */
 export const WORKER_CARD_MAX_BYTES = 2 * 1024
 export const NODE_VIEW_MAX_BYTES = 8 * 1024
 
 const textEncoder = new TextEncoder()
 
-/** Render the worker card, optionally appending the exploration paragraph. */
+/** Render the implemented S3 capability surface; exploration awaits S4. */
 export function renderWorkerCard(exploration: boolean): string {
-  const text = exploration ? `${WORKER_CARD}\n\n${EXPLORATION_CARD}` : WORKER_CARD
-  assertPromptBudget(text, WORKER_CARD_MAX_BYTES, 'worker card')
-  return text
+  if (exploration) throw new Error('exploration worker requires S4 resource and child tool composition')
+  assertPromptBudget(S3_WORKER_CARD, WORKER_CARD_MAX_BYTES, 'worker card')
+  return S3_WORKER_CARD
 }
 
 /** Render the required NodeView context as compact JSON. */

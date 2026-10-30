@@ -1,19 +1,17 @@
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
+import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
 import {
   admitRootTask,
   canonicalize,
-  computeDigest,
   evidenceSchema,
   executionRecordSchema,
   parseJsonText,
@@ -46,7 +44,20 @@ import type {
   VerifierRequest,
 } from '@singularity/runtime'
 
-import { bootSpikeProfile } from '../src/host-composition.ts'
+import { bootSpikeProfile, buildSingleRunComposition } from '../src/host-composition.ts'
+import {
+  contextEpochFrom,
+  messageTexts,
+  startChatCompletionsFixture,
+  toolNames,
+  toolSchemaNames,
+} from './fixtures/chat-completions.ts'
+import type {
+  CapturedChatRequest,
+  ChatCompletionReplyScript,
+  ChatCompletionsFixture,
+  FixtureReply,
+} from './fixtures/chat-completions.ts'
 
 const PROVIDER_ID = 'verifier:s3-b2-fixture'
 const CRITERION_ID = 'declared-output'
@@ -55,6 +66,7 @@ const OUTPUT_PATH = 'result.txt'
 const FROZEN_OUTPUT = 'frozen-output-before-verify'
 const LIVE = process.env.SINGULARITY_SPIKE_LIVE === '1'
 const VERIFIED_TEST_TIMEOUT_MS = LIVE ? 900_000 : 240_000
+const MAX_STEPS_PER_RUN = 12
 
 const RUN_FACT_TYPES = new Set<string>([
   'task/admitted',
@@ -68,218 +80,9 @@ const RUN_FACT_TYPES = new Set<string>([
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder('utf-8', { fatal: true })
 
-interface WireToolCall {
-  readonly function?: {
-    readonly name?: string
-    readonly arguments?: string
-  }
-}
-
-interface WireMessage {
-  readonly role?: string
-  readonly content?: string | readonly { readonly type?: string; readonly text?: string }[] | null
-  readonly tool_calls?: readonly WireToolCall[]
-}
-
-interface WireRequest {
-  readonly model?: unknown
-  readonly messages?: readonly WireMessage[]
-  readonly tools?: readonly WireToolCall[]
-  readonly [key: string]: unknown
-}
-
-interface ScriptedReply {
-  readonly reasoning?: string
-  readonly content?: string
-  readonly toolCalls?: readonly {
-    readonly id: string
-    readonly name: string
-    readonly arguments: string
-  }[]
-  readonly usage?: {
-    readonly promptTokens: number
-    readonly completionTokens: number
-    readonly totalTokens: number
-    readonly cachedTokens?: number
-  }
-}
-
-type ReplyScript = (request: WireRequest, index: number) => ScriptedReply
-
-interface DynamicChatFixture {
-  readonly baseURL: string
-  readonly requests: readonly WireRequest[]
-  close(): Promise<void>
-}
-
-function wireText(content: WireMessage['content']): string {
-  if (typeof content === 'string') return content
-  if (content === null || content === undefined) return ''
-  return content.map(part => part.text ?? '').join('')
-}
-
-function messageTexts(request: WireRequest): string[] {
-  const texts: string[] = []
-  for (const message of request.messages ?? []) {
-    const text = wireText(message.content)
-    if (text.length > 0) texts.push(text)
-    for (const call of message.tool_calls ?? []) {
-      if (call.function?.arguments !== undefined) texts.push(call.function.arguments)
-    }
-  }
-  return texts
-}
-
-function toolNames(request: WireRequest): string[] {
-  const names: string[] = []
-  for (const message of request.messages ?? []) {
-    for (const call of message.tool_calls ?? []) {
-      if (call.function?.name !== undefined) names.push(call.function.name)
-    }
-  }
-  return names
-}
-
-function toolSchemaNames(request: WireRequest): string[] {
-  return (request.tools ?? [])
-    .map(tool => tool.function?.name)
-    .filter((name): name is string => name !== undefined)
-}
-
-/**
- * Extract the runtime-owned context epoch from a prior tool result. The test
- * never guesses this value: it only forwards what the runtime already
- * delivered to the scripted model.
- */
-function contextEpochFrom(request: WireRequest): string | undefined {
-  for (const text of messageTexts(request)) {
-    const patterns = [
-      /"contextEpoch"\s*:\s*"([^"]+)"/,
-      /\\"contextEpoch\\"\s*:\s*\\"([^"\\]+)\\"/,
-      /contextEpoch\s*[:=]\s*"([^"]+)"/,
-      /contextEpoch[^A-Za-z0-9]{0,4}([A-Za-z0-9][A-Za-z0-9:_-]{7,})/,
-    ]
-    for (const pattern of patterns) {
-      const match = pattern.exec(text)
-      if (match?.[1] !== undefined) return match[1]
-    }
-  }
-  return undefined
-}
-
-function sseChunk(
-  id: string,
-  model: string,
-  delta: Record<string, unknown>,
-  finishReason: string | null = null,
-): string {
-  return `data: ${JSON.stringify({
-    id,
-    object: 'chat.completion.chunk',
-    created: 1,
-    model,
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-  })}\n\n`
-}
-
-function usageChunk(
-  id: string,
-  model: string,
-  usage: NonNullable<ScriptedReply['usage']>,
-): string {
-  return `data: ${JSON.stringify({
-    id,
-    object: 'chat.completion.chunk',
-    created: 1,
-    model,
-    choices: [],
-    usage: {
-      prompt_tokens: usage.promptTokens,
-      completion_tokens: usage.completionTokens,
-      total_tokens: usage.totalTokens,
-      ...(usage.cachedTokens === undefined
-        ? {}
-        : { prompt_tokens_details: { cached_tokens: usage.cachedTokens } }),
-    },
-  })}\n\n`
-}
-
-function replyChunks(id: string, model: string, reply: ScriptedReply): string[] {
-  const chunks: string[] = []
-  const calls = reply.toolCalls ?? []
-  chunks.push(sseChunk(id, model, {
-    role: 'assistant',
-    ...(reply.reasoning === undefined ? {} : { reasoning_content: reply.reasoning }),
-    ...(reply.content === undefined ? {} : { content: reply.content }),
-    ...(reply.content === undefined && calls.length === 0 && reply.reasoning === undefined
-      ? { content: '' }
-      : {}),
-  }))
-  if (calls.length > 0) {
-    chunks.push(sseChunk(id, model, {
-      tool_calls: calls.map((call, index) => ({
-        index,
-        id: call.id,
-        type: 'function',
-        function: { name: call.name, arguments: call.arguments },
-      })),
-    }, 'tool_calls'))
-  } else {
-    chunks.push(sseChunk(id, model, {}, 'stop'))
-  }
-  if (reply.usage !== undefined) chunks.push(usageChunk(id, model, reply.usage))
-  return chunks
-}
-
-/** Minimal dynamic chat endpoint; every request is captured for assertions. */
-async function startDynamicChatFixture(script: ReplyScript): Promise<DynamicChatFixture> {
-  const requests: WireRequest[] = []
-  const server = createServer((request, response) => {
-    if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
-      response.writeHead(404).end()
-      return
-    }
-    let body = ''
-    request.setEncoding('utf8')
-    request.on('data', (part: string) => { body += part })
-    request.on('end', () => {
-      let parsed: WireRequest
-      try {
-        parsed = JSON.parse(body) as WireRequest
-      } catch {
-        response.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid JSON"}')
-        return
-      }
-      const index = requests.length
-      requests.push(parsed)
-      const reply = script(parsed, index)
-      const model = typeof parsed.model === 'string' ? parsed.model : 'deepseek-v4.1-flash'
-      const id = `chatcmpl-s3b2-${String(index + 1)}`
-      response.writeHead(200, {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
-      })
-      for (const data of replyChunks(id, model, reply)) response.write(data)
-      response.end('data: [DONE]\n\n')
-    })
-  })
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address() as AddressInfo
-  return {
-    baseURL: `http://127.0.0.1:${String(address.port)}/v1`,
-    requests,
-    async close() {
-      server.closeAllConnections()
-      await new Promise<void>((resolve, reject) => {
-        server.close(error => { if (error === undefined) resolve(); else reject(error) })
-      })
-    },
-  }
-}
+type WireRequest = CapturedChatRequest
+type ScriptedReply = FixtureReply
+type ReplyScript = ChatCompletionReplyScript
 
 interface Scenario {
   readonly runAdmission: SingleRunAdmission
@@ -313,7 +116,13 @@ function fixtureUsage(index: number): NonNullable<ScriptedReply['usage']> {
 
 async function makeScenario(
   storeRoot: string,
-  options: { readonly taskId: string },
+  ctx: Context,
+  options: {
+    readonly taskId: string
+    readonly limits?: Partial<TaskContract['limits']>
+    readonly reservation?: Partial<SingleRunAdmission['budgetReservation']>
+    readonly baseToolName?: string
+  },
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
   try {
@@ -359,10 +168,7 @@ async function makeScenario(
     const seed = await seedObject(store, 'seed:s3b2', { v: 1, seed: 's3b2-seed' })
     const profile = await seedObject(store, 'profile:s3b2', { v: 1, profile: 's3b2-profile' })
     const request = await seedObject(store, 'request:s3b2', { v: 1, request: 'single run fixture' })
-    const dshConfig = await seedObject(store, 'dsh-config:s3b2', { v: 1, config: 'profile' })
-    const modelRoute = await seedObject(store, 'model-route:s3b2', { v: 1, route: 'singularity-local' })
-    const resources = await seedObject(store, 'resources:s3b2', { v: 1, resources: [] })
-    const bashTool = await seedObject(store, 'base-tool:bash', { v: 1, name: 'bash' })
+    const bashTool = await seedObject(store, 'base-tool:bash', { v: 1, name: options.baseToolName ?? 'bash' })
 
     const rootAdmission: RootAdmissionInput = {
       taskId: options.taskId,
@@ -407,39 +213,39 @@ async function makeScenario(
       environment: { seed, profile },
       limits: {
         maxRuns: 1,
-        maxStepsPerRun: 12,
+        maxStepsPerRun: MAX_STEPS_PER_RUN,
         maxTokens: 1_000_000,
         deadlineAt: Date.now() + 10 * 60 * 1000,
         maxDepth: 1,
         maxTasks: 1,
         maxBatchChildren: 1,
+        ...options.limits,
       },
     }
 
     const contract = admitRootTask(rootAdmission)
-    const compositionTemplate = await seedObject(store, 'composition-template:s3b2', {
-      v: 1,
-      templateId: 'template:s3b2',
+    const compositionTemplate = await seedObject(store, 'composition-template:s3b2', method.templates[0])
+    const composition = await buildSingleRunComposition(ctx, {
+      writer: store,
+      id: 's3b2',
+      agentOptions: agentOptions(),
+      base: {
+        v: 1,
+        contract: { id: contract.taskId, digest: contract.digest },
+        template: compositionTemplate,
+        skills: [],
+        mcpServers: [],
+        seed,
+      },
     })
-    const composition: CompositionPayload = {
-      v: 1,
-      dsh: { package: '@deepseek-ai/dsh', version: '0.2.2-alpha.2', config: dshConfig },
-      platformPrompt: computeDigest('object', { platformPrompt: 's3-b2-single-run' }),
-      contract: { id: contract.taskId, digest: contract.digest },
-      template: compositionTemplate,
-      skills: [],
-      mcpServers: [],
-      modelRoute,
-      resources,
-      seed,
-    }
     const runAdmission: SingleRunAdmission = {
       contract,
       attempt: 1,
       budgetReservation: {
-        tokens: 100_000,
+        tokens: contract.limits.maxTokens,
         steps: 10,
         deadlineAt: contract.limits.deadlineAt,
+        ...options.reservation,
       },
       acceptanceBytes: jsonBytes(verifierObject),
       workspaceSeedBytes: jsonBytes({ v: 1, seed: 's3b2-seed' }),
@@ -543,14 +349,14 @@ function submitReply(): ScriptedReply {
 
 interface Harness {
   readonly spike: Awaited<ReturnType<typeof bootSpikeProfile>>
-  readonly fixture?: DynamicChatFixture
+  readonly fixture?: ChatCompletionsFixture
   readonly workspace: string
   readonly home: string
   readonly storeRoot: string
 }
 
 interface FixtureHarness extends Harness {
-  readonly fixture: DynamicChatFixture
+  readonly fixture: ChatCompletionsFixture
 }
 
 interface LiveHarness extends Harness {
@@ -558,7 +364,6 @@ interface LiveHarness extends Harness {
 }
 
 interface LiveCredentials {
-  readonly baseURL: string
   readonly apiKey: string
 }
 
@@ -595,7 +400,7 @@ async function withHarness(
   const workspace = await mkdtemp(join(tmpdir(), 's3b2-work-'))
   const home = await mkdtemp(join(tmpdir(), 's3b2-home-'))
   const storeRoot = await mkdtemp(join(tmpdir(), 's3b2-store-'))
-  const fixture = await startDynamicChatFixture(script)
+  const fixture = await startChatCompletionsFixture(script)
   let spike: Awaited<ReturnType<typeof bootSpikeProfile>> | undefined
   try {
     spike = await bootSpikeProfile({ home, baseURL: fixture.baseURL, apiKey: 'fixture-key' })
@@ -618,11 +423,7 @@ async function withLiveHarness(
   const storeRoot = await mkdtemp(join(tmpdir(), 's3b2-store-'))
   let spike: Awaited<ReturnType<typeof bootSpikeProfile>> | undefined
   try {
-    spike = await bootSpikeProfile({
-      home,
-      baseURL: credentials.baseURL,
-      apiKey: credentials.apiKey,
-    })
+    spike = await bootSpikeProfile({ home, apiKey: credentials.apiKey })
     await run({ spike, workspace, home, storeRoot })
   } finally {
     await spike?.dispose()
@@ -679,6 +480,7 @@ async function readJson(store: DomainStore, ref: Ref, domain: 'object' | 'eviden
 interface ObservedToolCall {
   readonly name: string
   readonly arguments: JsonValue | undefined
+  readonly succeeded: boolean
 }
 
 function parseToolArguments(raw: string): JsonValue | undefined {
@@ -689,13 +491,24 @@ function parseToolArguments(raw: string): JsonValue | undefined {
   }
 }
 
+/**
+ * Correlate persisted calls with their results. A guard refusal is still a
+ * `tool/call` event, so protocol acceptance may count only successful actions.
+ */
 function observedToolCalls(events: readonly SessionEvent[]): ObservedToolCall[] {
+  const results = new Map<string, boolean>()
+  for (const event of events) {
+    if (event.type !== 'tool/result') continue
+    results.set(String(event.data.message.toolCallId), event.data.message.isError !== true)
+  }
   const calls: ObservedToolCall[] = []
   for (const event of events) {
     if (event.type !== 'tool/call') continue
+    const id = String(event.data.callId)
     calls.push({
       name: event.data.name,
       arguments: parseToolArguments(event.data.arguments),
+      succeeded: results.get(id) === true,
     })
   }
   return calls
@@ -705,26 +518,13 @@ function isJsonRecord(value: JsonValue | undefined): value is Record<string, Jso
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function lastIndexWhere<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]
-    if (item !== undefined && predicate(item)) return index
-  }
-  return -1
-}
-
 function planSketchOf(call: ObservedToolCall): Record<string, JsonValue> | undefined {
   if (!isJsonRecord(call.arguments)) return undefined
   const sketch = call.arguments['sketch']
   return isJsonRecord(sketch) ? sketch : undefined
 }
 
-/**
- * Assertion by semantics, never by a fixed message/tool id. The runtime
- * enforces the guard order; this independently proves the persisted DSH trace
- * recorded one self read, one semantic PlanningSketch, a native bash step, and
- * a submission in that order. It runs for both fixture and live models.
- */
+/** Verify the persisted protocol actions, including the declared native bash step. */
 function assertVerifiedToolSemantics(
   events: readonly SessionEvent[],
   expected: { readonly taskId: string; readonly runId: string; readonly contractDigest: string },
@@ -742,12 +542,13 @@ function assertVerifiedToolSemantics(
 
   const calls = observedToolCalls(events)
   const selfRead = calls.findIndex(call =>
-    call.name === 'singularity_read'
+    call.succeeded
+    && call.name === 'singularity_read'
     && isJsonRecord(call.arguments)
     && call.arguments['kind'] === 'self'
   )
   const plan = calls.findIndex(call => {
-    if (call.name !== 'singularity_plan') return false
+    if (!call.succeeded || call.name !== 'singularity_plan') return false
     const sketch = planSketchOf(call)
     return sketch !== undefined
       && sketch['taskId'] === expected.taskId
@@ -756,16 +557,21 @@ function assertVerifiedToolSemantics(
       && typeof sketch['contextEpoch'] === 'string'
       && sketch['contextEpoch'].length > 0
   })
-  const bash = lastIndexWhere(calls, call => call.name === 'bash')
-  const submit = lastIndexWhere(calls, call => call.name === 'singularity_submit')
+  const submit = calls.findLastIndex(call => call.succeeded && call.name === 'singularity_submit')
+  const bash = calls.findLastIndex(call => call.succeeded && call.name === 'bash')
 
-  assert.ok(selfRead >= 0, 'model must call singularity_read(kind="self")')
-  assert.ok(plan >= 0, 'model must persist a task/run/contract PlanningSketch')
-  assert.ok(bash >= 0, 'model must use the native bash tool for the declared output')
-  assert.ok(submit >= 0, 'model must call singularity_submit')
+  assert.ok(selfRead >= 0, 'model must successfully call singularity_read(kind="self")')
+  assert.ok(plan >= 0, 'model must successfully persist a task/run/contract PlanningSketch')
+  assert.ok(submit >= 0, 'model must successfully call singularity_submit')
+  assert.ok(bash >= 0, 'model must successfully use the declared native bash tool')
   assert.ok(selfRead < plan, 'self read must precede the PlanningSketch')
-  assert.ok(plan < bash, 'PlanningSketch must precede the output-writing bash call')
-  assert.ok(bash < submit, 'the output-writing bash call must precede submission')
+  assert.ok(plan < bash, 'PlanningSketch must precede the native bash output step')
+  assert.ok(bash < submit, 'native bash output step must precede the successful submission')
+  assert.equal(
+    calls.findIndex((call, index) => index > submit && call.succeeded),
+    -1,
+    'submission must latch before later successful tool calls',
+  )
 }
 
 void test('single Run verified: self-read, plan, native bash output, independent CAS verifier', { timeout: VERIFIED_TEST_TIMEOUT_MS }, async () => {
@@ -789,7 +595,12 @@ void test('single Run verified: self-read, plan, native bash output, independent
     liveApiKey?: string,
   ): Promise<void> => {
     const { spike, workspace, home, storeRoot } = harness
-    scenario = await makeScenario(storeRoot, { taskId })
+    // The fixture proves the four-action minimum; a live model may need guard
+    // retries within the frozen contract's step limit.
+    scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      reservation: { steps: live ? MAX_STEPS_PER_RUN : 4 },
+    })
     const activeScenario = scenario
     const verifier: RunVerifier = {
       provider: activeScenario.provider,
@@ -880,7 +691,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
       assert.ok(declaredTools.includes('singularity_read'), 'self-read tool must be visible before the first request')
       assert.ok(declaredTools.includes('singularity_plan'), 'plan tool must be visible before the first request')
       assert.ok(declaredTools.includes('singularity_submit'), 'submit tool must be visible before the first request')
-      assert.ok(declaredTools.includes('bash'), 'native bash tool must remain visible for declared outputs')
+      assert.ok(declaredTools.includes('bash'), 'declared native bash tool must be visible before the first request')
       assert.ok(toolNames(fixture.requests[1] ?? {}).includes('singularity_read'))
       assert.ok(toolNames(fixture.requests[2] ?? {}).includes('singularity_plan'))
       assert.ok(toolNames(fixture.requests[3] ?? {}).includes('bash'))
@@ -1043,10 +854,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
   }
 
   if (LIVE) {
-    const credentials = {
-      baseURL: requireLiveEnv('SINGULARITY_SPIKE_BASE_URL'),
-      apiKey: requireLiveEnv('SINGULARITY_SPIKE_API_KEY'),
-    }
+    const credentials = { apiKey: requireLiveEnv('SINGULARITY_SPIKE_API_KEY') }
     await withLiveHarness(credentials, async harness => {
       await runVerified(harness, true, credentials.apiKey)
     })
@@ -1055,6 +863,126 @@ void test('single Run verified: self-read, plan, native bash output, independent
       await runVerified(harness, false)
     })
   }
+})
+
+void test('single Run stops purchasing at host budget boundaries', { timeout: 240_000 }, async t => {
+  const boundaries = ['steps', 'tokens', 'cache', 'reservation', 'unknown', 'deadline', 'rollback'] as const
+  let boundary: (typeof boundaries)[number] = 'steps'
+  let now = Date.now()
+  let deadline = now + 60_000
+  let firstRequest = 0
+  await withHarness((_request, index) => {
+    if (index > firstRequest) return { content: 'This request should have been refused.', usage: fixtureUsage(index) }
+    if (boundary === 'deadline') now = deadline
+    if (boundary === 'rollback') now -= 1
+    return {
+      toolCalls: [{ id: `read-${String(index)}`, name: 'singularity_read', arguments: '{"kind":"self"}' }],
+      ...(boundary === 'unknown' ? {} : { usage: boundary === 'cache'
+        ? { promptTokens: 256_001, completionTokens: 8, totalTokens: 256_009, cachedTokens: 256_000 }
+        : fixtureUsage(index) }),
+    }
+  }, async ({ spike, fixture, workspace, storeRoot }) => {
+    for (const current of boundaries) {
+      boundary = current
+      now = Date.now()
+      deadline = now + 60_000
+      firstRequest = fixture.requests.length
+      await t.test(boundary, async () => {
+        const taskId = `budget-${boundary}-${String(now)}`
+        const journalRoot = join(storeRoot, boundary)
+        const scenario = await makeScenario(journalRoot, spike.ctx, {
+          taskId,
+          limits: { deadlineAt: deadline },
+          reservation: {
+            ...(boundary === 'steps' ? { steps: 1 } : {}),
+            ...(boundary === 'tokens' ? { tokens: 256_000 } : {}),
+            ...(boundary === 'cache' ? { tokens: 512_000 } : {}),
+            ...(boundary === 'reservation' ? { tokens: 255_999 } : {}),
+          },
+        })
+        const result = await executeSingleRun({
+          ctx: spike.ctx, journalRoot, workspace: join(workspace, boundary),
+          sessionId: `${taskId}:session`, runId: `${taskId}:run`,
+          admission: scenario.runAdmission, composition: scenario.composition,
+          agentOptions: agentOptions(), maxOutputBytes: 1024,
+          clock: () => now,
+          verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+        })
+        assert.equal(fixture.requests.length - firstRequest, boundary === 'reservation' ? 0 : 1)
+        assert.equal(result.evidence, undefined)
+        assert.ok(result.executionRecord)
+        if (boundary === 'unknown') assert.equal(result.usage.unknownRequests, 1)
+      })
+    }
+  })
+})
+
+void test('oversized visible tool schemas are rejected before the first model request', { timeout: 20_000 }, async () => {
+  await withHarness(() => ({ content: 'done', usage: fixtureUsage(0) }), async ({ spike, fixture, workspace, storeRoot }) => {
+    spike.ctx.tools.register({
+      name: 'verbose_fixture', description: 'x'.repeat(12 * 1024), parameters: {},
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: () => Promise.resolve('done'),
+    })
+    const taskId = `oversized-tools-${String(Date.now())}`
+    const scenario = await makeScenario(storeRoot, spike.ctx, { taskId, baseToolName: 'verbose_fixture' })
+    const result = await executeSingleRun({
+      ctx: spike.ctx, journalRoot: storeRoot, workspace,
+      sessionId: `${taskId}:session`, runId: `${taskId}:run`,
+      admission: scenario.runAdmission, composition: scenario.composition,
+      agentOptions: agentOptions(), maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+    })
+    assert.equal(fixture.requests.length, 0)
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.evidence, undefined)
+    assert.match(result.executionRecord?.reason ?? '', /visible tool schemas/)
+  })
+})
+
+void test('single Run deadline cancels an in-flight DSH request', { timeout: 20_000 }, async () => {
+  await withHarness(() => ({ hang: true }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const taskId = `budget-hang-${String(Date.now())}`
+    const scenario = await makeScenario(storeRoot, spike.ctx, { taskId, limits: { deadlineAt: Date.now() + 1500 } })
+    const started = Date.now()
+    const result = await executeSingleRun({
+      ctx: spike.ctx, journalRoot: storeRoot, workspace,
+      sessionId: `${taskId}:session`, runId: `${taskId}:run`,
+      admission: scenario.runAdmission, composition: scenario.composition,
+      agentOptions: agentOptions(), maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+    })
+    assert.equal(fixture.requests.length, 1)
+    assert.ok(Date.now() - started < 3000, 'deadline must abort the request before the fixture gives up')
+    assert.equal(result.evidence, undefined)
+    assert.ok(result.executionRecord)
+    assert.equal(result.usage.unknownRequests, 1)
+    assert.equal(spike.ctx.agents.get(result.sessionId as never), undefined)
+  })
+})
+
+void test('unknown failed request cannot buy an internal DSH retry', { timeout: 20_000 }, async () => {
+  await withHarness(() => ({ httpError: true }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const taskId = `budget-retry-${String(Date.now())}`
+    const scenario = await makeScenario(storeRoot, spike.ctx, { taskId })
+    let retries = 0
+    spike.ctx.on('agent/request-error', () => {
+      retries += 1
+      return Promise.resolve(retries < 2 ? { kind: 'retry' as const } : undefined)
+    })
+    const result = await executeSingleRun({
+      ctx: spike.ctx, journalRoot: storeRoot, workspace,
+      sessionId: `${taskId}:session`, runId: `${taskId}:run`,
+      admission: scenario.runAdmission, composition: scenario.composition,
+      agentOptions: agentOptions(), maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+    })
+    assert.equal(fixture.requests.length, 1)
+    assert.equal(retries, 0)
+    assert.equal(result.usage.steps, 1)
+    assert.equal(result.usage.unknownRequests, 1)
+    assert.equal(result.classification, 'invalid')
+  })
 })
 
 void test('single Run no-submission settles failed ExecutionRecord without a receipt', { timeout: 240_000 }, async () => {
@@ -1068,7 +996,7 @@ void test('single Run no-submission settles failed ExecutionRecord without a rec
       ? { content: 'The fixture intentionally ends without submitting.', usage: fixtureUsage(index) }
       : { content: 'unexpected extra model request', usage: fixtureUsage(index) }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
-    const scenario = await makeScenario(storeRoot, { taskId })
+    const scenario = await makeScenario(storeRoot, spike.ctx, { taskId })
     const result = await executeSingleRun({
       ctx: spike.ctx,
       journalRoot: storeRoot,
@@ -1150,7 +1078,7 @@ async function runInvalidVerifierCase(mode: 'invalid-criterion' | 'timeout'): Pr
     if (index === 3) return submitReply()
     return { content: 'unexpected extra model request', usage: fixtureUsage(index) }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
-    scenario = await makeScenario(storeRoot, { taskId })
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId })
     const activeScenario = scenario
     const result = await executeSingleRun({
       ctx: spike.ctx,
@@ -1289,7 +1217,7 @@ void test('symlinked declared output is rejected before manifest and settles fai
       usage: fixtureUsage(index),
     }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
-    scenario = await makeScenario(storeRoot, { taskId })
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId })
     const activeScenario = scenario
     const result = await executeSingleRun({
       ctx: spike.ctx,

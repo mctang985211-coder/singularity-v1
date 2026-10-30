@@ -7,6 +7,10 @@ export interface FixtureReply {
   readonly content?: string
   readonly toolCalls?: readonly FixtureToolCall[]
   readonly usage?: FixtureUsage
+  /** Never answer; the request stays pending until the test tears the fixture down. */
+  readonly hang?: true
+  /** Answer with an HTTP error instead of an SSE stream. */
+  readonly httpError?: true
 }
 
 export interface FixtureToolCall {
@@ -32,6 +36,12 @@ export interface WireContentPart {
 export interface WireChatMessage {
   readonly role?: string
   readonly content?: string | readonly WireContentPart[] | null
+  readonly tool_calls?: readonly {
+    readonly function?: {
+      readonly name?: string
+      readonly arguments?: string
+    }
+  }[]
 }
 
 export interface WireToolFunction {
@@ -53,6 +63,64 @@ export interface CapturedChatRequest {
   readonly stream?: unknown
   readonly stream_options?: unknown
   readonly [key: string]: unknown
+}
+
+/** Text content of one captured message, whether string or content parts. */
+export function wireText(content: WireChatMessage['content']): string {
+  if (typeof content === 'string') return content
+  if (content === null || content === undefined) return ''
+  return content.map(part => part.text ?? '').join('')
+}
+
+/** All non-empty message text and tool-call argument text in a captured request. */
+export function messageTexts(request: CapturedChatRequest): string[] {
+  const texts: string[] = []
+  for (const message of request.messages ?? []) {
+    const text = wireText(message.content)
+    if (text.length > 0) texts.push(text)
+    for (const call of message.tool_calls ?? []) {
+      if (call.function?.arguments !== undefined) texts.push(call.function.arguments)
+    }
+  }
+  return texts
+}
+
+/** Names of tools the model actually called in a captured request. */
+export function toolNames(request: CapturedChatRequest): string[] {
+  const names: string[] = []
+  for (const message of request.messages ?? []) {
+    for (const call of message.tool_calls ?? []) {
+      if (call.function?.name !== undefined) names.push(call.function.name)
+    }
+  }
+  return names
+}
+
+/** Names of tool schemas declared to the model in a captured request. */
+export function toolSchemaNames(request: CapturedChatRequest): string[] {
+  return (request.tools ?? [])
+    .map(tool => tool.function?.name)
+    .filter((name): name is string => name !== undefined)
+}
+
+/**
+ * Extract the runtime-owned context epoch from a prior tool result. Tests never
+ * guess this value: they only forward what the runtime already delivered.
+ */
+export function contextEpochFrom(request: CapturedChatRequest): string | undefined {
+  for (const text of messageTexts(request)) {
+    const patterns = [
+      /"contextEpoch"\s*:\s*"([^"]+)"/,
+      /\\"contextEpoch\\"\s*:\s*\\"([^"\\]+)\\"/,
+      /contextEpoch\s*[:=]\s*"([^"]+)"/,
+      /contextEpoch[^A-Za-z0-9]{0,4}([A-Za-z0-9][A-Za-z0-9:_-]{7,})/,
+    ]
+    for (const pattern of patterns) {
+      const match = pattern.exec(text)
+      if (match?.[1] !== undefined) return match[1]
+    }
+  }
+  return undefined
 }
 
 export interface ChatCompletionsFixture {
@@ -146,12 +214,25 @@ function replyChunks(id: string, model: string, reply: FixtureReply): string[] {
 }
 
 /**
- * Local openai-completions endpoint. Replies are scripted per request index and
- * every parsed request is retained so tests can assert the actual wire request.
+ * Chooses the reply for one captured request. The request index is the number
+ * of requests already captured, so a script can react to actual wire content.
+ */
+export type ChatCompletionReplyScript = (
+  request: CapturedChatRequest,
+  index: number,
+) => FixtureReply
+
+/**
+ * Local openai-completions endpoint. Replies are either scripted per request
+ * index or selected by a dynamic script; every parsed request is retained so
+ * tests can assert the actual wire request.
  */
 export async function startChatCompletionsFixture(
-  replies: readonly FixtureReply[],
+  replies: readonly FixtureReply[] | ChatCompletionReplyScript,
 ): Promise<ChatCompletionsFixture> {
+  const replyFor: ChatCompletionReplyScript = typeof replies === 'function'
+    ? replies
+    : (_request, index) => replies[index] ?? { content: `unexpected request ${String(index + 1)}` }
   const requests: CapturedChatRequest[] = []
   const server = createServer((request, response) => {
     if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
@@ -171,9 +252,18 @@ export async function startChatCompletionsFixture(
       }
       const index = requests.length
       requests.push(parsed)
+      const reply = replyFor(parsed, index)
+      if (reply.httpError) {
+        response.writeHead(500).end('{"error":{"message":"fixture failure"}}')
+        return
+      }
+      if (reply.hang) {
+        const timer = setTimeout(() => { response.destroy() }, 4000)
+        response.once('close', () => { clearTimeout(timer) })
+        return
+      }
       const model = typeof parsed.model === 'string' ? parsed.model : DEFAULT_MODEL
       const id = `${COMPLETION_ID_PREFIX}-${String(index + 1)}`
-      const reply = replies[index] ?? { content: `unexpected request ${String(index + 1)}` }
       response.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-cache',

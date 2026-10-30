@@ -1,6 +1,8 @@
 # S3-C 任务卡：fresh retry 与 resume/恢复
 
-- **状态**：runtime 切片已完成；S3 整体未完成。
+> **historical/superseded**：S3 后续已完成；下文的范围、测试数和未验证结论属于本切片交付时。当前证据见 [S3 closure](s3-closure.md)、[build-plan](../build-plan.md) 和 [conformance](../conformance.md)。
+
+- **历史状态**：runtime 切片已完成；当时 S3 整体未完成。
 - **分支**：`s3-c-swarm-recovery`，基线 `ec8d084`（S3-B2 single-run）。
 - **Worktree**：`/home/ROXY/code/singularity-v1-swarm-recovery`。
 

@@ -1,6 +1,6 @@
 # Amendment 002：Acceptance receipt 与 submission manifest（已批准并纳入）
 
-- **状态：已批准；A0–A9 已纳入 `docs/framework.md`、`spec-lock.json`、`docs/conformance.md`、`docs/build-plan.md` 与 `README.md`；实现与 conformance 证据仍待后续。**
+- **状态：已批准；A0–A9 已纳入正式规范。** 本文保留提出和纳入时的基线，当前实现与逐场景证据见 [build-plan](../build-plan.md) 和 [conformance](../conformance.md)。
 - **日期：** 2026-10-30
 - **提出基线：** `main` @ `bf79e3a7fec560ab91d62de867c2d41d22f0de7a`；`docs/framework.md` V1 发布规范 1.0；`spec-lock.json` `sha256:6f4a57e7987c8def2b5e12504fb8a6e2599968161f94115a473b8b98ed29fd91`。
 - **纳入基线：** `s3-b1-acceptance-schema` @ `7734cc9`；纳入后 `spec-lock.json` `sha256:5f33aa339f21496c375de637ef447656fc66d98d3054a5b6e0a1d3c8dc612b6f`。

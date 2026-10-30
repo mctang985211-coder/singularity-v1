@@ -4,19 +4,21 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import {
-  sealPublicReceipt,
-  sealSubmissionManifest,
-  sealTaskContract,
-} from '@singularity/protocol'
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { JobView } from '@deepseek-ai/dsh-jobs'
+import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
+
+import { sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type {
   PublicReceipt,
   Ref,
-  SubmissionManifest,
   TaskContract,
 } from '@singularity/protocol'
 
 import { DomainStore } from '../src/store.ts'
+import { initialContextEpoch } from '../src/epoch.ts'
+import { RunToolController } from '../src/tools.ts'
 import {
   VERIFIER_ERROR_REASON,
   VERIFIER_TIMEOUT_REASON,
@@ -27,7 +29,7 @@ import type { RunVerifier, VerifierRequest } from '../src/verification.ts'
 const digestA = `sha256:${'a'.repeat(64)}`
 const digestB = `sha256:${'b'.repeat(64)}`
 
-function makeContract(): TaskContract {
+function makeContract(constraints: string[] = []): TaskContract {
   return sealTaskContract({
     v: 1,
     taskId: 'task-verify',
@@ -36,7 +38,7 @@ function makeContract(): TaskContract {
         summary: 'verify',
         deliverable: 'one output',
         scope: [],
-        constraints: [],
+        constraints,
       },
       criteria: [{ id: 'crit', statement: 'must pass', required: true }],
       inputs: [{ id: 'input', object: { id: 'input', digest: digestA }, path: 'in.txt', access: 'read' }],
@@ -62,28 +64,6 @@ function makeContract(): TaskContract {
       maxTasks: 1,
       maxBatchChildren: 1,
     },
-  })
-}
-
-function makeManifest(contract: TaskContract, outputRef: Ref): SubmissionManifest {
-  return sealSubmissionManifest({
-    v: 1,
-    taskId: contract.taskId,
-    runId: 'run-verify',
-    contractDigest: contract.digest,
-    includeLearningDrafts: false,
-    outputs: [
-      {
-        id: 'out',
-        path: 'out.txt',
-        kind: 'file',
-        role: 'deliverable',
-        required: true,
-        object: outputRef,
-      },
-    ],
-    learningDrafts: [],
-    checks: [{ outputId: 'out', bytes: 5, symlinks: 'none' }],
   })
 }
 
@@ -137,33 +117,69 @@ async function run(
   options: {
     readonly verifier: RunVerifier
     readonly contract: TaskContract
-    readonly manifest: SubmissionManifest
     readonly outputRef: Ref
   },
+  clock: () => number = () => 0,
 ) {
   return verifyRunSubmission({
     contract: options.contract,
     runId: 'run-verify',
-    manifest: options.manifest,
     inputs: [{ id: 'input', digest: digestA }],
     outputs: [options.outputRef],
     verifier: options.verifier,
     reader: store,
     writer: store,
-  })
+  }, clock)
 }
+
+void test('host deadline bounds a verifier that never returns', async () => {
+  await withStore(async store => {
+    const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
+    const contract = makeContract()
+    const result = await Promise.race([
+      run(store, {
+        contract, outputRef,
+        verifier: { provider: contract.acceptance, verify: () => new Promise<never>(() => {}) },
+      }, () => contract.limits.deadlineAt - 10),
+      new Promise<'hung'>(resolve => { setTimeout(() => { resolve('hung') }, 100) }),
+    ])
+    assert.notEqual(result, 'hung')
+    assert.equal(typeof result === 'object' && result.verdict, 'invalid')
+    assert.equal(typeof result === 'object' && 'code' in result && result.code, 'verifier-timeout')
+  })
+})
+
+void test('host rejects receipts returned at the deadline or after an invalid clock change', async () => {
+  await withStore(async store => {
+    const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
+    const contract = makeContract()
+    for (const finishedAt of [contract.limits.deadlineAt, contract.limits.deadlineAt - 2, NaN]) {
+      let now = contract.limits.deadlineAt - 1
+      const result = await run(store, {
+        contract, outputRef,
+        verifier: {
+          provider: contract.acceptance,
+          verify() {
+            now = finishedAt
+            return Promise.resolve(receipt(contract, contract.acceptance, { outputDigest: outputRef.digest }))
+          },
+        },
+      }, () => now)
+      assert.equal(result.verdict, 'invalid')
+      assert.equal('code' in result && result.code, 'verifier-timeout')
+    }
+  })
+})
 
 void test('host classifies verified and failed receipts and writes the receipt to CAS', async () => {
   await withStore(async store => {
     const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    const manifest = makeManifest(contract, outputRef)
-    const provider = { id: 'provider', digest: digestA }
+    const provider = contract.acceptance
 
     let readBack = ''
     const verified = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -183,7 +199,6 @@ void test('host classifies verified and failed receipts and writes the receipt t
 
     const failed = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -202,12 +217,10 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
   await withStore(async store => {
     const outputRef = await store.putObject('output-invalid', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    const manifest = makeManifest(contract, outputRef)
-    const provider = { id: 'provider', digest: digestA }
+    const provider = contract.acceptance
 
     const selfVerdict = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -221,7 +234,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const timedOut = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -236,7 +248,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const signalled = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -251,7 +262,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const wrongProvider = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -262,7 +272,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const wrongDigest = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -275,7 +284,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const allPassExitOne = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -286,7 +294,6 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
 
     const thrown = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -302,11 +309,9 @@ void test('timeout reason is stable for transient retry policy matching', async 
   await withStore(async store => {
     const outputRef = await store.putObject('output-timeout', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    const manifest = makeManifest(contract, outputRef)
-    const provider = { id: 'provider', digest: digestA }
+    const provider = contract.acceptance
     const result = await run(store, {
       contract,
-      manifest,
       outputRef,
       verifier: {
         provider,
@@ -316,5 +321,126 @@ void test('timeout reason is stable for transient retry policy matching', async 
     if (result.verdict !== 'invalid') assert.fail('expected invalid timeout')
     assert.ok(result.reason.startsWith(VERIFIER_TIMEOUT_REASON))
     assert.equal(result.code, VERIFIER_TIMEOUT_REASON)
+  })
+})
+
+void test('frozen acceptance rejects a substituted verifier before it receives CAS access', async () => {
+  await withStore(async store => {
+    const outputRef = await store.putObject('output-provider', new TextEncoder().encode('out!!'), 'object')
+    const contract = makeContract()
+    for (const provider of [
+      { ...contract.acceptance, id: 'other-provider' },
+      { ...contract.acceptance, digest: digestB },
+    ]) {
+      let called = false
+      const result = await run(store, {
+        contract,
+        outputRef,
+        verifier: {
+          provider,
+          verify() {
+            called = true
+            return Promise.resolve(receipt(contract, provider, { outputDigest: outputRef.digest }))
+          },
+        },
+      })
+      assert.equal(result.verdict, 'invalid')
+      assert.equal(called, false)
+    }
+  })
+})
+
+void test('tool dispatch uses the exact host budget check while preserving read and stop', async () => {
+  await withStore(async store => {
+    const contract = makeContract(['领域约束'.repeat(4096)])
+    const contextEpoch = initialContextEpoch('session-guard')
+    const definitions = new Map<string, ToolDefinition>()
+    const jobs: JobView[] = []
+    let allowed = true
+    const controller = new RunToolController({
+      contract,
+      runId: 'run-guard',
+      sessionId: 'session-guard',
+      workspace: '/workspace',
+      writer: store,
+      maxOutputBytes: 1024,
+      clock: () => contract.limits.deadlineAt + 1,
+      budget: () => ({ tokensPct: null, stepsPct: 0, wallClockPct: 0, depthPct: 100, taskSlotsPct: 100 }),
+      checkBudget: () => allowed,
+      epoch: () => contextEpoch,
+      commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+    })
+    const agent = { session: { id: 'session-guard', snapshotEvents: () => [] } } as unknown as Agent
+    controller.register({ get: () => ({ list: () => jobs }), tools: {
+      register: (definition: ToolDefinition) => definitions.set(definition.name, definition),
+      guard() {},
+    } } as unknown as Context, agent)
+    const callId = 'guard-call' as ToolRunContext['callId']
+    const execution = (name: string): ToolRunContext => ({
+      name, agent, arguments: {}, callId, rootCallId: callId,
+      token: Symbol() as ToolRunContext['token'], signal: new AbortController().signal,
+      deferContext() {}, concludeTurn() {},
+    })
+    const readTool = definitions.get('singularity_read')
+    const planTool = definitions.get('singularity_plan')
+    assert.ok(readTool && planTool)
+    const assertSubmissionGate = (expected: string | undefined) => {
+      const refusal = controller.checkGuard(execution('singularity_submit'))
+      assert.equal(refusal === undefined ? undefined : (JSON.parse(refusal) as { code: string }).code, expected)
+      assert.equal(controller.obligations().canSubmit, expected === undefined)
+      assert.deepEqual(controller.obligations().denialCodes, expected === undefined ? [] : [expected])
+    }
+    assertSubmissionGate('READ_SELF_FIRST')
+    const pages: string[] = []
+    let cursor: string | undefined
+    do {
+      const page = await readTool.execute({ kind: 'self', ...(cursor === undefined ? {} : { cursor }) }, execution('singularity_read')) as {
+        readonly data: string
+        readonly nextCursor?: string
+      }
+      assert.ok(new TextEncoder().encode(JSON.stringify(page)).byteLength <= 16 * 1024)
+      assert.equal(typeof page.data, 'string')
+      pages.push(page.data)
+      cursor = page.nextCursor
+      if (pages.length === 1 && cursor !== undefined) {
+        await assert.rejects(readTool.execute({ kind: 'self', cursor: `${cursor}0` }, execution('singularity_read')), /INVALID_ARGUMENT/)
+        const repeated = await readTool.execute({ kind: 'self' }, execution('singularity_read')) as { readonly data: string }
+        assert.equal(repeated.data, page.data, 're-reading a page must not advance coverage')
+      }
+      if (cursor !== undefined) assertSubmissionGate('READ_SELF_FIRST')
+    } while (cursor !== undefined)
+    assert.ok(pages.length > 1)
+    assert.deepEqual((JSON.parse(pages.join('')) as { goal: { constraints: string[] } }).goal.constraints, contract.spec.goal.constraints)
+    await assert.rejects(readTool.execute({ kind: 'self', cursor: 'unissued-cursor' }, execution('singularity_read')), /INVALID_ARGUMENT/)
+    assertSubmissionGate('PLAN_FIRST')
+    await planTool.execute({ sketch: {
+      v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch,
+      objective: 'complete current task', sourceContract: contract.digest,
+      levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+      directPlan: [], assumptions: [],
+    } }, execution('singularity_plan'))
+    assertSubmissionGate(undefined)
+    jobs.push({
+      id: 'bash-active' as JobView['id'], kind: 'bash', label: 'writes output',
+      owner: agent.session.id, status: 'running', startedAt: 0,
+      output: { total: 0, earliest: 0 },
+    })
+    assertSubmissionGate('ACTIVE_JOB')
+    jobs[0] = { ...jobs[0], status: 'stopping' }
+    assertSubmissionGate('ACTIVE_JOB')
+    jobs[0] = { ...jobs[0], status: 'completed' }
+    assertSubmissionGate(undefined)
+    assert.equal(controller.checkGuard(execution('bash')), undefined)
+    allowed = false
+    assertSubmissionGate('LIMIT_EXCEEDED')
+    const refusal = controller.checkGuard(execution('bash'))
+    assert.ok(refusal)
+    assert.equal((JSON.parse(refusal) as { readonly code: string }).code, 'LIMIT_EXCEEDED')
+    assert.equal(controller.checkGuard(execution('singularity_read')), undefined)
+    assert.equal(controller.checkGuard(execution('singularity_stop')), undefined)
+    const stopTool = definitions.get('singularity_stop')
+    assert.ok(stopTool)
+    await stopTool.execute({ reason: 'blocked', message: 'no further work' }, execution('singularity_stop'))
+    assertSubmissionGate('RUN_CLOSED')
   })
 })

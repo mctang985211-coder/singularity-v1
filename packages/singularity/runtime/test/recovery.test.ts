@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -7,6 +7,7 @@ import test from 'node:test'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 
 import {
   admitRootTask,
@@ -35,11 +36,14 @@ import type {
 } from '@singularity/protocol'
 
 import { retrySingleRun, resumeSingleRun } from '../src/recovery.ts'
-import { DomainStore } from '../src/store.ts'
+import { executeSingleRun } from '../src/run.ts'
+import { DomainStore, DomainStoreError } from '../src/store.ts'
 import { CommandService } from '../src/service.ts'
 import { buildExecutionRecord } from '../src/verification.ts'
 import type { RunVerifier, VerifierRequest } from '../src/verification.ts'
 import { startWakeText } from '../src/wake.ts'
+import { initialContextEpoch } from '../src/epoch.ts'
+import { prepareWorkspace } from '../src/workspace.ts'
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder('utf-8', { fatal: true })
@@ -117,6 +121,7 @@ interface BuildScenarioOptions {
   readonly taskId: string
   readonly maxRuns: number
   readonly maxTokens?: number
+  readonly inputAccess?: 'read' | 'copy-to-work'
 }
 
 async function buildScenario(
@@ -178,7 +183,7 @@ async function buildScenario(
         id: 'source',
         object: input,
         path: 'input.txt',
-        access: 'read',
+        access: options.inputAccess ?? 'read',
       }],
       outputs: [{
         id: OUTPUT_ID,
@@ -238,6 +243,7 @@ async function openRun(
     readonly sessionId: string
     readonly attempt: number
     readonly composition?: CompositionPayload
+    readonly tokens?: number
   },
 ): Promise<Ref> {
   const compositionRef = await putValue(
@@ -255,7 +261,7 @@ async function openRun(
     workspaceKey: options.runId,
     workspaceSeed: scenario.contract.environment.seed,
     budgetReservation: {
-      tokens: 10_000,
+      tokens: options.tokens ?? 10_000,
       steps: scenario.contract.limits.maxStepsPerRun,
       deadlineAt: scenario.contract.limits.deadlineAt,
     },
@@ -341,6 +347,7 @@ async function closeRunVerified(
     environment: { seed: scenario.contract.environment.seed.digest, mode: 'workspace' },
   })
   const evidenceRef = await putValue(service, evidence, `${options.runId}:evidence`, 'evidence')
+  await submitRun(service, scenario, options)
   await commitFact(service, 'run/closed', {
     runId: options.runId,
     classification: options.classification ?? 'verified',
@@ -437,11 +444,45 @@ interface FakeAgentState {
   disposed: number
 }
 
+interface FakeJobs {
+  readonly list: (caller?: SessionId) => readonly never[]
+  readonly events: {
+    subscribe(filter: unknown, listener: (event: unknown) => void): () => void
+  }
+}
+
+function makeFakeJobs(): { readonly service: FakeJobs; emit(event: unknown): void } {
+  const listeners = new Set<(event: unknown) => void>()
+  return {
+    service: {
+      list: () => [],
+      events: {
+        subscribe(_filter, listener) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+      },
+    },
+    emit(event) {
+      for (const listener of listeners) listener(event)
+    },
+  }
+}
+
 interface FakeContextOptions {
   readonly resume: 'ok' | 'missing'
   readonly initialEvents?: readonly SessionEvent[]
   /** Live session events exposed through `ctx.sessions.get` for recovery snapshots. */
   readonly liveEvents?: readonly SessionEvent[]
+  /** Persisted SessionHeader.cwd keyed by session id. */
+  readonly persistedCwd?: ReadonlyMap<string, string>
+  /** Native job service substitute; its teardown events drive the drain observation. */
+  readonly jobs?: FakeJobs
+  readonly dispose?: () => Promise<void>
+  readonly create?: () => Promise<void>
+  readonly work?: (agent: Agent, tools: ReadonlyMap<string, {
+    execute(args: unknown, execution: ToolExecution): unknown
+  }>) => Promise<void>
 }
 
 function makeFakeContext(options: FakeContextOptions): {
@@ -454,6 +495,7 @@ function makeFakeContext(options: FakeContextOptions): {
     followupCalls: 0,
     disposed: 0,
   }
+  const tools = new Map<string, { execute(args: unknown, execution: ToolExecution): unknown }>()
 
   const makeAgent = (sessionId: string): Agent => {
     const events: SessionEvent[] = [...(options.initialEvents ?? [])]
@@ -461,7 +503,7 @@ function makeFakeContext(options: FakeContextOptions): {
       id: sessionId as SessionId,
       snapshotEvents: () => events,
     } as unknown as Session
-    return {
+    const agent = {
       session,
       status: 'idle',
       followup(message: unknown) {
@@ -473,20 +515,34 @@ function makeFakeContext(options: FakeContextOptions): {
           data: message,
         } as unknown as SessionEvent)
       },
-      whenIdle: () => Promise.resolve(),
+      whenIdle: () => options.work?.(agent, tools) ?? Promise.resolve(),
+      cancel() {},
     } as unknown as Agent
+    return agent
+  }
+
+  const sessionPersistence = {
+    stat(sessionId: string) {
+      const cwd = options.persistedCwd?.get(sessionId)
+      return Promise.resolve(cwd === undefined ? undefined : { header: { cwd } })
+    },
   }
 
   const agentCtx = {
+    get: (name: string) => name === 'jobs' ? options.jobs : undefined,
+    on() {},
     systemPrompt: {
       section() {},
       context() {},
     },
     tools: {
-      register() {},
+      register(tool: { name: string; execute(args: unknown, execution: ToolExecution): unknown }) {
+        tools.set(tool.name, tool)
+      },
       guard() {},
       restrict() {},
       definitions: () => [],
+      schemas: () => [],
     },
   }
 
@@ -495,6 +551,8 @@ function makeFakeContext(options: FakeContextOptions): {
   }
 
   const ctx = {
+    get: (name: string) => name === 'jobs' ? options.jobs
+      : name === 'sessionPersistence' ? sessionPersistence : undefined,
     agents: {
       get: () => undefined,
       async create(createOptions: {
@@ -506,13 +564,14 @@ function makeFakeContext(options: FakeContextOptions): {
           sessionId: String(createOptions.sessionId),
           cwd: createOptions.meta?.cwd,
         })
+        await options.create?.()
         const agent = makeAgent(String(createOptions.sessionId))
         await runSetup(createOptions.setup, agent)
         return {
           agent,
           dispose() {
             state.disposed += 1
-            return Promise.resolve()
+            return options.dispose?.() ?? Promise.resolve()
           },
         }
       },
@@ -532,7 +591,7 @@ function makeFakeContext(options: FakeContextOptions): {
           agent,
           dispose() {
             state.disposed += 1
-            return Promise.resolve()
+            return options.dispose?.() ?? Promise.resolve()
           },
         }
       },
@@ -605,6 +664,268 @@ function unchangedFacts(root: string): Promise<readonly Fact[]> {
   return readFacts(root)
 }
 
+void test('Agent cleanup failure after submission cannot produce Evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's3-drain-root-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's3-drain-work-'))
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId: 'task-drain-failed', maxRuns: 1 })
+    } finally {
+      await service.close()
+    }
+    await writeFile(join(workspace, OUTPUT_PATH), 'frozen output\n')
+    const sessionId = 'session-drain-failed'
+    const runId = 'run-drain-failed'
+    const { ctx, state } = makeFakeContext({
+      resume: 'ok',
+      dispose: () => Promise.reject(new Error('owned process remains active')),
+      async work(agent, tools) {
+        const execution = { agent, concludeTurn() {} } as unknown as ToolExecution
+        await tools.get('singularity_read')?.execute({ kind: 'self' }, execution)
+        await tools.get('singularity_plan')?.execute({ sketch: {
+          v: 1, taskId: scenario.taskId, runId,
+          contextEpoch: initialContextEpoch(sessionId),
+          objective: 'Write the declared output.',
+          levels: [0, 1].map(level => ({ level, purpose: 'Write output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+          directPlan: [], assumptions: [], sourceContract: scenario.contract.digest,
+        } }, execution)
+        await tools.get('singularity_submit')?.execute({ outputIds: [OUTPUT_ID], includeLearningDrafts: false }, execution)
+      },
+    })
+    let verifierCalls = 0
+    const result = await executeSingleRun({
+      ctx, journalRoot: root, workspace, runId, sessionId,
+      admission: { contract: scenario.contract, attempt: 1, budgetReservation: {
+        tokens: 100_000, steps: 4, deadlineAt: scenario.contract.limits.deadlineAt,
+      } },
+      composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify(request) {
+        verifierCalls += 1
+        return Promise.resolve(sealPublicReceipt({
+          v: 1, provider: scenario.provider, operationId: request.operationId,
+          contractDigest: scenario.contract.digest,
+          inputDigests: request.inputs.map(ref => ref.digest),
+          outputDigests: request.outputs.map(ref => ref.digest),
+          criteria: [{ id: CRITERION_ID, verdict: 'pass', reason: 'pass' }],
+          exit: { code: 0, signal: null }, timedOut: false,
+        }))
+      } },
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(factsOfType(result.facts, 'run/submitted').length, 1, result.executionRecord?.reason)
+    assert.equal(result.classification, 'invalid')
+    assert.equal(verifierCalls, 0)
+    assert.equal(result.executionRecord?.drainPending, true)
+    assert.equal(result.evidence, undefined)
+    assert.equal(state.disposed, 1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+void test('force-failed job teardown after submission cannot produce Evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's3-job-orphan-root-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's3-job-orphan-work-'))
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId: 'task-job-orphan', maxRuns: 1 })
+    } finally {
+      await service.close()
+    }
+    await writeFile(join(workspace, OUTPUT_PATH), 'frozen output\n')
+    const sessionId = 'session-job-orphan'
+    const runId = 'run-job-orphan'
+    const jobs = makeFakeJobs()
+    const { ctx, state } = makeFakeContext({
+      resume: 'ok',
+      jobs: jobs.service,
+      dispose: () => {
+        // DSH alpha2 force-fails a job record when its teardown cancel throws,
+        // then resolves AgentHandle.dispose() without claiming the work stopped.
+        jobs.emit({
+          type: 'settled',
+          cause: 'teardown',
+          awaited: false,
+          job: {
+            id: 'probe-orphan',
+            status: 'failed',
+            detail: 'cancel threw during teardown; work may be orphaned',
+          },
+        })
+        return Promise.resolve()
+      },
+      async work(agent, tools) {
+        const execution = { agent, concludeTurn() {} } as unknown as ToolExecution
+        await tools.get('singularity_read')?.execute({ kind: 'self' }, execution)
+        await tools.get('singularity_plan')?.execute({ sketch: {
+          v: 1, taskId: scenario.taskId, runId,
+          contextEpoch: initialContextEpoch(sessionId),
+          objective: 'Write the declared output.',
+          levels: [0, 1].map(level => ({ level, purpose: 'Write output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+          directPlan: [], assumptions: [], sourceContract: scenario.contract.digest,
+        } }, execution)
+        await tools.get('singularity_submit')?.execute({ outputIds: [OUTPUT_ID], includeLearningDrafts: false }, execution)
+      },
+    })
+    let verifierCalls = 0
+    const result = await executeSingleRun({
+      ctx, journalRoot: root, workspace, runId, sessionId,
+      admission: { contract: scenario.contract, attempt: 1, budgetReservation: {
+        tokens: 100_000, steps: 4, deadlineAt: scenario.contract.limits.deadlineAt,
+      } },
+      composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify(request) {
+        verifierCalls += 1
+        return Promise.resolve(sealPublicReceipt({
+          v: 1, provider: scenario.provider, operationId: request.operationId,
+          contractDigest: scenario.contract.digest,
+          inputDigests: request.inputs.map(ref => ref.digest),
+          outputDigests: request.outputs.map(ref => ref.digest),
+          criteria: [{ id: CRITERION_ID, verdict: 'pass', reason: 'pass' }],
+          exit: { code: 0, signal: null }, timedOut: false,
+        }))
+      } },
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(result.classification, 'invalid')
+    assert.equal(result.executionRecord?.drainPending, true)
+    assert.equal(result.evidence, undefined)
+    assert.equal(verifierCalls, 0)
+    assert.equal(state.disposed, 1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+for (const phase of ['create', 'idle', 'dispose'] as const) {
+  void test(`Agent ${phase} wait is bounded and late results cannot wake a closed Run`, { timeout: 10_000 }, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 's3-wait-root-'))
+    const workspace = await mkdtemp(join(tmpdir(), 's3-wait-work-'))
+    const release = Promise.withResolvers<undefined>()
+    const entered = Promise.withResolvers<undefined>()
+    try {
+      const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+      let scenario: Scenario
+      try {
+        scenario = await buildScenario(service, { taskId: `task-wait-${phase}`, maxRuns: 1 })
+      } finally {
+        await service.close()
+      }
+      t.mock.timers.enable({ apis: ['setTimeout'] })
+      const pending = () => { entered.resolve(undefined); return release.promise }
+      const { ctx, state } = makeFakeContext({
+        resume: 'ok',
+        ...(phase === 'create' ? { create: pending } : {}),
+        ...(phase === 'idle' ? { work: pending } : {}),
+        ...(phase === 'dispose' ? { dispose: pending } : {}),
+      })
+      const execution = executeSingleRun({
+        ctx, journalRoot: root, workspace, runId: `run-wait-${phase}`, sessionId: `session-wait-${phase}`,
+        admission: { contract: scenario.contract, attempt: 1, budgetReservation: {
+          tokens: 100_000, steps: 4, deadlineAt: FIXED_NOW + 2000,
+        } },
+        composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+        verifier: { provider: scenario.provider, verify() { throw new Error('must not verify unfinished lifecycle') } },
+        clock: () => FIXED_NOW + 1000,
+      })
+      await entered.promise
+      t.mock.timers.tick(phase === 'dispose' ? 5000 : 1000)
+      let guard: ReturnType<typeof setInterval> | undefined
+      const bounded = await Promise.race([
+        execution,
+        new Promise<'hung'>(resolve => { guard = setInterval(() => { resolve('hung') }, 500) }),
+      ])
+      clearInterval(guard)
+      release.resolve(undefined)
+      const result = await execution
+      assert.notEqual(bounded, 'hung', 'uncooperative DSH wait must not stall Run settlement')
+      assert.equal(result.classification, 'invalid')
+      assert.equal(result.executionRecord?.drainPending, phase !== 'idle' ? true : undefined)
+      assert.equal(result.evidence, undefined)
+      await new Promise<void>(resolve => { setImmediate(resolve) })
+      assert.equal(state.disposed, 1)
+      assert.equal(state.followupCalls, phase === 'create' ? 0 : 1)
+      assert.equal(factsOfType(result.facts, 'run/submitted').length, 0)
+    } finally {
+      release.resolve(undefined)
+      t.mock.timers.reset()
+      await rm(root, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+}
+
+for (const mode of ['closed', 'active', 'exhausted', 'reservation', 'corrupt-resume', 'same-run'] as const) {
+  void test(`Task/Run execution rejects ${mode} before driving DSH`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 's3-state-'))
+    const workspace = await mkdtemp(join(tmpdir(), 's3-state-work-'))
+    try {
+      const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+      let scenario: Scenario
+      try {
+        scenario = await buildScenario(service, { taskId: `state-${mode}`, maxRuns: 1 })
+        await admitTask(service, scenario)
+        if (mode !== 'reservation') {
+          const compositionRef = await openRun(service, scenario, {
+            runId: 'old-run', sessionId: 'old-session', attempt: 1,
+            tokens: mode === 'corrupt-resume' ? scenario.contract.limits.maxTokens + 1 : 10_000,
+          })
+          if (mode !== 'active' && mode !== 'corrupt-resume') {
+            await closeRunFailed(service, scenario, {
+              runId: 'old-run', sessionId: 'old-session', compositionRef,
+              reason: 'no-submission', usage: usage(10, 2, 1),
+            })
+            if (mode === 'closed') {
+              await commitFact(service, 'task/closed', {
+                taskId: scenario.taskId, outcome: 'failed', reason: 'maxRuns exhausted',
+                decisiveRunId: 'old-run',
+                evidenceRefs: [],
+              }, 'task:closed')
+            }
+          }
+        }
+      } finally {
+        await service.close()
+      }
+      const before = await readFacts(root)
+      const { ctx, state } = makeFakeContext({ resume: 'ok' })
+      const request = {
+        ctx, journalRoot: root, workspace,
+        runId: mode === 'same-run' || mode === 'corrupt-resume' ? 'old-run' : 'new-run',
+        sessionId: mode === 'same-run' || mode === 'corrupt-resume' ? 'old-session' : 'new-session',
+        admission: {
+          contract: scenario.contract,
+          attempt: mode === 'reservation' ? 1 : 2,
+          budgetReservation: {
+            tokens: mode === 'reservation' ? scenario.contract.limits.maxTokens + 1 : 1000,
+            steps: 4, deadlineAt: scenario.contract.limits.deadlineAt,
+          },
+        },
+        composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+        verifier: { provider: scenario.provider, verify() { throw new Error('must not verify') } },
+        clock: () => FIXED_NOW + 1000,
+      }
+      await assert.rejects(mode === 'corrupt-resume' ? resumeSingleRun(request) : executeSingleRun(request),
+        (error: unknown) => error instanceof Error && 'code' in error && error.code === (
+          mode === 'reservation' || mode === 'corrupt-resume' ? 'BUDGET_EXCEEDED'
+            : mode === 'same-run' ? 'RUN_ALREADY_CLOSED'
+              : mode === 'exhausted' ? 'RETRY_NOT_ALLOWED' : 'TASK_NOT_OPEN'
+        ))
+      assert.deepEqual(await readFacts(root), before)
+      assert.equal(state.createCalls.length + state.resumeCalls.length, 0)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+}
+
 void test('retrySingleRun allows a failed latest Run and starts a fresh attempt/session/workspace', { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 's3c-retry-root-'))
   const workspace = await mkdtemp(join(tmpdir(), 's3c-retry-work-'))
@@ -639,7 +960,10 @@ void test('retrySingleRun allows a failed latest Run and starts a fresh attempt/
       await service.close()
     }
 
-    const { ctx, state } = makeFakeContext({ resume: 'ok' })
+    const { ctx, state } = makeFakeContext({
+      resume: 'ok',
+      persistedCwd: new Map([[previousSessionId, workspace]]),
+    })
     const verifier: RunVerifier = {
       provider: scenario.provider,
       verify() {
@@ -708,6 +1032,174 @@ void test('retrySingleRun allows a failed latest Run and starts a fresh attempt/
     await rm(root, { recursive: true, force: true })
     await rm(workspace, { recursive: true, force: true })
     await rm(nextWorkspace, { recursive: true, force: true })
+  }
+})
+
+void test('retrySingleRun refuses the previous Run workspace through a symlink and still allows a fresh one', { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 's3c-retry-workspace-'))
+  const workspace = await mkdtemp(join(tmpdir(), 's3c-retry-workspace-old-'))
+  const nextWorkspace = join(root, 'fresh-workspace')
+  const alias = join(root, 'workspace-alias')
+  const taskId = 'task-s3c-retry-workspace'
+  const previousRunId = `${taskId}-run-1`
+  const previousSessionId = `${taskId}-session-1`
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId, maxRuns: 2 })
+      await admitTask(service, scenario)
+      const compositionRef = await openRun(service, scenario, {
+        runId: previousRunId,
+        sessionId: previousSessionId,
+        attempt: 1,
+      })
+      await closeRunFailed(service, scenario, {
+        runId: previousRunId,
+        sessionId: previousSessionId,
+        compositionRef,
+        reason: 'no-submission',
+        usage: usage(10, 6, 1),
+      })
+    } finally {
+      await service.close()
+    }
+    await symlink(workspace, alias)
+    const before = await readFacts(root)
+    const { ctx, state } = makeFakeContext({
+      resume: 'ok',
+      persistedCwd: new Map([[previousSessionId, await realpath(workspace)]]),
+    })
+    const verifier: RunVerifier = {
+      provider: scenario.provider,
+      verify() { throw new Error('verifier must not run for a no-submission fresh retry') },
+    }
+
+    await assert.rejects(
+      retrySingleRun({
+        ctx,
+        journalRoot: root,
+        workspace: alias,
+        previousRunId,
+        runId: `${taskId}-run-2`,
+        sessionId: `${taskId}-session-2`,
+        agentOptions,
+        maxOutputBytes: 1024,
+        verifier,
+        clock: () => FIXED_NOW + 1000,
+      }),
+      (error: unknown) => error instanceof Error
+        && 'code' in error
+        && error.code === 'INVALID_ARGUMENT'
+        && /previous Run workspace/.test(error.message),
+    )
+    assert.deepEqual(await readFacts(root), before)
+    assert.equal(state.createCalls.length + state.resumeCalls.length, 0)
+
+    const missing = makeFakeContext({ resume: 'ok' })
+    await assert.rejects(
+      retrySingleRun({
+        ctx: missing.ctx,
+        journalRoot: root,
+        workspace: nextWorkspace,
+        previousRunId,
+        runId: `${taskId}-run-2`,
+        sessionId: `${taskId}-session-2`,
+        agentOptions,
+        maxOutputBytes: 1024,
+        verifier,
+        clock: () => FIXED_NOW + 1000,
+      }),
+      (error: unknown) => error instanceof Error
+        && 'code' in error
+        && error.code === 'INVALID_ARGUMENT'
+        && /no persisted cwd/.test(error.message),
+    )
+    assert.deepEqual(await readFacts(root), before)
+    assert.equal(missing.state.createCalls.length + missing.state.resumeCalls.length, 0)
+
+    const result = await retrySingleRun({
+      ctx,
+      journalRoot: root,
+      workspace: nextWorkspace,
+      previousRunId,
+      runId: `${taskId}-run-2`,
+      sessionId: `${taskId}-session-2`,
+      agentOptions,
+      maxOutputBytes: 1024,
+      verifier,
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(result.attempt, 2)
+    assert.equal(state.createCalls.length, 1)
+    assert.equal(state.createCalls[0]?.cwd, await realpath(nextWorkspace))
+    assert.equal(factsOfType(await readFacts(root), 'run/opened').length, 2)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+    await rm(nextWorkspace, { recursive: true, force: true })
+  }
+})
+
+void test('retrySingleRun checks every historical Run workspace before a third attempt', { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 's3c-retry-history-'))
+  const firstWorkspace = await mkdtemp(join(tmpdir(), 's3c-retry-history-first-'))
+  const secondWorkspace = join(root, 'second-workspace')
+  const nextWorkspace = join(root, 'third-workspace')
+  const alias = join(root, 'first-alias')
+  const taskId = 'task-retry-history'
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId, maxRuns: 3 })
+      await admitTask(service, scenario)
+      for (const attempt of [1, 2]) {
+        const runId = `${taskId}-run-${String(attempt)}`
+        const sessionId = `${taskId}-session-${String(attempt)}`
+        const compositionRef = await openRun(service, scenario, { runId, sessionId, attempt })
+        await closeRunFailed(service, scenario, {
+          runId, sessionId, compositionRef, reason: 'no-submission', usage: usage(10, 6, 1),
+        })
+      }
+    } finally {
+      await service.close()
+    }
+    await symlink(firstWorkspace, alias)
+    const before = await readFacts(root)
+    const persistedCwd = new Map([
+      [`${taskId}-session-1`, firstWorkspace],
+      [`${taskId}-session-2`, secondWorkspace],
+    ])
+    const { ctx, state } = makeFakeContext({ resume: 'ok', persistedCwd })
+    const request = {
+      ctx, journalRoot: root, previousRunId: `${taskId}-run-2`,
+      runId: `${taskId}-run-3`, sessionId: `${taskId}-session-3`,
+      agentOptions, maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('must not verify no-submission') } },
+      clock: () => FIXED_NOW + 1000,
+    }
+    for (const workspace of [firstWorkspace, alias]) {
+      await assert.rejects(retrySingleRun({ ...request, workspace }),
+        (error: unknown) => error instanceof Error && 'code' in error
+          && error.code === 'INVALID_ARGUMENT' && /Run workspace/.test(error.message))
+      assert.deepEqual(await readFacts(root), before)
+    }
+    persistedCwd.delete(`${taskId}-session-1`)
+    await assert.rejects(retrySingleRun({ ...request, workspace: nextWorkspace }),
+      (error: unknown) => error instanceof Error && 'code' in error
+        && error.code === 'INVALID_ARGUMENT' && /no persisted cwd/.test(error.message))
+    assert.deepEqual(await readFacts(root), before)
+    assert.equal(state.createCalls.length + state.resumeCalls.length, 0)
+    persistedCwd.set(`${taskId}-session-1`, firstWorkspace)
+    const result = await retrySingleRun({ ...request, workspace: nextWorkspace })
+    assert.equal(result.attempt, 3)
+    assert.equal(state.createCalls.length, 1)
+    assert.equal(state.createCalls[0]?.cwd, await realpath(nextWorkspace))
+    assert.equal(factsOfType(result.facts, 'run/opened').length, 3)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(firstWorkspace, { recursive: true, force: true })
   }
 })
 
@@ -900,7 +1392,10 @@ void test('retrySingleRun retains previous failed Evidence without reusing it', 
       await service.close()
     }
 
-    const { ctx, state } = makeFakeContext({ resume: 'ok' })
+    const { ctx, state } = makeFakeContext({
+      resume: 'ok',
+      persistedCwd: new Map([['task-s3c-retry-evidence-session-1', workspace]]),
+    })
     const result = await retrySingleRun({
       ctx,
       journalRoot: root,
@@ -1237,7 +1732,7 @@ void test('resumeSingleRun submitted timeout closes invalid ExecutionRecord with
   }
 })
 
-void test('resumeSingleRun rejects an unverifiable frozen submission without calling the verifier', { timeout: 30_000 }, async () => {
+void test('submission admission and recovery reject invalid supporting CAS before verifier calls', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 's3c-badsub-root-'))
   const workspace = await mkdtemp(join(tmpdir(), 's3c-badsub-work-'))
   const taskId = 'task-s3c-badsub'
@@ -1251,7 +1746,7 @@ void test('resumeSingleRun rejects an unverifiable frozen submission without cal
       await admitTask(service, scenario)
       await openRun(service, scenario, { runId, sessionId, attempt: 1 })
       const brokenRef = await putValue(service, { v: 1, not: 'a manifest' }, `${runId}:submission`, 'object')
-      await commitFact(service, 'run/submitted', {
+      await assert.rejects(commitFact(service, 'run/submitted', {
         runId,
         outputs: brokenRef,
         transcriptOffset: { sessionId, seq: 1 },
@@ -1259,14 +1754,18 @@ void test('resumeSingleRun rejects an unverifiable frozen submission without cal
         readReceipts: [],
         planningSketchRef: brokenRef,
         feedbackRefs: [],
-      }, `run:${runId}:submitted`)
+      }, `run:${runId}:submitted`), error => error instanceof DomainStoreError && error.code === 'REFERENCE_INVALID')
+      assert.equal(factsOfType(service.facts(), 'run/submitted').length, 0)
+      await submitRun(service, scenario, { runId, sessionId })
     } finally {
       await service.close()
     }
 
-    const { ctx } = makeFakeContext({ resume: 'ok' })
+    await rm(join(root, 'objects', scenario.output.digest.slice('sha256:'.length)))
+    const before = await readFile(join(root, 'journal.ndjson'))
+    const { ctx, state } = makeFakeContext({ resume: 'ok' })
     let verifierCalls = 0
-    const result = await resumeSingleRun({
+    await assert.rejects(resumeSingleRun({
       ctx,
       journalRoot: root,
       workspace,
@@ -1282,16 +1781,11 @@ void test('resumeSingleRun rejects an unverifiable frozen submission without cal
         },
       },
       clock: () => FIXED_NOW + 1000,
-    })
+    }), error => error instanceof DomainStoreError && error.code === 'OBJECT_MISSING')
 
     assert.equal(verifierCalls, 0)
-    assert.equal(result.classification, 'invalid')
-    assert.ok(result.executionRecord)
-    assert.match(result.executionRecord.reason, /submission-invalid/i)
-    const facts = await readFacts(root)
-    const closed = factsOfType(facts, 'run/closed')[0]
-    assert.equal(closed.data.classification, 'invalid')
-    assert.equal('evidenceRef' in closed.data, false)
+    assert.equal(state.createCalls.length + state.resumeCalls.length + state.followupCalls, 0)
+    assert.deepEqual(await readFile(join(root, 'journal.ndjson')), before, 'corrupt CAS must not produce a closure or Evidence')
   } finally {
     await rm(root, { recursive: true, force: true })
     await rm(workspace, { recursive: true, force: true })
@@ -1309,9 +1803,11 @@ void test('resumeSingleRun resumes the same session and does not resend an admit
     let scenario: Scenario
     let factsBefore: readonly Fact[]
     try {
-      scenario = await buildScenario(service, { taskId, maxRuns: 1 })
+      scenario = await buildScenario(service, { taskId, maxRuns: 1, inputAccess: 'copy-to-work' })
       await admitTask(service, scenario)
       await openRun(service, scenario, { runId, sessionId, attempt: 1 })
+      await prepareWorkspace(workspace, scenario.contract.spec.inputs, service)
+      await writeFile(join(workspace, 'input.txt'), 'work in progress')
       factsBefore = await readFacts(root)
     } finally {
       await service.close()
@@ -1338,6 +1834,7 @@ void test('resumeSingleRun resumes the same session and does not resend an admit
     })
 
     assert.equal(result.compositionMatched, true)
+    assert.equal(await readFile(join(workspace, 'input.txt'), 'utf8'), 'work in progress')
     assert.equal(result.sessionAction, 'resumed')
     assert.equal(result.wakeOutcome, 'already-admitted')
     assert.equal(state.resumeCalls.length, 1)
@@ -1361,9 +1858,38 @@ void test('resumeSingleRun resumes the same session and does not resend an admit
   }
 })
 
+void test('resumeSingleRun refuses a persisted session with a missing workspace', async () => {
+  const root = await mkdtemp(join(tmpdir(), 's3c-lost-workspace-'))
+  const workspace = join(root, 'missing-workspace')
+  try {
+    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
+    let scenario: Scenario
+    try {
+      scenario = await buildScenario(service, { taskId: 'lost-workspace', maxRuns: 1 })
+      await admitTask(service, scenario)
+      await openRun(service, scenario, { runId: 'lost-run', sessionId: 'lost-session', attempt: 1 })
+    } finally {
+      await service.close()
+    }
+    const { ctx, state } = makeFakeContext({ resume: 'ok' })
+    const result = await resumeSingleRun({
+      ctx, journalRoot: root, workspace, runId: 'lost-run',
+      composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('must not verify') } },
+      clock: () => FIXED_NOW + 1000,
+    })
+    assert.equal(result.classification, 'invalid')
+    assert.equal(state.createCalls.length, 0)
+    assert.equal(state.followupCalls, 0)
+    await assert.rejects(access(workspace), { code: 'ENOENT' })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 void test('resumeSingleRun creates the same session intent when persistence is absent', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 's3c-create-root-'))
-  const workspace = await mkdtemp(join(tmpdir(), 's3c-create-work-'))
+  const workspace = join(root, 'workspace')
   const taskId = 'task-s3c-create'
   const runId = `${taskId}-run-1`
   const sessionId = `${taskId}-session-1`
@@ -1371,7 +1897,7 @@ void test('resumeSingleRun creates the same session intent when persistence is a
     const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
     let scenario: Scenario
     try {
-      scenario = await buildScenario(service, { taskId, maxRuns: 1 })
+      scenario = await buildScenario(service, { taskId, maxRuns: 1, inputAccess: 'copy-to-work' })
       await admitTask(service, scenario)
       await openRun(service, scenario, { runId, sessionId, attempt: 1 })
     } finally {
@@ -1400,6 +1926,7 @@ void test('resumeSingleRun creates the same session intent when persistence is a
     assert.equal(state.createCalls.length, 1)
     assert.equal(state.createCalls[0]?.sessionId, sessionId)
     assert.equal(state.createCalls[0]?.cwd, workspace)
+    assert.equal(await readFile(join(workspace, 'input.txt'), 'utf8'), 'fixture input bytes\n')
     assert.equal(state.followupCalls, 1)
     assert.equal(result.classification, 'failed')
   } finally {

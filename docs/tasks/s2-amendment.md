@@ -1,6 +1,8 @@
 # 任务卡：S2 protocol closure amendment
 
-- **状态**：提案文档已完成；**待用户确认，未批准，未实现**。
+> **historical/superseded**：amendment 001 已获批准并纳入正式规范；下文是提案阶段的任务范围与历史证据，不再要求重复确认。确认与纳入记录见 [amendment 001](../amendments/001-s2-protocol-closure.md) 和 [build-plan](../build-plan.md)。
+
+- **状态**：提案阶段已结束；已批准并纳入正式规范。
 - **分支**：`s2-amendment-closure`
 - **基线**：`main` @ `5b5f258`；`docs/framework.md` V1 1.0；protocol tests `86/86`。
 - **范围**：把 fact payload 与 command/admission 两份草案合并为一份最小 S2 amendment。

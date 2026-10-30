@@ -4,8 +4,9 @@ import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 
+import { createWakeMessage, deliverWakeOnceOrFail } from '@singularity/runtime'
+
 import { bootSpikeProfile } from '../../src/host-composition.ts'
-import { createWakeMessage, deliverWakeOnceOrFail } from '../helpers/wake-delivery.ts'
 
 function required(name: string): string {
   const value = process.env[name]

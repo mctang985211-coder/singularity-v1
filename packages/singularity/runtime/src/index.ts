@@ -7,7 +7,6 @@ export {
 export type {
   ExecuteSingleRunRequest,
   ExecuteSingleRunResult,
-  SeedObject,
   SingleRunAdmission,
   SingleRunErrorCode,
 } from './run.ts'

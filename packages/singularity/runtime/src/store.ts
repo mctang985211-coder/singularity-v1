@@ -20,6 +20,9 @@ import {
   compositionSchema,
   executionRecordPayloadSchema,
   executionRecordSchema,
+  evidenceSchema,
+  publicReceiptSchema,
+  submissionManifestSchema,
   methodRevisionPayloadSchema,
   methodRevisionSchema,
   taskContractPayloadSchema,
@@ -41,6 +44,8 @@ import type {
   TaskContractPayload,
   UnsealedFact,
 } from '@singularity/protocol'
+
+import type { SealedTreeManifest } from './workspace.ts'
 
 /** Journal file name inside the store root. */
 export const JOURNAL_FILENAME = 'journal.ndjson'
@@ -495,6 +500,7 @@ export class DomainStore {
 }
 
 type StructuredKind = 'task-contract' | 'method-revision' | 'composition' | 'execution-record'
+  | 'evidence' | 'submission-manifest' | 'public-receipt'
 
 async function validateFactReferences(facts: readonly Fact[], objectsPath: string): Promise<void> {
   const validator = new ReferenceValidator(objectsPath)
@@ -506,15 +512,13 @@ async function validateFactReferences(facts: readonly Fact[], objectsPath: strin
 /**
  * Validates every mapped fact/object ref against the CAS. This checks existence
  * and digest domain only; it does not project business state or re-run guards.
- * `TaskContract.acceptance` is intentionally skipped until amendment 002 fixes
- * the AcceptanceRef domain. Evidence, RoundPlan, preview objects, manifests,
- * and receipts are opaque here and are not parsed.
+ * Frozen S3 structures use protocol schemas. Acceptance/private receipt bytes,
+ * RoundPlan and preview objects remain opaque; their refs still verify integrity.
  */
 class ReferenceValidator {
   private readonly objectsPath: string
   private readonly verifiedBytes = new Map<string, Promise<Uint8Array>>()
   private readonly validatedStructures = new Set<string>()
-  private readonly activeStructures = new Set<string>()
 
   constructor(objectsPath: string) {
     this.objectsPath = objectsPath
@@ -568,7 +572,7 @@ class ReferenceValidator {
         return
       }
       case 'run/submitted': {
-        await this.validateRef(fact.data.outputs, 'object')
+        await this.validateStructured(fact.data.outputs, 'object', 'submission-manifest')
         for (const receipt of fact.data.previewReceipts) {
           await this.validateRef(receipt, 'object')
         }
@@ -583,7 +587,7 @@ class ReferenceValidator {
       }
       case 'run/closed': {
         if ('evidenceRef' in fact.data) {
-          await this.validateRef(fact.data.evidenceRef, 'evidence')
+          await this.validateStructured(fact.data.evidenceRef, 'evidence', 'evidence')
         } else {
           await this.validateStructured(
             fact.data.executionRecordRef,
@@ -601,7 +605,7 @@ class ReferenceValidator {
       }
       case 'task/closed': {
         for (const evidence of fact.data.evidenceRefs) {
-          await this.validateRef(evidence, 'evidence')
+          await this.validateStructured(evidence, 'evidence', 'evidence')
         }
         if (fact.data.cancellationCutRef !== undefined) {
           await this.validateRef(fact.data.cancellationCutRef, 'object')
@@ -653,15 +657,29 @@ class ReferenceValidator {
     return pending
   }
 
+  private async validateTree(ref: Ref): Promise<void> {
+    const value = parseStructuredJson((await this.read(ref, 'object')), 'tree manifest') as Partial<SealedTreeManifest>
+    if (value.v !== 1 || value.kind !== 'tree' || !Array.isArray(value.files) || !verifyDigest('object', value as JsonValue)) {
+      throw referenceInvalid('Tree manifest is not a valid object-domain seal')
+    }
+    for (const file of value.files) {
+      if (typeof file !== 'object' || file === null || Array.isArray(file)) {
+        throw referenceInvalid('Tree manifest file entry is invalid')
+      }
+      const object = (file as { readonly object?: unknown }).object
+      const parsed = parseProtocolValue(refSchema, object)
+      await this.validateRef(parsed, 'object')
+    }
+  }
+
   private async validateStructured(
     ref: Ref,
     domain: CasDigestDomain,
     kind: StructuredKind,
   ): Promise<void> {
     const key = `${domain}\u0000${ref.digest}\u0000${kind}`
-    if (this.validatedStructures.has(key) || this.activeStructures.has(key)) return
+    if (this.validatedStructures.has(key)) return
 
-    this.activeStructures.add(key)
     try {
       const bytes = await this.read(ref, domain)
       switch (kind) {
@@ -681,10 +699,39 @@ class ReferenceValidator {
           await this.validateExecutionRecordValue(parseExecutionRecordBytes(bytes))
           break
         }
+        case 'submission-manifest': {
+          const manifest = parseProtocolValue(submissionManifestSchema, parseSealedObject(domain, bytes)?.value)
+          for (const output of [...manifest.outputs, ...manifest.learningDrafts]) {
+            if (output.object !== undefined) {
+              await this.validateRef(output.object, 'object')
+              if (output.kind === 'tree') await this.validateTree(output.object)
+            }
+          }
+          break
+        }
+        case 'evidence': {
+          const evidence = parseProtocolValue(evidenceSchema, parseSealedObject(domain, bytes)?.value)
+          await this.validateStructured(evidence.task, 'contract', 'task-contract')
+          await this.validateStructured(evidence.method, 'method', 'method-revision')
+          await this.validateStructured(evidence.composition, 'composition', 'composition')
+          for (const ref of [...evidence.inputs, ...evidence.outputs]) await this.validateRef(ref, 'object')
+          await this.validateRef(evidence.verification.provider, 'object')
+          await this.validateStructured(evidence.verification.publicReceipt, 'object', 'public-receipt')
+          if (evidence.verification.privateReceipt !== undefined) {
+            await this.validateRef(evidence.verification.privateReceipt, 'object')
+          }
+          break
+        }
+        case 'public-receipt': {
+          const receipt = parseProtocolValue(publicReceiptSchema, parseSealedObject(domain, bytes)?.value)
+          await this.validateRef(receipt.provider, 'object')
+          break
+        }
       }
       this.validatedStructures.add(key)
-    } finally {
-      this.activeStructures.delete(key)
+    } catch (error) {
+      if (error instanceof DomainStoreError) throw error
+      throw referenceInvalid(`CAS object is not a valid ${kind}`, error)
     }
   }
 

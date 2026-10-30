@@ -1,6 +1,8 @@
 # S3-B2 任务卡：单 Run 执行闭环 runtime
 
-- **状态**：进行中；实现共享 `executeSingleRun`，不实现第二 writer、第二模型 loop、registry、transcript 或 TS MCP 转接层。
+> **historical/superseded**：本切片已集成完成；原任务范围与下文证据只记录当时状态。当前阶段和最终证据以 [S3 closure](s3-closure.md)、[build-plan](../build-plan.md) 和 [conformance](../conformance.md) 为准。
+
+- **历史状态**：实现共享 `executeSingleRun`，不实现第二 writer、第二模型 loop、registry、transcript 或 TS MCP 转接层。
 - **分支**：`s3-b2-swarm-runtime`，基线 `315ece9`（S3-B1 acceptance/submission schema）。
 
 ## Goal

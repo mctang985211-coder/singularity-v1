@@ -1,39 +1,36 @@
+import { realpath } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 
-import {
-  compositionPayloadSchema,
-  parseProtocolValue,
-  refSchema,
-} from '@singularity/protocol'
+import { compositionPayloadSchema, parseProtocolValue } from '@singularity/protocol'
 import type {
   BudgetReservation,
   CompositionPayload,
-  Fact,
   FactActor,
   RetryDecision,
 } from '@singularity/protocol'
 
+import { SingleRunError } from './errors.ts'
 import {
-  SingleRunError,
   closeOpenedRunInvalid,
   compareCompositionPayload,
   completeSubmittedRun,
   compositionPayloadOf,
   continueOpenedRun,
-  executeSingleRun,
   readRunJournalView,
   reconcileClosedRun,
-  retryDecisionForRun,
-} from './run.ts'
+} from './recovery-execution.ts'
+import type { RunJournalView } from './recovery-execution.ts'
+import { executeSingleRun, validateHostRequest } from './run.ts'
+import { retryDecisionForRun } from './run-settlement.ts'
 import type {
   ExecuteSingleRunRequest,
   ExecuteSingleRunResult,
-  RunJournalView,
   SingleRunAdmission,
 } from './run.ts'
 import { CommandService } from './service.ts'
-import { DomainStore } from './store.ts'
 import type { RunVerifier } from './verification.ts'
 import type { WakeDeliveryOutcome } from './wake.ts'
 
@@ -41,7 +38,7 @@ import type { WakeDeliveryOutcome } from './wake.ts'
 export interface RetrySingleRunRequest {
   readonly ctx: Context
   readonly journalRoot: string
-  /** New workspace for the fresh attempt; must not be the previous workspace. */
+  /** New workspace, distinct from every earlier attempt of this Task. */
   readonly workspace: string
   /** Latest closed Run of the Task. */
   readonly previousRunId: string
@@ -55,8 +52,6 @@ export interface RetrySingleRunRequest {
   readonly composition?: CompositionPayload
   readonly actor?: FactActor
   readonly clock?: () => number
-  readonly templateBrief?: string
-  readonly environmentMode?: string
 }
 
 /** Fresh attempt result plus the preflight policy decision. */
@@ -80,8 +75,6 @@ export interface ResumeSingleRunRequest {
   readonly transientInvalidReasons?: readonly string[]
   readonly actor?: FactActor
   readonly clock?: () => number
-  readonly templateBrief?: string
-  readonly environmentMode?: string
 }
 
 /** Resume result; exactly one recovery path ran. */
@@ -107,13 +100,13 @@ export async function retrySingleRun(
   const clock = request.clock ?? Date.now
   validateRetryRequest(request, actor, clock)
 
-  const store = await DomainStore.open({ root: request.journalRoot })
+  const store = await CommandService.open({ root: request.journalRoot, actor, clock })
   let view: RunJournalView
   let admission: SingleRunAdmission
   let composition: CompositionPayload
   let retryPolicy: RetryDecision
   try {
-    view = await readRunJournalView(store, request.previousRunId)
+    view = await readRunJournalView(store, request.previousRunId, request.transientInvalidReasons ?? [])
     const facts = store.facts()
     if (view.runClosed === undefined) {
       throw new SingleRunError(
@@ -133,16 +126,8 @@ export async function retrySingleRun(
         'previousRunId must be the latest Run of the Task',
       )
     }
-    for (const runId of view.runIds) {
-      if (!facts.some(fact => fact.type === 'run/closed' && fact.data.runId === runId)) {
-        throw new SingleRunError(
-          'RUN_NOT_CLOSED',
-          `Run ${JSON.stringify(runId)} is still open; retry requires one closed previous Run`,
-        )
-      }
-    }
     retryPolicy = retryDecisionForRun(
-      facts,
+      view.state,
       view.contract,
       view.runClosed,
       request.transientInvalidReasons ?? [],
@@ -168,7 +153,13 @@ export async function retrySingleRun(
         'retry cannot change the frozen Composition, contract, Method, or seed',
       )
     }
-    const reservation = retryReservation(view, facts)
+    await assertFreshRetryWorkspace(
+      request.ctx,
+      facts.flatMap(fact => fact.type === 'run/opened' && fact.data.taskId === view.taskId
+        ? [fact.data.sessionId] : []),
+      request.workspace,
+    )
+    const reservation = retryReservation(view)
     admission = {
       contract: view.contract,
       attempt: view.runIds.length + 1,
@@ -196,7 +187,7 @@ async function executeRetryAttempt(
   admission: SingleRunAdmission,
   composition: CompositionPayload,
 ): Promise<ExecuteSingleRunResult> {
-  // The read-only preflight store is closed before the shared create path opens
+  // The preflight writer is closed before the shared create path opens
   // the one CommandService writer for the fresh attempt.
   return executeSingleRun({
     ctx: request.ctx,
@@ -212,9 +203,97 @@ async function executeRetryAttempt(
     transientInvalidReasons: request.transientInvalidReasons ?? [],
     actor,
     clock,
-    ...(request.templateBrief === undefined ? {} : { templateBrief: request.templateBrief }),
-    ...(request.environmentMode === undefined ? {} : { environmentMode: request.environmentMode }),
   })
+}
+
+/**
+ * DSH SessionHeader.cwd records each earlier Agent's actual workspace; the
+ * domain journal supplies its session identity. A fresh attempt checks every
+ * historical Run of the Task, including missing cwd and canonical aliases.
+ */
+async function assertFreshRetryWorkspace(
+  ctx: Context,
+  previousSessionIds: readonly string[],
+  workspace: string,
+): Promise<void> {
+  const persistence: unknown = ctx.get('sessionPersistence', false)
+  if (!isSessionPersistenceReader(persistence)) {
+    throw new SingleRunError(
+      'INVALID_ARGUMENT',
+      'retry cannot verify workspace freshness: DSH session persistence is unavailable',
+    )
+  }
+  const nextPath = await canonicalWorkspacePath(workspace)
+  for (const previousSessionId of previousSessionIds) {
+    let previousCwd: string | undefined
+    try {
+      previousCwd = (await persistence.stat(previousSessionId))?.header.cwd
+    } catch (error) {
+      throw new SingleRunError(
+        'INVALID_ARGUMENT',
+        `retry cannot read previous Run session ${JSON.stringify(previousSessionId)}`,
+        { cause: error },
+      )
+    }
+    if (previousCwd === undefined || previousCwd.length === 0) {
+      throw new SingleRunError(
+        'INVALID_ARGUMENT',
+        'retry cannot verify workspace freshness: previous Run session has no persisted cwd',
+      )
+    }
+    if (!isAbsolute(previousCwd)) {
+      throw new SingleRunError(
+        'INVALID_ARGUMENT',
+        'retry cannot verify workspace freshness: previous Run persisted cwd is not absolute',
+      )
+    }
+    if (await canonicalWorkspacePath(previousCwd) === nextPath) {
+      throw new SingleRunError(
+        'INVALID_ARGUMENT',
+        `retry workspace must differ from the previous Run workspace ${JSON.stringify(previousCwd)}`,
+      )
+    }
+  }
+}
+
+interface SessionPersistenceReader {
+  stat(sessionId: string): Promise<{
+    readonly header: { readonly cwd?: string }
+  } | undefined>
+}
+
+function isSessionPersistenceReader(value: unknown): value is SessionPersistenceReader {
+  return typeof value === 'object' && value !== null
+    && 'stat' in value && typeof value.stat === 'function'
+}
+
+/** Resolves symlinks through the nearest existing ancestor of a new path. */
+async function canonicalWorkspacePath(path: string): Promise<string> {
+  let current = resolve(path)
+  const missing: string[] = []
+  for (;;) {
+    try {
+      const existing = await realpath(current)
+      return missing.length === 0 ? existing : join(existing, ...missing.reverse())
+    } catch (error) {
+      if (!isMissingPath(error)) {
+        throw new SingleRunError(
+          'INVALID_ARGUMENT',
+          `cannot canonicalize workspace path ${JSON.stringify(path)}`,
+          { cause: error },
+        )
+      }
+      const parent = dirname(current)
+      if (parent === current) return resolve(path)
+      missing.push(basename(current))
+      current = parent
+    }
+  }
+}
+
+function isMissingPath(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && (error.code === 'ENOENT' || error.code === 'ENOTDIR')
 }
 
 /**
@@ -236,7 +315,7 @@ export async function resumeSingleRun(
     clock,
   })
   try {
-    const view = await readRunJournalView(service, request.runId)
+    const view = await readRunJournalView(service, request.runId, request.transientInvalidReasons ?? [])
     const internal = toExecuteRequest(request, view, actor, clock)
     const compositionMatched = compareCompositionPayload(view.composition, request.composition)
 
@@ -302,21 +381,18 @@ function toExecuteRequest(
     transientInvalidReasons: request.transientInvalidReasons ?? [],
     actor,
     clock,
-    ...(request.templateBrief === undefined ? {} : { templateBrief: request.templateBrief }),
-    ...(request.environmentMode === undefined ? {} : { environmentMode: request.environmentMode }),
   }
 }
 
 function retryReservation(
   view: RunJournalView,
-  facts: readonly Fact[],
 ): BudgetReservation {
   let used = 0
-  for (const fact of facts) {
-    if (fact.type !== 'run/closed') continue
-    if (!view.runIds.includes(fact.data.runId)) continue
-    used += fact.data.usage.inputTokens + fact.data.usage.outputTokens
-    const summary = fact.data.usage.summary
+  for (const runId of view.runIds) {
+    const usage = view.state.runs.get(runId)?.closed?.usage
+    if (usage === undefined) continue
+    used += usage.inputTokens + usage.outputTokens
+    const summary = usage.summary
     if (summary !== undefined) used += summary.inputTokens + summary.outputTokens
   }
   const tokens = view.contract.limits.maxTokens - used
@@ -338,17 +414,7 @@ function validateRetryRequest(
   actor: FactActor,
   clock: () => number,
 ): void {
-  validateCommon(
-    request.journalRoot,
-    request.workspace,
-    request.runId,
-    request.sessionId,
-    request.maxOutputBytes,
-    request.agentOptions,
-    request.verifier,
-    actor,
-    clock,
-  )
+  validateHostRequest(request, actor, clock)
   if (typeof request.previousRunId !== 'string' || request.previousRunId.length === 0) {
     throw new SingleRunError('INVALID_ARGUMENT', 'previousRunId must be a non-empty string')
   }
@@ -366,11 +432,6 @@ function validateRetryRequest(
       )
     }
   }
-  for (const reason of request.transientInvalidReasons ?? []) {
-    if (typeof reason !== 'string' || reason.length === 0) {
-      throw new SingleRunError('INVALID_ARGUMENT', 'transientInvalidReasons must be non-empty strings')
-    }
-  }
 }
 
 function validateResumeRequest(
@@ -378,17 +439,7 @@ function validateResumeRequest(
   actor: FactActor,
   clock: () => number,
 ): void {
-  validateCommon(
-    request.journalRoot,
-    request.workspace,
-    request.runId,
-    undefined,
-    request.maxOutputBytes,
-    request.agentOptions,
-    request.verifier,
-    actor,
-    clock,
-  )
+  validateHostRequest(request, actor, clock)
   try {
     parseProtocolValue(compositionPayloadSchema, request.composition)
   } catch (error) {
@@ -397,52 +448,5 @@ function validateResumeRequest(
       'resume composition is not a strict CompositionPayload',
       { cause: error },
     )
-  }
-  for (const reason of request.transientInvalidReasons ?? []) {
-    if (typeof reason !== 'string' || reason.length === 0) {
-      throw new SingleRunError('INVALID_ARGUMENT', 'transientInvalidReasons must be non-empty strings')
-    }
-  }
-}
-
-function validateCommon(
-  journalRoot: string,
-  workspace: string,
-  runId: string,
-  sessionId: string | undefined,
-  maxOutputBytes: number,
-  agentOptions: AgentOptions,
-  verifier: RunVerifier,
-  actor: FactActor,
-  clock: () => number,
-): void {
-  const required: readonly (readonly [string, string])[] = [
-    ['journalRoot', journalRoot],
-    ['workspace', workspace],
-    ['runId', runId],
-    ...(sessionId === undefined ? [] : [['sessionId', sessionId] as const]),
-  ]
-  for (const [label, value] of required) {
-    if (typeof value !== 'string' || value.length === 0) {
-      throw new SingleRunError('INVALID_ARGUMENT', `${label} must be a non-empty string`)
-    }
-  }
-  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
-    throw new SingleRunError('INVALID_ARGUMENT', 'maxOutputBytes must be a positive safe integer')
-  }
-  if (typeof agentOptions.provider !== 'string' || agentOptions.provider.length === 0
-    || typeof agentOptions.model !== 'string' || agentOptions.model.length === 0) {
-    throw new SingleRunError('INVALID_ARGUMENT', 'agentOptions.provider and agentOptions.model are required')
-  }
-  try {
-    parseProtocolValue(refSchema, verifier.provider)
-  } catch (error) {
-    throw new SingleRunError('INVALID_ARGUMENT', 'verifier.provider is not a valid ref', { cause: error })
-  }
-  if (actor.id.length === 0) {
-    throw new SingleRunError('INVALID_ARGUMENT', 'actor.id must be non-empty')
-  }
-  if (typeof clock() !== 'number') {
-    throw new SingleRunError('INVALID_ARGUMENT', 'clock must return a number')
   }
 }

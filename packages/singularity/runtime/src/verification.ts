@@ -15,7 +15,6 @@ import type {
   PublicReceiptValidation,
   Ref,
   SessionCut,
-  SubmissionManifest,
   TaskContract,
   UsageRecord,
   VerifyRequest,
@@ -56,7 +55,7 @@ export interface VerifierRequest extends VerifyRequest {
 
 /** Independent domain verifier from docs/framework.md §19. */
 export interface RunVerifier {
-  /** Frozen acceptance provider identity; must equal the receipt provider. */
+  /** This host uses the frozen acceptance object itself as provider identity. */
   readonly provider: Ref
   verify(request: VerifierRequest): Promise<PublicReceipt>
 }
@@ -64,7 +63,6 @@ export interface RunVerifier {
 export interface RunVerificationInput {
   readonly contract: TaskContract
   readonly runId: string
-  readonly manifest: SubmissionManifest
   readonly inputs: readonly Ref[]
   readonly outputs: readonly Ref[]
   readonly verifier: RunVerifier
@@ -94,31 +92,54 @@ export type RunVerification =
  */
 export async function verifyRunSubmission(
   input: RunVerificationInput,
+  clock: () => number = Date.now,
 ): Promise<RunVerification> {
+  if (input.verifier.provider.id !== input.contract.acceptance.id
+    || input.verifier.provider.digest !== input.contract.acceptance.digest) {
+    return {
+      verdict: 'invalid',
+      code: 'verification-invalid',
+      reason: `${VERIFICATION_INVALID_REASON}: verifier provider does not match the frozen acceptance`,
+    }
+  }
   const operationId = `${input.runId}:verify`
   const requiredCriteria = input.contract.spec.criteria
     .filter(criterion => criterion.required)
     .map(criterion => criterion.id)
 
   let receipt: PublicReceipt
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    receipt = await input.verifier.verify({
+    const startedAt = clock()
+    const remaining = input.contract.limits.deadlineAt - startedAt
+    if (!Number.isSafeInteger(remaining) || remaining <= 0) throw new DOMException('verifier deadline', 'TimeoutError')
+    receipt = await Promise.race([input.verifier.verify({
       operationId,
       task: input.contract,
       inputs: input.inputs,
       outputs: input.outputs,
       readObject: (ref, domain) => input.reader.readObject(ref, domain),
-    })
+    }), new Promise<PublicReceipt>((_resolve, reject) => {
+      timer = setTimeout(() => { reject(new DOMException('verifier deadline', 'TimeoutError')) },
+        Math.min(2_147_483_647, remaining))
+    })])
+    const finishedAt = clock()
+    if (!Number.isSafeInteger(finishedAt) || finishedAt < startedAt || finishedAt >= input.contract.limits.deadlineAt) {
+      throw new DOMException('verifier deadline', 'TimeoutError')
+    }
   } catch (error) {
+    const code = error instanceof DOMException && error.name === 'TimeoutError' ? VERIFIER_TIMEOUT_REASON : VERIFIER_ERROR_REASON
     return {
       verdict: 'invalid',
-      code: 'verifier-error',
-      reason: `${VERIFIER_ERROR_REASON}: ${errorMessage(error)}`,
+      code,
+      reason: `${code}: ${errorMessage(error)}`,
     }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
 
   const validation = validatePublicReceipt(receipt, {
-    provider: input.verifier.provider,
+    provider: input.contract.acceptance,
     operationId,
     contractDigest: input.contract.digest,
     inputDigests: input.inputs.map(ref => ref.digest),
@@ -148,9 +169,6 @@ export async function verifyRunSubmission(
     receiptRef,
   }
 }
-
-/** Alias used by app-level conformance checks. */
-export const validateRunVerification = verifyRunSubmission
 
 function invalidFromValidation(
   validation: Extract<PublicReceiptValidation, { readonly verdict: 'invalid' }>,
@@ -250,16 +268,6 @@ export function buildExecutionRecord(
     ...(options.drainPending === undefined ? {} : { drainPending: options.drainPending }),
   })
   return seal('object', payload)
-}
-
-/** Evidence outputs must exactly mirror the frozen manifest order. */
-export function manifestOutputRefs(manifest: SubmissionManifest): readonly Ref[] {
-  const refs: Ref[] = []
-  for (const output of manifest.outputs) {
-    if (output.object !== undefined) refs.push(output.object)
-  }
-  for (const draft of manifest.learningDrafts) refs.push(draft.object)
-  return refs
 }
 
 function errorMessage(error: unknown): string {

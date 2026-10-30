@@ -60,9 +60,6 @@ export interface CasObjectReader {
   readObject(ref: Ref, domain?: CasDigestDomain): Promise<{ readonly bytes: Uint8Array }>
 }
 
-/** One host-authorized input materialization requested by the frozen contract. */
-export type WorkspaceInput = InputRef
-
 const textEncoder = new TextEncoder()
 
 interface DraftSpec {
@@ -96,7 +93,7 @@ interface TreeFile {
   readonly object: Ref
 }
 
-interface SealedTreeManifest {
+export interface SealedTreeManifest {
   readonly v: 1
   readonly kind: 'tree'
   readonly files: readonly TreeFile[]
@@ -127,8 +124,6 @@ export interface FrozenSubmission {
   readonly inputRefs: readonly Ref[]
   /** Frozen verifier output snapshot: manifest outputs then learning drafts. */
   readonly outputRefs: readonly Ref[]
-  readonly checks: readonly SubmissionCheck[]
-  readonly bytes: number
 }
 
 /**
@@ -138,7 +133,7 @@ export interface FrozenSubmission {
  */
 export async function prepareWorkspace(
   workspace: string,
-  inputs: readonly WorkspaceInput[],
+  inputs: readonly InputRef[],
   reader: CasObjectReader,
 ): Promise<string> {
   const root = resolve(workspace)
@@ -289,8 +284,6 @@ export async function freezeSubmission(
     manifestRef,
     inputRefs: options.contract.spec.inputs.map(input => input.object),
     outputRefs,
-    checks,
-    bytes,
   }
 }
 
@@ -371,6 +364,7 @@ async function freezeFile(options: FreezeFileOptions): Promise<FrozenPath | unde
     throw new SubmissionError('OUTPUT_TOO_LARGE', 'submission size cap is exhausted')
   }
   const absolute = resolveInside(options.workspace, options.path)
+  await assertNoSymlinkAncestors(options.workspace, options.path)
   let stat
   try {
     stat = await lstat(absolute)
@@ -422,6 +416,7 @@ async function freezeTree(options: FreezeTreeOptions): Promise<FrozenPath | unde
     throw new SubmissionError('OUTPUT_TOO_LARGE', 'submission size cap is exhausted')
   }
   const absolute = resolveInside(options.workspace, options.path)
+  await assertNoSymlinkAncestors(options.workspace, options.path)
   let rootStat
   try {
     rootStat = await lstat(absolute)
