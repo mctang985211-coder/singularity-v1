@@ -146,6 +146,7 @@ async function run(
     readonly manifest: SubmissionManifest
     readonly outputRef: Ref
   },
+  clock: () => number = () => 0,
 ) {
   return verifyRunSubmission({
     contract: options.contract,
@@ -156,8 +157,47 @@ async function run(
     verifier: options.verifier,
     reader: store,
     writer: store,
-  })
+  }, clock)
 }
+
+void test('host deadline bounds a verifier that never returns', async () => {
+  await withStore(async store => {
+    const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
+    const contract = makeContract()
+    const result = await Promise.race([
+      run(store, {
+        contract, manifest: makeManifest(contract, outputRef), outputRef,
+        verifier: { provider: contract.acceptance, verify: () => new Promise<never>(() => {}) },
+      }, () => contract.limits.deadlineAt - 10),
+      new Promise<'hung'>(resolve => { setTimeout(() => { resolve('hung') }, 100) }),
+    ])
+    assert.notEqual(result, 'hung')
+    assert.equal(typeof result === 'object' && result.verdict, 'invalid')
+    assert.equal(typeof result === 'object' && 'code' in result && result.code, 'verifier-timeout')
+  })
+})
+
+void test('host rejects receipts returned at the deadline or after an invalid clock change', async () => {
+  await withStore(async store => {
+    const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
+    const contract = makeContract()
+    for (const finishedAt of [contract.limits.deadlineAt, contract.limits.deadlineAt - 2, NaN]) {
+      let now = contract.limits.deadlineAt - 1
+      const result = await run(store, {
+        contract, manifest: makeManifest(contract, outputRef), outputRef,
+        verifier: {
+          provider: contract.acceptance,
+          verify() {
+            now = finishedAt
+            return Promise.resolve(receipt(contract, contract.acceptance, { outputDigest: outputRef.digest }))
+          },
+        },
+      }, () => now)
+      assert.equal(result.verdict, 'invalid')
+      assert.equal('code' in result && result.code, 'verifier-timeout')
+    }
+  })
+})
 
 void test('host classifies verified and failed receipts and writes the receipt to CAS', async () => {
   await withStore(async store => {

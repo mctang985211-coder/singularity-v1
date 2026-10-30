@@ -432,7 +432,7 @@ async function makeScenario(
       contract,
       attempt: 1,
       budgetReservation: {
-        tokens: 100_000,
+        tokens: contract.limits.maxTokens,
         steps: 10,
         deadlineAt: contract.limits.deadlineAt,
       },

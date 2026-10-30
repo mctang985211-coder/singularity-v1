@@ -203,6 +203,7 @@ export interface RunJournalView {
 interface SessionSnapshot {
   readonly usage: UsageRecord
   readonly sessionCut: SessionCut
+  readonly failure?: string
 }
 
 interface Settlement {
@@ -227,11 +228,9 @@ interface RuntimeContext {
   readonly baseToolNames: readonly string[]
   readonly contract: TaskContract
   readonly contractRef: Ref
-  readonly composition: Composition
   readonly compositionRef: Ref
   readonly startedAt: number
   readonly maxOutputBytes: number
-  readonly agentOptions: AgentOptions
   readonly templateBrief: string
   readonly environmentMode: string
   readonly verifier: RunVerifier
@@ -239,15 +238,9 @@ interface RuntimeContext {
 
 /** @internal One Run whose admission and `run/opened` fact are already durable. */
 interface PreparedRun {
-  readonly actor: FactActor
-  readonly clock: () => number
   readonly contract: TaskContract
-  readonly contractRef: Ref
-  readonly composition: Composition
-  readonly compositionRef: Ref
   readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
   readonly workspace: string
-  readonly baseToolNames: readonly string[]
   readonly runtime: RuntimeContext
 }
 
@@ -374,7 +367,6 @@ async function openSingleRun(
     clock,
     contract,
     contractRef,
-    composition,
     compositionRef,
     runOpened,
     workspace,
@@ -449,7 +441,6 @@ async function loadPreparedRun(
     clock,
     contract,
     contractRef: view.contractRef,
-    composition: view.composition,
     compositionRef: view.compositionRef,
     runOpened: view.runOpened,
     workspace,
@@ -463,7 +454,6 @@ function buildPreparedRun(options: {
   readonly clock: () => number
   readonly contract: TaskContract
   readonly contractRef: Ref
-  readonly composition: Composition
   readonly compositionRef: Ref
   readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
   readonly workspace: string
@@ -471,22 +461,15 @@ function buildPreparedRun(options: {
   readonly request: ExecuteSingleRunRequest
 }): PreparedRun {
   return {
-    actor: options.actor,
-    clock: options.clock,
     contract: options.contract,
-    contractRef: options.contractRef,
-    composition: options.composition,
-    compositionRef: options.compositionRef,
     runOpened: options.runOpened,
     workspace: options.workspace,
-    baseToolNames: options.baseToolNames,
     runtime: buildRuntimeContext(
       options.request,
       options.actor,
       options.clock,
       options.contract,
       options.contractRef,
-      options.composition,
       options.compositionRef,
       options.runOpened.at,
       options.workspace,
@@ -501,7 +484,6 @@ function buildRuntimeContext(
   clock: () => number,
   contract: TaskContract,
   contractRef: Ref,
-  composition: Composition,
   compositionRef: Ref,
   startedAt: number,
   workspace: string,
@@ -515,11 +497,9 @@ function buildRuntimeContext(
     baseToolNames,
     contract,
     contractRef,
-    composition,
     compositionRef,
     startedAt,
     maxOutputBytes: request.maxOutputBytes,
-    agentOptions: request.agentOptions,
     templateBrief: request.templateBrief ?? contract.spec.goal.summary,
     environmentMode: request.environmentMode ?? 'workspace',
     verifier: request.verifier,
@@ -533,34 +513,39 @@ async function drivePreparedRun(
   mode: OpenedRunMode,
 ): Promise<ContinueOpenedRunResult> {
   const { contract, runtime } = prepared
-  const controller = createToolController(runtime, request, service)
+  const { controller, budget, checkBudget, startBudget } = await createToolController(prepared, request, service)
   let handle: AgentHandle | undefined
   let snapshot = emptySnapshot(request.sessionId)
   let agentErrorCode: string | undefined
   let agentErrorDetail: string | undefined
   let sessionAction: 'created' | 'resumed' = 'created'
   let wakeOutcome: WakeDeliveryOutcome | undefined
+  const deadline = AbortSignal.timeout(Math.min(2_147_483_647,
+    Math.max(0, prepared.runOpened.data.budgetReservation.deadlineAt - runtime.clock())))
+  const cancel = () => handle?.agent.cancel({ kind: 'hook', reason: 'deadline' })
+  deadline.addEventListener('abort', cancel, { once: true })
 
   try {
-    const setup = buildAgentSetup(runtime, request, controller)
+    const setup = buildAgentSetup(runtime, request, controller, budget, checkBudget)
     if (mode === 'create') {
       handle = await request.ctx.agents.create({
         sessionId: request.sessionId as SessionId,
         meta: { cwd: prepared.workspace },
         agentOptions: request.agentOptions,
+        signal: deadline,
         setup,
       })
     } else {
-      const acquired = await resumeOrCreateAgent(request, prepared.workspace, setup, service)
+      const acquired = await resumeOrCreateAgent(request, prepared.workspace, setup, service, deadline)
       handle = acquired.handle
       sessionAction = acquired.action
     }
+    deadline.throwIfAborted()
     // The start wake text is derived from the frozen run/opened boundary, not
     // from the live clock: resuming must reproduce the same stable message body.
-    const firstBudget = computeBudget(contract, zeroUsage, runtime.startedAt, runtime.startedAt)
     wakeOutcome = await deliverWakeOnceOrFail(handle.agent, {
       wakeId: `${request.runId}:start`,
-      text: startWakeText(contract.taskId, request.runId, firstBudget),
+      text: startWakeText(contract.taskId, request.runId, startBudget),
     })
     await handle.agent.whenIdle()
   } catch (error) {
@@ -569,6 +554,7 @@ async function drivePreparedRun(
       : AGENT_ERROR_REASON
     agentErrorDetail = errorMessage(error)
   } finally {
+    deadline.removeEventListener('abort', cancel)
     if (handle !== undefined) {
       try {
         await request.ctx.sessions.flush(handle.agent.session)
@@ -622,6 +608,7 @@ async function resumeOrCreateAgent(
   workspace: string,
   setup: AgentSetup,
   service: CommandService,
+  signal: AbortSignal,
 ): Promise<{ readonly handle: AgentHandle; readonly action: 'created' | 'resumed' }> {
   const sessionId = request.sessionId as SessionId
   if (request.ctx.agents.get(sessionId) !== undefined
@@ -635,6 +622,7 @@ async function resumeOrCreateAgent(
     const handle = await request.ctx.agents.resume({
       resumeSessionId: sessionId,
       agentOptions: request.agentOptions,
+      signal,
       setup,
     })
     return { handle, action: 'resumed' }
@@ -646,6 +634,7 @@ async function resumeOrCreateAgent(
     sessionId,
     meta: { cwd: workspace },
     agentOptions: request.agentOptions,
+    signal,
     setup,
   })
   return { handle, action: 'created' }
@@ -662,8 +651,20 @@ function buildAgentSetup(
   runtime: RuntimeContext,
   request: ExecuteSingleRunRequest,
   controller: RunToolController,
+  budget: () => RemainingBudgetPct,
+  checkBudget: (tokens?: number, steps?: number) => boolean,
 ): AgentSetup {
   return (agentCtx, agent) => {
+    agentCtx.on('agent/request-error', () => Promise.resolve(undefined), { prepend: true })
+    agentCtx.on('agent/pre-step', async ({ modelSelection, signal }, next) => {
+      if (!checkBudget(0, 1)) return { kind: 'reject' }
+      const info = await agentCtx.llm.resolveModelInfo(modelSelection.provider, modelSelection.model, signal)
+      // Reserve the route's complete input + output capacity; estimates are not hard bounds.
+      const capacity = info.context?.contextWindow
+      if (!Number.isSafeInteger(capacity) || capacity === undefined || capacity <= 0
+        || !checkBudget(capacity, 1)) return { kind: 'reject' }
+      return next()
+    })
     agentCtx.systemPrompt.section({
       name: 'singularity:worker-card',
       order: 100,
@@ -675,7 +676,7 @@ function buildAgentSetup(
       order: 300,
       required: true,
       interpolate: false,
-      text: () => renderNodeView(buildNodeView(runtime, request, controller, agent)),
+      text: () => renderNodeView(buildNodeView(runtime, request, controller, budget(), checkBudget())),
     })
     controller.register(agentCtx, agent)
     const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
@@ -728,7 +729,6 @@ export async function completeSubmittedRun(
     clock,
     view.contract,
     view.contractRef,
-    view.composition,
     view.compositionRef,
     view.runOpened.at,
     request.workspace,
@@ -794,7 +794,6 @@ export async function closeOpenedRunInvalid(
     clock,
     view.contract,
     view.contractRef,
-    view.composition,
     view.compositionRef,
     view.runOpened.at,
     request.workspace,
@@ -843,7 +842,6 @@ export async function reconcileClosedRun(
     clock,
     view.contract,
     view.contractRef,
-    view.composition,
     view.compositionRef,
     view.runOpened.at,
     request.workspace,
@@ -1271,12 +1269,38 @@ function assertToolsAvailable(names: readonly string[], ctx: Context): void {
   }
 }
 
-function createToolController(
-  runtime: RuntimeContext,
+async function createToolController(
+  prepared: PreparedRun,
   request: ExecuteSingleRunRequest,
   service: CommandService,
-): RunToolController {
+) {
+  const { runtime, runOpened } = prepared
+  const state = await service.taskRunState(runtime.transientInvalidReasons)
+  const prior = usageCost([...state.runs.values()]
+    .flatMap(run => run.taskId === runtime.contract.taskId && run.closed?.usage !== undefined ? [run.closed.usage] : []))
+  const reservation = runOpened.data.budgetReservation
+  const limits = {
+    ...runtime.contract.limits,
+    maxTokens: Math.min(reservation.tokens, runtime.contract.limits.maxTokens - prior.tokens),
+    maxStepsPerRun: Math.min(reservation.steps, runtime.contract.limits.maxStepsPerRun),
+    deadlineAt: Math.min(reservation.deadlineAt, runtime.contract.limits.deadlineAt),
+  }
   let liveAgent: { readonly session: Session } | undefined
+  let lastNow = runtime.startedAt
+  let clockValid = true
+  const currentUsage = () => liveAgent === undefined ? zeroUsage : snapshotSession(liveAgent.session).usage
+  const checkBudget = (tokens = 0, steps = 0): boolean => {
+    const now = runtime.clock()
+    clockValid &&= Number.isSafeInteger(now) && now >= lastNow
+    lastNow = now
+    if (!clockValid || now >= limits.deadlineAt) return false
+    const usage = currentUsage()
+    const cost = usageCost([usage])
+    return !prior.unknown && !cost.unknown
+      && cost.tokens + tokens <= limits.maxTokens
+      && usage.steps + steps <= limits.maxStepsPerRun
+  }
+  const budget = () => computeBudget(limits, currentUsage(), runtime.startedAt, runtime.clock(), prior.unknown)
   const controller = new RunToolController({
     contract: runtime.contract,
     runId: request.runId,
@@ -1285,12 +1309,8 @@ function createToolController(
     writer: service,
     maxOutputBytes: runtime.maxOutputBytes,
     clock: runtime.clock,
-    budget: () => computeBudget(
-      runtime.contract,
-      liveAgent === undefined ? zeroUsage : snapshotSession(liveAgent.session).usage,
-      runtime.startedAt,
-      runtime.clock(),
-    ),
+    budget,
+    checkBudget,
     epoch: () => initialContextEpoch(request.sessionId),
     onAgent: agent => {
       liveAgent = agent
@@ -1304,7 +1324,8 @@ function createToolController(
       return frozen.manifestRef
     },
   })
-  return controller
+  return { controller, budget, checkBudget,
+    startBudget: computeBudget(limits, zeroUsage, runtime.startedAt, runtime.startedAt, prior.unknown) }
 }
 
 async function commitRunSubmitted(
@@ -1359,7 +1380,7 @@ async function settleSubmitted(
     verifier: runtime.verifier,
     reader: service,
     writer: service,
-  })
+  }, runtime.clock)
 
   if (verification.verdict !== 'invalid') {
     const evidence = buildEvidence({
@@ -1441,10 +1462,11 @@ async function settleExecutionRecord(
   let classification: 'failed' | 'invalid'
   let reason: string
   let recordReason: string
-  if (agentErrorCode !== undefined) {
+  if (agentErrorCode !== undefined || snapshot.failure !== undefined) {
     classification = 'invalid'
-    reason = agentErrorCode
-    recordReason = agentErrorDetail === undefined ? agentErrorCode : `${agentErrorCode}: ${agentErrorDetail}`
+    reason = agentErrorCode ?? AGENT_ERROR_REASON
+    const detail = agentErrorDetail ?? snapshot.failure
+    recordReason = detail === undefined ? reason : `${reason}: ${detail}`
   } else if (tools.stopped !== undefined) {
     classification = 'failed'
     reason = `stop:${tools.stopped.reason}: ${tools.stopped.message}`
@@ -1669,19 +1691,9 @@ export function retryDecisionForRun(
   const run = runFact.type === 'run/closed' ? state.runs.get(runFact.data.runId) : undefined
   const task = state.tasks.get(contract.taskId)
   if (run === undefined || task === undefined) return { allowed: false, reason: 'Run closure fact missing' }
-  let tokens = 0
-  let unknown = false
-  for (const attempt of state.runs.values()) {
-    const usage = attempt.closed?.usage
-    if (usage === undefined || state.tasks.get(attempt.taskId)?.rootTaskId !== task.rootTaskId) continue
-    tokens += usage.inputTokens + usage.outputTokens
-    if (usage.unknownRequests > 0) unknown = true
-    const summary = usage.summary
-    if (summary !== undefined) {
-      tokens += summary.inputTokens + summary.outputTokens
-      if (summary.unknownRequests > 0) unknown = true
-    }
-  }
+  const { tokens, unknown } = usageCost([...state.runs.values()]
+    .filter(attempt => state.tasks.get(attempt.taskId)?.rootTaskId === task.rootTaskId)
+    .flatMap(attempt => attempt.closed?.usage === undefined ? [] : [attempt.closed.usage]))
   return decideRetryPolicy(
     {
       runPhase: run.phase,
@@ -1702,13 +1714,12 @@ function buildNodeView(
   runtime: RuntimeContext,
   request: ExecuteSingleRunRequest,
   controller: RunToolController,
-  agent: { readonly session: Session },
+  budget: RemainingBudgetPct,
+  withinBudget: boolean,
 ): NodeView {
   const tools = controller.snapshot()
-  const usage = snapshotSession(agent.session).usage
   const asOf = runtime.clock()
-  const budget = computeBudget(runtime.contract, usage, runtime.startedAt, asOf)
-  const canSubmit = tools.readSelf
+  const canSubmit = withinBudget && tools.readSelf
     && tools.planningSketchRef !== undefined
     && !tools.submitted
     && tools.stopped === undefined
@@ -1717,6 +1728,7 @@ function buildNodeView(
   else if (tools.planningSketchRef === undefined) denialCodes.push('PLAN_FIRST')
   if (tools.submitted) denialCodes.push('ALREADY_SUBMITTED')
   if (tools.stopped !== undefined) denialCodes.push('RUN_CLOSED')
+  if (!withinBudget) denialCodes.push('LIMIT_EXCEEDED')
   return {
     v: 1,
     asOf,
@@ -1756,19 +1768,14 @@ function buildNodeView(
 }
 
 function computeBudget(
-  contract: TaskContract,
+  limits: TaskContract['limits'],
   usage: UsageRecord,
   startedAt: number,
   now: number,
+  priorUnknown = false,
 ): RemainingBudgetPct {
-  const limits = contract.limits
-  let used = usage.inputTokens + usage.outputTokens
-  let unknown = usage.unknownRequests > 0
-  if (usage.summary !== undefined) {
-    used += usage.summary.inputTokens + usage.summary.outputTokens
-    if (usage.summary.unknownRequests > 0) unknown = true
-  }
-  const tokensPct = unknown ? null : clampPercent(limits.maxTokens - used, limits.maxTokens)
+  const cost = usageCost([usage])
+  const tokensPct = priorUnknown || cost.unknown ? null : clampPercent(limits.maxTokens - cost.tokens, limits.maxTokens)
   const stepsPct = clampPercent(limits.maxStepsPerRun - usage.steps, limits.maxStepsPerRun)
   const wallClockPct = limits.deadlineAt <= startedAt
     ? 0
@@ -1778,31 +1785,49 @@ function computeBudget(
   return { tokensPct, stepsPct, wallClockPct, depthPct, taskSlotsPct }
 }
 
+function usageCost(records: readonly UsageRecord[]): { readonly tokens: number; readonly unknown: boolean } {
+  let tokens = 0
+  let unknown = false
+  for (const usage of records) {
+    tokens += usage.inputTokens + usage.outputTokens + (usage.summary?.inputTokens ?? 0) + (usage.summary?.outputTokens ?? 0)
+    unknown ||= usage.unknownRequests > 0 || (usage.summary?.unknownRequests ?? 0) > 0
+  }
+  return { tokens, unknown }
+}
+
 function snapshotSession(session: Session): SessionSnapshot {
   // eslint-disable-next-line @typescript-eslint/no-deprecated -- alpha2 exposes no replacement raw reader
   const events = session.snapshotEvents()
   let inputTokens = 0
   let outputTokens = 0
   let steps = 0
-  let knownUsageMessages = 0
-  let attempts = 0
+  let unknownRequests = 0
+  let failure: string | undefined
+  const pending = new Set<string>()
   for (const event of events) {
-    if (event.type === 'step/start') steps += 1
-    if (event.type === 'assistant/attempt') attempts += 1
-    if (event.type === 'assistant/message') {
-      if (event.data.usage === undefined) continue
-      inputTokens += event.data.usage.inputTokens
-      outputTokens += event.data.usage.outputTokens
-      knownUsageMessages += 1
+    if (event.type === 'turn/end' && event.data.reason.kind === 'error') failure = event.data.reason.error.message
+    if (event.type === 'step/start') pending.add(`${String(event.data.turn)}:${String(event.data.step)}`)
+    if (event.type !== 'assistant/attempt' && event.type !== 'assistant/message') continue
+    pending.delete(`${String(event.data.turn)}:${String(event.data.step)}`)
+    steps += 1
+    const usage = event.type === 'assistant/message' ? event.data.usage : undefined
+    // alpha2 pi-ai supplies zero counters when its endpoint omits usage.
+    const input = usage === undefined ? 0 : usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+    const output = usage?.outputTokens ?? 0
+    if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || input < 0 || output < 0 || input + output === 0) {
+      unknownRequests += 1
+      continue
     }
+    inputTokens += input
+    outputTokens += output
   }
-  const unknownRequests = Math.max(0, steps - knownUsageMessages) + attempts
   return {
+    ...(failure === undefined ? {} : { failure }),
     usage: {
       inputTokens,
       outputTokens,
-      steps,
-      unknownRequests,
+      steps: steps + pending.size,
+      unknownRequests: unknownRequests + pending.size,
     },
     sessionCut: {
       sessionId: String(session.id),

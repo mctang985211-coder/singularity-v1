@@ -94,6 +94,7 @@ export type RunVerification =
  */
 export async function verifyRunSubmission(
   input: RunVerificationInput,
+  clock: () => number = Date.now,
 ): Promise<RunVerification> {
   if (input.verifier.provider.id !== input.contract.acceptance.id
     || input.verifier.provider.digest !== input.contract.acceptance.digest) {
@@ -109,20 +110,34 @@ export async function verifyRunSubmission(
     .map(criterion => criterion.id)
 
   let receipt: PublicReceipt
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    receipt = await input.verifier.verify({
+    const startedAt = clock()
+    const remaining = input.contract.limits.deadlineAt - startedAt
+    if (!Number.isSafeInteger(remaining) || remaining <= 0) throw new DOMException('verifier deadline', 'TimeoutError')
+    receipt = await Promise.race([input.verifier.verify({
       operationId,
       task: input.contract,
       inputs: input.inputs,
       outputs: input.outputs,
       readObject: (ref, domain) => input.reader.readObject(ref, domain),
-    })
+    }), new Promise<PublicReceipt>((_resolve, reject) => {
+      timer = setTimeout(() => { reject(new DOMException('verifier deadline', 'TimeoutError')) },
+        Math.min(2_147_483_647, remaining))
+    })])
+    const finishedAt = clock()
+    if (!Number.isSafeInteger(finishedAt) || finishedAt < startedAt || finishedAt >= input.contract.limits.deadlineAt) {
+      throw new DOMException('verifier deadline', 'TimeoutError')
+    }
   } catch (error) {
+    const code = error instanceof DOMException && error.name === 'TimeoutError' ? VERIFIER_TIMEOUT_REASON : VERIFIER_ERROR_REASON
     return {
       verdict: 'invalid',
-      code: 'verifier-error',
-      reason: `${VERIFIER_ERROR_REASON}: ${errorMessage(error)}`,
+      code,
+      reason: `${code}: ${errorMessage(error)}`,
     }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
 
   const validation = validatePublicReceipt(receipt, {

@@ -89,6 +89,8 @@ interface WireRequest {
 }
 
 interface ScriptedReply {
+  readonly hang?: true
+  readonly httpError?: true
   readonly reasoning?: string
   readonly content?: string
   readonly toolCalls?: readonly {
@@ -253,6 +255,15 @@ async function startDynamicChatFixture(script: ReplyScript): Promise<DynamicChat
       const index = requests.length
       requests.push(parsed)
       const reply = script(parsed, index)
+      if (reply.httpError) {
+        response.writeHead(500).end('{"error":{"message":"fixture failure"}}')
+        return
+      }
+      if (reply.hang) {
+        const timer = setTimeout(() => { response.destroy() }, 4000)
+        response.once('close', () => { clearTimeout(timer) })
+        return
+      }
       const model = typeof parsed.model === 'string' ? parsed.model : 'deepseek-v4.1-flash'
       const id = `chatcmpl-s3b2-${String(index + 1)}`
       response.writeHead(200, {
@@ -313,7 +324,11 @@ function fixtureUsage(index: number): NonNullable<ScriptedReply['usage']> {
 
 async function makeScenario(
   storeRoot: string,
-  options: { readonly taskId: string },
+  options: {
+    readonly taskId: string
+    readonly limits?: Partial<TaskContract['limits']>
+    readonly reservation?: Partial<SingleRunAdmission['budgetReservation']>
+  },
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
   try {
@@ -413,6 +428,7 @@ async function makeScenario(
         maxDepth: 1,
         maxTasks: 1,
         maxBatchChildren: 1,
+        ...options.limits,
       },
     }
 
@@ -437,9 +453,10 @@ async function makeScenario(
       contract,
       attempt: 1,
       budgetReservation: {
-        tokens: 100_000,
+        tokens: contract.limits.maxTokens,
         steps: 10,
         deadlineAt: contract.limits.deadlineAt,
+        ...options.reservation,
       },
       acceptanceBytes: jsonBytes(verifierObject),
       workspaceSeedBytes: jsonBytes({ v: 1, seed: 's3b2-seed' }),
@@ -789,7 +806,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
     liveApiKey?: string,
   ): Promise<void> => {
     const { spike, workspace, home, storeRoot } = harness
-    scenario = await makeScenario(storeRoot, { taskId })
+    scenario = await makeScenario(storeRoot, { taskId, reservation: { steps: 4 } })
     const activeScenario = scenario
     const verifier: RunVerifier = {
       provider: activeScenario.provider,
@@ -1055,6 +1072,103 @@ void test('single Run verified: self-read, plan, native bash output, independent
       await runVerified(harness, false)
     })
   }
+})
+
+void test('single Run stops purchasing at host budget boundaries', { timeout: 240_000 }, async t => {
+  const boundaries = ['steps', 'tokens', 'cache', 'reservation', 'unknown', 'deadline', 'rollback'] as const
+  let boundary: (typeof boundaries)[number] = 'steps'
+  let now = Date.now()
+  let deadline = now + 60_000
+  let firstRequest = 0
+  await withHarness((_request, index) => {
+    if (index > firstRequest) return { content: 'This request should have been refused.', usage: fixtureUsage(index) }
+    if (boundary === 'deadline') now = deadline
+    if (boundary === 'rollback') now -= 1
+    return {
+      toolCalls: [{ id: `read-${String(index)}`, name: 'singularity_read', arguments: '{"kind":"self"}' }],
+      ...(boundary === 'unknown' ? {} : { usage: boundary === 'cache'
+        ? { promptTokens: 256_001, completionTokens: 8, totalTokens: 256_009, cachedTokens: 256_000 }
+        : fixtureUsage(index) }),
+    }
+  }, async ({ spike, fixture, workspace, storeRoot }) => {
+    for (const current of boundaries) {
+      boundary = current
+      now = Date.now()
+      deadline = now + 60_000
+      firstRequest = fixture.requests.length
+      await t.test(boundary, async () => {
+        const taskId = `budget-${boundary}-${String(now)}`
+        const journalRoot = join(storeRoot, boundary)
+        const scenario = await makeScenario(journalRoot, {
+          taskId,
+          limits: { deadlineAt: deadline },
+          reservation: {
+            ...(boundary === 'steps' ? { steps: 1 } : {}),
+            ...(boundary === 'tokens' ? { tokens: 256_000 } : {}),
+            ...(boundary === 'cache' ? { tokens: 512_000 } : {}),
+            ...(boundary === 'reservation' ? { tokens: 255_999 } : {}),
+          },
+        })
+        const result = await executeSingleRun({
+          ctx: spike.ctx, journalRoot, workspace: join(workspace, boundary),
+          sessionId: `${taskId}:session`, runId: `${taskId}:run`,
+          admission: scenario.runAdmission, composition: scenario.composition,
+          agentOptions: agentOptions(), maxOutputBytes: 1024,
+          clock: () => now,
+          verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+        })
+        assert.equal(fixture.requests.length - firstRequest, boundary === 'reservation' ? 0 : 1)
+        assert.equal(result.evidence, undefined)
+        assert.ok(result.executionRecord)
+        if (boundary === 'unknown') assert.equal(result.usage.unknownRequests, 1)
+      })
+    }
+  })
+})
+
+void test('single Run deadline cancels an in-flight DSH request', { timeout: 20_000 }, async () => {
+  await withHarness(() => ({ hang: true }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const taskId = `budget-hang-${String(Date.now())}`
+    const scenario = await makeScenario(storeRoot, { taskId, limits: { deadlineAt: Date.now() + 1500 } })
+    const started = Date.now()
+    const result = await executeSingleRun({
+      ctx: spike.ctx, journalRoot: storeRoot, workspace,
+      sessionId: `${taskId}:session`, runId: `${taskId}:run`,
+      admission: scenario.runAdmission, composition: scenario.composition,
+      agentOptions: agentOptions(), maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+    })
+    assert.equal(fixture.requests.length, 1)
+    assert.ok(Date.now() - started < 3000, 'deadline must abort the request before the fixture gives up')
+    assert.equal(result.evidence, undefined)
+    assert.ok(result.executionRecord)
+    assert.equal(result.usage.unknownRequests, 1)
+    assert.equal(spike.ctx.agents.get(result.sessionId as never), undefined)
+  })
+})
+
+void test('unknown failed request cannot buy an internal DSH retry', { timeout: 20_000 }, async () => {
+  await withHarness(() => ({ httpError: true }), async ({ spike, fixture, workspace, storeRoot }) => {
+    const taskId = `budget-retry-${String(Date.now())}`
+    const scenario = await makeScenario(storeRoot, { taskId })
+    let retries = 0
+    spike.ctx.on('agent/request-error', () => {
+      retries += 1
+      return Promise.resolve(retries < 2 ? { kind: 'retry' as const } : undefined)
+    })
+    const result = await executeSingleRun({
+      ctx: spike.ctx, journalRoot: storeRoot, workspace,
+      sessionId: `${taskId}:session`, runId: `${taskId}:run`,
+      admission: scenario.runAdmission, composition: scenario.composition,
+      agentOptions: agentOptions(), maxOutputBytes: 1024,
+      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+    })
+    assert.equal(fixture.requests.length, 1)
+    assert.equal(retries, 0)
+    assert.equal(result.usage.steps, 1)
+    assert.equal(result.usage.unknownRequests, 1)
+    assert.equal(result.classification, 'invalid')
+  })
 })
 
 void test('single Run no-submission settles failed ExecutionRecord without a receipt', { timeout: 240_000 }, async () => {
