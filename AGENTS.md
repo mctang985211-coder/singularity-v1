@@ -41,7 +41,7 @@
 | `runtime/src/recovery.ts` | retry/resume 宿主入口、固定 retry policy、fresh workspace 检查 | 调用 recovery-execution |
 | `runtime/src/tools.ts` | DSH scoped Task tools 与共享 dispatch guard | 由 Run setup 注册 |
 | `runtime/src/prompt.ts` | 固定 cards、NodeView 类型与模型可见预算展示 | 由 Run/agent composition 调用 |
-| `runtime/src/resources.ts` | Method 冻结资源解析与授权视图 | **planned（S4+；当前树中尚不存在）**，由未来 agent composition 调用 |
+| `runtime/src/resources.ts` | Method/template/guidance 冻结资源解析与授权视图、structured digest、own guidance 8 KiB、Composition resource equality 与 platform prompt 校验 | 由 run/recovery/agent 调用；app 通过 host 组合注入 `PLATFORM_PROMPT_SERVICE` renderer |
 | `runtime/src/workspace.ts` | workspace 准备、no-follow 遍历、输出冻结 | 由 Run 提交路径调用 |
 | `runtime/src/verification.ts` | 独立 verifier、receipt 校验、Evidence/ExecutionRecord 值构建 | 由 run-settlement 结算调用 |
 | `runtime/src/round.ts` | 固定 RsiRound procedure | **planned（S5/S6+；当前树中尚不存在）**，由未来 trace/proposer/evaluation 切片调用 |

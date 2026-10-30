@@ -8,6 +8,14 @@ import type { SessionCut, UsageRecord } from '@singularity/protocol'
 import { SingleRunError } from './errors.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
 import { assertPromptBudget, renderWorkerCard } from './prompt.ts'
+import {
+  METHOD_GUIDANCE_ORDER,
+  METHOD_GUIDANCE_SECTION,
+  MethodResourceError,
+  PLATFORM_PROMPT_SERVICE,
+  assertPlatformPrompt,
+} from './resources.ts'
+import type { PlatformPromptRenderer } from './resources.ts'
 import type { CommandService } from './service.ts'
 import type { RunToolController } from './tools.ts'
 import type { ExecuteSingleRunRequest, PreparedRun } from './run.ts'
@@ -29,7 +37,7 @@ export interface AgentDriveResult {
   readonly agentErrorCode?: string
   readonly agentErrorDetail?: string
   readonly drainPending: boolean
-  readonly sessionAction: 'created' | 'resumed'
+  readonly sessionAction: 'created' | 'none' | 'resumed'
   readonly wakeOutcome?: WakeDeliveryOutcome
 }
 
@@ -62,7 +70,7 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
   let agentErrorCode: string | undefined
   let agentErrorDetail: string | undefined
   let drainPending = false
-  let sessionAction: 'created' | 'resumed' = 'created'
+  let sessionAction: 'created' | 'none' | 'resumed' = 'none'
   let wakeOutcome: WakeDeliveryOutcome | undefined
   const remaining = () => prepared.runOpened.data.budgetReservation.deadlineAt - runtime.clock()
   const initialRemaining = remaining()
@@ -110,7 +118,7 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
   } catch (error) {
     agentErrorCode = error instanceof WakeDeliveryRefusedError
       ? WAKE_REFUSED_REASON
-      : AGENT_ERROR_REASON
+      : error instanceof MethodResourceError ? error.code : AGENT_ERROR_REASON
     agentErrorDetail = errorMessage(error)
   } finally {
     options.stopBudget()
@@ -240,7 +248,7 @@ function isSessionNotFoundError(error: unknown): boolean {
 function buildAgentSetup(options: DriveAgentOptions): AgentSetup {
   const { prepared, request, controller } = options
   const { runtime } = prepared
-  return (agentCtx, agent) => {
+  return async (agentCtx, agent) => {
     agentCtx.on('agent/request-error', () => Promise.resolve(undefined), { prepend: true })
     agentCtx.on('agent/pre-step', async ({ modelSelection, signal }, next) => {
       if (!options.checkBudget(0, 1)) return { kind: 'reject' }
@@ -257,6 +265,12 @@ function buildAgentSetup(options: DriveAgentOptions): AgentSetup {
       text: renderWorkerCard(false),
       interpolate: false,
     })
+    agentCtx.systemPrompt.section({
+      name: METHOD_GUIDANCE_SECTION,
+      order: METHOD_GUIDANCE_ORDER,
+      text: prepared.methodResources.guidanceText,
+      interpolate: false,
+    })
     agentCtx.systemPrompt.context({
       name: 'singularity:node-view',
       order: 300,
@@ -264,6 +278,18 @@ function buildAgentSetup(options: DriveAgentOptions): AgentSetup {
       interpolate: false,
       text: options.renderView,
     })
+    const renderer: unknown = request.ctx.get(PLATFORM_PROMPT_SERVICE, false)
+    if (!isPlatformPromptRenderer(renderer)) {
+      throw new MethodResourceError(
+        'composition',
+        'COMPOSITION_MISMATCH',
+        'host did not provide the scoped platform prompt renderer',
+      )
+    }
+    assertPlatformPrompt(
+      await renderer.render(agentCtx, agent),
+      request.composition.platformPrompt,
+    )
     controller.register(agentCtx, agent)
     const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
     if (runtime.baseToolNames.length > 0) {
@@ -322,6 +348,13 @@ function emptySnapshot(sessionId: string): SessionSnapshot {
     usage: { ...zeroUsage },
     sessionCut: { sessionId, from: 0, to: 0 },
   }
+}
+
+function isPlatformPromptRenderer(value: unknown): value is PlatformPromptRenderer {
+  return typeof value === 'object'
+    && value !== null
+    && 'render' in value
+    && typeof (value as { readonly render?: unknown }).render === 'function'
 }
 
 function errorMessage(error: unknown): string {

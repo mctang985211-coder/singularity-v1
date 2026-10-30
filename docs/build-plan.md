@@ -76,6 +76,7 @@
 ## S4 — Method、分解、replacement 与祖先反馈
 
 - **启动派发**：[S4–S7 整体启动 prompt](tasks/s4-s7-start-prompt.md)；[S4 专项说明](tasks/s4-start-prompt.md)提供细化协议要点。
+- **S4-A1 出口证据（2026-10-31）**：Method revision pin + 当前层 guidance 已完成。host 从同一冻结 `MethodRevision` 派生 template/guidance 并写入 Composition；create/resume 在 Agent/verifier/新请求前复验 Method、template、guidance 与 Composition，Agent setup 通过 app 注入的 `PLATFORM_PROMPT_SERVICE` renderer 复验实际 scoped `platformPrompt`。负例覆盖错误 pin、悬空 template、structured digest/non-canonical/tamper、缺失对象、非 UTF-8/错误文本对象、8 KiB（含多字节）边界、skill/MCP/exploration 拒绝与 resume invalid closure；真实 DSH + chat fixture 覆盖 create 首请求、resume setup 重装配、持久历史前缀与零新请求。根 `pnpm verify`：protocol `225/225`、runtime `120/120`、app `37/37`（合计 `382`），`git diff --check` 通过。证据等级为仓库/协议负例 + 真实 DSH fixture，未购买真实模型请求；C-12 保持既有真实模型 `proven`，C-01/C-20 仅局部回归且不升级 conformance。下一依赖：S4-A 的 skill 装配，之后接原生 MCP server；child/ancestor/summary 仍在后续切片。详见 [S4-A1 任务卡](tasks/s4-a1-method-guidance.md)。
 - **规范引用**：§4–§8、§12–§14。
 - **工作**：实现 Method pin、资源绑定、PlanningSketch、preview/commit、required/probe obligation、replacement、direct-parent feedback、Contract Summary 和只读祖先查询。
 - **Done when**：C-04–C-09、C-21、C-22 通过；旧合同与 Evidence 不可变；每个 required binding 的 winner/supersession/retry 语义一致；summary usage 归属可核对。

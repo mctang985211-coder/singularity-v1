@@ -38,6 +38,11 @@ import type { OpenedRunMode, SessionSnapshot } from './agent.ts'
 import { initialContextEpoch } from './epoch.ts'
 import { SingleRunError } from './errors.ts'
 import {
+  MethodResourceError,
+  assertCompositionResources,
+  loadMethodResources,
+} from './resources.ts'
+import {
   assertToolsAvailable,
   buildPreparedRun,
   buildRuntimeContext,
@@ -96,7 +101,18 @@ export async function continueOpenedRun(
   const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
   const clock = request.clock ?? Date.now
   validateRequest(request, actor, clock)
-  const prepared = await loadPreparedRun(request, actor, clock, service)
+  let prepared: Awaited<ReturnType<typeof loadPreparedRun>>
+  try {
+    prepared = await loadPreparedRun(request, actor, clock, service)
+  } catch (error) {
+    if (!(error instanceof MethodResourceError)) throw error
+    const result = await closeOpenedRunInvalid(
+      request,
+      service,
+      `resource-invalid: ${error.message}`,
+    )
+    return { ...result, sessionAction: 'none' }
+  }
   return drivePreparedRun(prepared, request, service, mode)
 }
 
@@ -138,7 +154,10 @@ async function loadPreparedRun(
       'actual composition does not equal the frozen run/opened Composition',
     )
   }
-  validateComposition(compositionPayloadOf(view.composition), contract)
+  const compositionPayload = compositionPayloadOf(view.composition)
+  validateComposition(compositionPayload, contract)
+  const methodResources = await loadMethodResources(service, contract)
+  await assertCompositionResources(service, methodResources, compositionPayload)
   const workspace = resolve(request.workspace)
   const baseToolNames = await resolveBaseToolNames(contract, service)
   assertToolsAvailable(baseToolNames, request.ctx)
@@ -149,6 +168,7 @@ async function loadPreparedRun(
     compositionRef: view.compositionRef,
     runOpened: view.runOpened,
     workspace,
+    methodResources,
     baseToolNames,
     lastAttempt: lastAttemptFromState(view.state, view.taskId, request.runId),
     request,
@@ -183,7 +203,7 @@ export async function completeSubmittedRun(
       'actual composition does not equal the frozen run/opened Composition',
     )
   }
-  validateComposition(compositionPayloadOf(view.composition), view.contract)
+  const compositionPayload = compositionPayloadOf(view.composition)
 
   const runtime = buildRuntimeContext(
     request,
@@ -197,22 +217,38 @@ export async function completeSubmittedRun(
     lastAttemptFromState(view.state, view.taskId, request.runId),
   )
   const snapshot = recoverSessionSnapshot(request, submitted.data.transcriptOffset)
-  let settlement: Settlement
+  let settlement: Settlement | undefined
   try {
-    const frozen = await loadFrozenSubmission(service, view.contract, submitted)
-    settlement = await settleSubmitted(runtime, request, service, snapshot, {
-      planningSketchRef: submitted.data.planningSketchRef,
-      submission: frozen,
-      contextEpoch: initialContextEpoch(request.sessionId),
-    })
+    validateComposition(compositionPayload, view.contract)
+    const methodResources = await loadMethodResources(service, view.contract)
+    await assertCompositionResources(service, methodResources, compositionPayload)
   } catch (error) {
+    if (!(error instanceof MethodResourceError)) throw error
     settlement = await settleInvalidRecord(
       runtime,
       request,
       service,
       snapshot,
-      `submission-invalid: ${errorMessage(error)}`,
+      `resource-invalid: ${error.message}`,
     )
+  }
+  if (settlement === undefined) {
+    try {
+      const frozen = await loadFrozenSubmission(service, view.contract, submitted)
+      settlement = await settleSubmitted(runtime, request, service, snapshot, {
+        planningSketchRef: submitted.data.planningSketchRef,
+        submission: frozen,
+        contextEpoch: initialContextEpoch(request.sessionId),
+      })
+    } catch (error) {
+      settlement = await settleInvalidRecord(
+        runtime,
+        request,
+        service,
+        snapshot,
+        `submission-invalid: ${errorMessage(error)}`,
+      )
+    }
   }
   const { taskFact, retry } = await finalizeSettlement(runtime, request, service, settlement)
   return buildExecutionResult(

@@ -12,6 +12,13 @@ export type {
 } from './run.ts'
 export * from './recovery.ts'
 export * from './prompt.ts'
+export {
+  METHOD_GUIDANCE_ORDER,
+  METHOD_GUIDANCE_SECTION,
+  PLATFORM_PROMPT_SERVICE,
+  assertCompositionResources,
+  loadMethodResources,
+} from './resources.ts'
 export * from './tools.ts'
 export * from './workspace.ts'
 export * from './verification.ts'
