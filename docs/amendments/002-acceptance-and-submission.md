@@ -1,13 +1,14 @@
-# Amendment 002：Acceptance receipt 与 submission manifest（最终候选）
+# Amendment 002：Acceptance receipt 与 submission manifest（已批准并纳入）
 
-- **状态：最终候选，待用户一次性确认；未批准、未纳入正式规范、未实现。**
+- **状态：已批准；A0–A9 已纳入 `docs/framework.md`、`spec-lock.json`、`docs/conformance.md`、`docs/build-plan.md` 与 `README.md`；实现与 conformance 证据仍待后续。**
 - **日期：** 2026-10-30
-- **基线：** `main` @ `bf79e3a7fec560ab91d62de867c2d41d22f0de7a`；`docs/framework.md` V1 发布规范 1.0；`spec-lock.json` `sha256:6f4a57e7987c8def2b5e12504fb8a6e2599968161f94115a473b8b98ed29fd91`。
-- **本文件性质：** 将原 Q1–Q11 收敛为一个推荐包的最终候选。只记录验收 receipt、提交 manifest、校验规则、证据边界和兼容性；不实现代码，不把推荐字段写成已批准事实。
-- **未修改：** 本变更只修改 `docs/amendments/002-acceptance-and-submission.md` 与 `docs/tasks/s3-acceptance-amendment.md`；不修改 `docs/framework.md`、`spec-lock.json`、`docs/conformance.md`、`docs/build-plan.md`、`README.md` 或任何源码。
+- **提出基线：** `main` @ `bf79e3a7fec560ab91d62de867c2d41d22f0de7a`；`docs/framework.md` V1 发布规范 1.0；`spec-lock.json` `sha256:6f4a57e7987c8def2b5e12504fb8a6e2599968161f94115a473b8b98ed29fd91`。
+- **纳入基线：** `s3-b1-acceptance-schema` @ `7734cc9`；纳入后 `spec-lock.json` `sha256:5f33aa339f21496c375de637ef447656fc66d98d3054a5b6e0a1d3c8dc612b6f`。
+- **本文件性质：** 记录用户已批准的 A0–A9 语义、理由、兼容性、证据边界和批准记录；正式规范以 `docs/framework.md` §4.0、§4.3、§9.2、§11.4–§11.5、§15.3、§19.1、§20 为准。
+- **本次变更：** 同一 docs 变更更新 `docs/framework.md`、`spec-lock.json`、本 amendment、`docs/conformance.md`、`docs/build-plan.md` 与 `README.md`；不修改任何源码，不代表 schema/runtime 已实现。
 - **非目标：** 不新增 authority、fact、digest domain、writer、fold、registry、transcript mirror、model loop、验收所有者或第二账本；不改变 DSH/Node/MCP transport、生产权限、模型可见性或 retry/join/取消语义；不宣称 C-02/C-03/C-11 已验证。
 
-> 本文的 A0–A9 与第 9 节推荐表是一个整体包。用户只需决定“批准/不批准该推荐包”；在明确批准并完成正式规范、`spec-lock.json`、conformance 及 README/build-plan 的同步变更前，不得用这些字段实现 `PublicReceipt`/`SubmissionManifest`，也不得把任何 conformance 场景改为 `proven`。
+> 用户于 2026-10-30 回复：“全部确定，以后不需要向我确认任何事，自行推进”，批准 A0–A9 整体包。批准冻结语义；`PublicReceipt`/`SubmissionManifest` 的实现、测试、真实 DSH/模型/领域验收证据和任何 conformance 状态升级仍须后续变更独立完成。
 
 ## 1. 规范条目与缺口
 
@@ -28,18 +29,18 @@
 
 | # | 场景 | 失败方式 |
 |---:|---|---|
-| 1 | verifier 进程 exit=0，但 receipt 没有 criteria 或缺少一条 required criterion | 若 host 用 exit code 判定，Run 被错误标为 `verified`；推荐包必须拒绝为 `invalid` |
-| 2 | verifier 进程 exit=0，但 receipt 的 required criterion 为 `fail` | exit=0 不能覆盖领域失败；推荐包必须为 `failed`，不能为 `verified` |
-| 3 | 所有 required criterion 为 `pass`，但 verifier 超时、被信号终止或 exit code 非 0 | 不能为 `verified`；推荐包按 `invalid` 结算，timeout 不得伪造成 signal |
-| 4 | score 为 `NaN`/`Infinity`、metric 缺 unit、`invalid` criterion 携带分数、或出现非 required criterion | 若用自由 JSON，会被接受并进入比较；推荐包必须拒绝 receipt 或按 `invalid` 结算 |
-| 5 | receipt 的 provider/operationId/contract/input/output digest 与当前 submission 不一致 | 别的 Run 的 receipt 被复用；推荐包必须按 `invalid` 拒绝，不能补写 closure |
+| 1 | verifier 进程 exit=0，但 receipt 没有 criteria 或缺少一条 required criterion | 若 host 用 exit code 判定，Run 被错误标为 `verified`；批准包必须拒绝为 `invalid` |
+| 2 | verifier 进程 exit=0，但 receipt 的 required criterion 为 `fail` | exit=0 不能覆盖领域失败；批准包必须为 `failed`，不能为 `verified` |
+| 3 | 所有 required criterion 为 `pass`，但 verifier 超时、被信号终止或 exit code 非 0 | 不能为 `verified`；批准包按 `invalid` 结算，timeout 不得伪造成 signal |
+| 4 | score 为 `NaN`/`Infinity`、metric 缺 unit、`invalid` criterion 携带分数、或出现非 required criterion | 若用自由 JSON，会被接受并进入比较；批准包必须拒绝 receipt 或按 `invalid` 结算 |
+| 5 | receipt 的 provider/operationId/contract/input/output digest 与当前 submission 不一致 | 别的 Run 的 receipt 被复用；批准包必须按 `invalid` 拒绝，不能补写 closure |
 | 6 | 两个 host 对同一 logical outputs 采用不同顺序或不同 path 表示 | 产生不同 manifest digest，`run/submitted.outputs` 身份不一致；C-11 幂等/恢复分叉 |
-| 7 | required output 缺失、path 是 symlink、tree 内含 symlink 或超出部署 size cap | 若只 hash 跟随后的 bytes，可能冻结 workspace 外内容或不可复现内容；推荐包必须在 manifest/fact 前拒绝 submit |
+| 7 | required output 缺失、path 是 symlink、tree 内含 symlink 或超出部署 size cap | 若只 hash 跟随后的 bytes，可能冻结 workspace 外内容或不可复现内容；批准包必须在 manifest/fact 前拒绝 submit |
 | 8 | no-submission/stop 的 Run 被伪造一个 receipt 以统一数据外观 | 违反 §9.2：没有提交的 failed Run 可以有 ExecutionRecord，但没有 acceptance receipt；C-03 失败 |
 | 9 | public receipt 的 reason/metric 含隐藏用例答案、fixture 路径或 private verifier recipe | private 数据泄漏给 worker/RSI；C-14/C-18 的隔离边界被破坏 |
 | 10 | 同一 commandId 重放 submit 时重新冻结/重新验证并生成不同 manifest/receipt | 同命令产生第二结果，违反一 command 一 fact 与 C-11 幂等 |
-| 11 | verifier 超时被写成 `signal='timeout'` 或 `code=-1` | timeout 与真实进程退出/信号混淆，无法区分基础设施 invalid 和领域 failed；推荐包要求独立 `timedOut` |
-| 12 | `Evidence.inputs` 记录 direct child outputs，但 verifier 只收到初始 inputs | 验收与证据看到不同 snapshot；推荐包要求两者由同一授权输入 snapshot 派生 |
+| 11 | verifier 超时被写成 `signal='timeout'` 或 `code=-1` | timeout 与真实进程退出/信号混淆，无法区分基础设施 invalid 和领域 failed；批准包要求独立 `timedOut` |
+| 12 | `Evidence.inputs` 记录 direct child outputs，但 verifier 只收到初始 inputs | 验收与证据看到不同 snapshot；批准包要求两者由同一授权输入 snapshot 派生 |
 
 ## 3. 为什么现有扩展点不足
 
@@ -52,11 +53,11 @@
 - **不能把 manifest 简化为路径列表**：路径不证明冻结内容、排序、kind/role/required，也不证明 required output 存在；C-02 无法验证提交快照。
 - **不能把 verifier 自报的总 verdict 当作权威**：`verified`/`failed`/`invalid` 必须由 host 根据 strict receipt、冻结合同、`timedOut` 和 raw exit status 派生；否则模型/verifier 可以通过缺 criterion 或 exit=0 弱化验收。
 
-## 4. 推荐包（待批准）
+## 4. 批准包（已批准并纳入）
 
 ### A0. `AcceptanceRef` = `object` domain
 
-推荐：
+已批准的冻结语义：
 
 - `TaskContract.acceptance: AcceptanceRef` 的线形保持 `{ id, digest }` 不变。
 - 在 §4.0 的 ref 映射中把 `AcceptanceRef`（`contract.acceptance`、`DomainAdapter.resolveAcceptance` 的返回）映射到 **`object` domain**；对象是冻结的 acceptance policy/provider identity。
@@ -103,10 +104,10 @@ interface PublicExitStatus {
 
 1. `v` 只允许 `1`；未知字段、未知版本、缺字段拒绝。
 2. `provider` 使用 `object` domain，且与 A0 解析出的 acceptance provider、`Evidence.verification.provider` 完全相等。
-3. `operationId` 非空，必须等于 verifier request 的 operationId 和 `Evidence.verification.operationId`；推荐值 `runId + ':verify'`。同一 Run 的恢复/重放不得重新生成；新 Run 使用新的 `runId + ':verify'`。
+3. `operationId` 非空，必须等于 verifier request 的 operationId 和 `Evidence.verification.operationId`；批准值 `runId + ':verify'`。同一 Run 的恢复/重放不得重新生成；新 Run 使用新的 `runId + ':verify'`。
 4. `contractDigest` 必须等于冻结 `TaskContract.digest` 和 `Evidence.contractDigest`。
 5. `inputDigests` 是 verifier 授权输入 `ObjectRef` 的 digest 有序数组；必须与 `Evidence.inputs[].digest` 逐位相等。verifier 授权输入包含冻结合同输入和已授权的 direct child outputs；`Evidence.inputs` 必须由同一 snapshot 派生，不得额外加入未给 verifier 的审计输入。`outputDigests` 是从 `SubmissionManifest` 派生给 verifier 的冻结输出 `ObjectRef` 的 digest 有序数组，必须与 `Evidence.outputs[].digest` 逐位相等。不排序、不去重、不补默认值。
-6. `criteria` 的 ID 集合必须恰好等于 `TaskSpec.criteria` 中 `required=true` 的 ID 集合；每条恰好一次；缺项、重复、未知 ID、非 required criterion 均拒绝。空 required set 是否允许准入由既有 admission policy 决定；本推荐包不新增“空 criterion 自动 verified”的放宽。
+6. `criteria` 的 ID 集合必须恰好等于 `TaskSpec.criteria` 中 `required=true` 的 ID 集合；每条恰好一次；缺项、重复、未知 ID、非 required criterion 均拒绝。空 required set 是否允许准入由既有 admission policy 决定；本 amendment 不新增“空 criterion 自动 verified”的放宽。
 7. `reason` 对所有 verdict 必填且必须是公开可读文本；不得包含隐藏用例答案、fixture 内部路径、golden data 或 private verifier recipe。
 8. `metric`/`score` 只允许出现在 `pass`/`fail` criterion；`invalid` criterion 不得携带 `metric` 或 `score`。`metric.name`/`metric.unit` 非空，`metric.value` 与 `score` 必须是有限 number（拒绝 `NaN`、`Infinity`、字符串和超出 JSON 数值模型的输入）。`score` 必须同时出现 `metric`。
 9. `exit` 是原始进程终止状态：`code` 为整数或 `null`，`signal` 为字符串或 `null`；对实际产生终止状态且未超时的进程，恰好一个非 `null`。`signal` 只记录真实 signal，不能用来表达 timeout。两者都为 `null` 且 `timedOut=false` 使 receipt 无效。
@@ -199,7 +200,7 @@ Host 在写 manifest 和 `run/submitted` 之前必须完成：
 
 1. 声明的 `path` 必须是 workspace 内相对路径，规范化后不得为绝对路径、不得含 `..`、不得命中保留 draft ID/path。
 2. 对 `file` 使用 no-follow `lstat`，必须是普通文件；对 `tree` 递归 no-follow 遍历，拒绝 symlink、socket、device、FIFO 等非普通文件/目录节点。hardlink 是否拒绝由部署 policy 决定，不由 manifest digest 证明。
-3. 按部署 policy 检查 size cap；框架当前没有冻结 output size 上限，本推荐包不新增协议级 limit，也不在 manifest 中写 cap/policy。`checks.bytes` 只记录冻结时观测到的总 bytes。
+3. 按部署 policy 检查 size cap；框架当前没有冻结 output size 上限，本 amendment 不新增协议级 limit，也不在 manifest 中写 cap/policy。`checks.bytes` 只记录冻结时观测到的总 bytes。
 4. 先在 workspace 中检查，再把 bytes 写入 CAS，重读并校验 object digest；manifest 只在所有 required 输出成功冻结后写入。
 5. 冻结后 verifier 只读 CAS，不回读活动 workspace；因此 workspace 在冻结后的变化不能改变本次 submission。
 
@@ -207,12 +208,12 @@ Host 在写 manifest 和 `run/submitted` 之前必须完成：
 
 - manifest digest 能证明 manifest 内容（包括 `checks`、refs、声明顺序）未被篡改，也能通过 object ref 重验冻结 bytes。
 - `checks.symlinks='none'` 和 `bytes` 是 **host 写入的断言**，不是密码学证明；digest 不能证明 host 真的执行了正确遍历，也不能证明 traversal 与 freeze 之间没有 TOCTOU。可信度来自单一 trusted writer 和冻结前检查，不来自哈希本身。
-- 推荐包把检查结果放进 manifest 的 required `checks`，不另立 check receipt/账本。若未来需要独立检查 receipt，必须另提 amendment；当前把它作为替代实现会与推荐包不兼容。
+- 批准包把检查结果放进 manifest 的 required `checks`，不另立 check receipt/账本。若未来需要独立检查 receipt，必须另提 amendment；当前把它作为替代实现会与批准包不兼容。
 - 缺失 required output、symlink、越界 path 或 size 超限必须在 manifest/fact 之前拒绝 submit；已写入但未被 fact 引用的 CAS 对象是 orphan，不是业务成功。
 
 ### A6. Object / evidence digest domain
 
-| 对象或字段 | 推荐 domain | 规则 |
+| 对象或字段 | 批准 domain | 规则 |
 |---|---|---|
 | `AcceptanceRef`（`contract.acceptance`） | `object` | A0；与 `AssetRef` 一致，不新增 domain |
 | `PublicReceipt.digest` | `object` | receipt 是 CAS 数据对象，不是 Evidence |
@@ -233,7 +234,7 @@ Host 在写 manifest 和 `run/submitted` 之前必须完成：
 
 - `privateReceipt` 只作为 `Evidence.verification.privateReceipt?: ObjectRef` 存在；不进入 `PublicReceipt`、`SubmissionManifest`、fact、NodeView、ProposerView、模型输出、feedback refs 或 submit 结果。
 - `PublicReceipt.reason`/`metric`/`score` 必须是公开安全内容；隐藏用例、答案、golden data、private fixture 路径和 private verifier recipe 只能留在 private receipt 或受权 evaluator/verifier scope。
-- `privateReceipt` 保持 opaque CAS object，本推荐包不冻结其 schema；若以后需要跨实现校验，另提 amendment。
+- `privateReceipt` 保持 opaque CAS object，本 amendment 不冻结其 schema；若以后需要跨实现校验，另提 amendment。
 - host 在生成 public receipt、feedback、祖先查询、RSI trace 和 direct child 结果时必须过滤 private refs；digest 相等不等于读取授权。
 - 一个 Run 可以只有 public receipt 而没有 private receipt；`privateReceipt` 缺失不是失败。
 
@@ -241,7 +242,7 @@ Host 在写 manifest 和 `run/submitted` 之前必须完成：
 
 - no-submission、显式 stop、基础设施 invalid、cancelled：使用 `ExecutionRecord`，保留 taskId/runId/contractDigest/method/composition/inputs/usage/sessionCut/reason，可缺 outputs/verification；它不能被冒充成 verified Evidence。
 - 没有提交的失败 Run 可以有 ExecutionRecord，但没有 acceptance receipt；不得为了统一数据外观伪造 `PublicReceipt`。
-- `run/closed` 仍恰好引用一个结果：`verified`/带 Evidence 的 criteria-failed `failed` 用 `evidenceRef`；no-submission/stop/invalid/cancelled 用 `executionRecordRef`。该事实字段不因本推荐包改变。
+- `run/closed` 仍恰好引用一个结果：`verified`/带 Evidence 的 criteria-failed `failed` 用 `evidenceRef`；no-submission/stop/invalid/cancelled 用 `executionRecordRef`。该事实字段不因本 amendment 改变。
 - 已 submit 但 verifier 超时、基础设施失败或返回含 `invalid` criterion 的 receipt 时：host 按 `invalid` 结算，使用现有 `ExecutionRecord(invalid)`；invalid receipt 仅可作为 operator 诊断留存，不得写入 Evidence，也不得扩展 `ExecutionRecord` 增加 receipt 字段，不进入 NodeView/ProposerView/公开 trace。
 - C-03 的 fresh retry 使用新 Run/session/workspace，合同与 Method 不变；旧 receipt/manifest 不复制、不覆盖、不自动成为新 Run 的验收结果。新 Run 只有重新 submit 并重新验收才可能 verified。
 
@@ -249,7 +250,7 @@ Host 在写 manifest 和 `run/submitted` 之前必须完成：
 
 #### C-02 one Run submit and external receipt
 
-若推荐包获批，C-02 的完整链路为：
+已批准语义下，C-02 的完整链路为：
 
 ```text
 submit(outputIds, includeLearningDrafts)
@@ -282,7 +283,7 @@ C-02 证据必须能证明：模型只提供 output IDs 和 draft flag，不提�
 - 同一 commandId + commandDigest 重放时返回原 `Fact` 及其原 manifest/receipt refs，不重新冻结、不重新验证、不追加 fact。
 - verifier 已完成但 closure 未写时，用固定 `operationId` 和 receipt 身份恢复：身份/digest 可核对则补写 closure；不可核对或超时则 `invalid`，不盲目重复有外部副作用的调用。
 - manifest/receipt 的稳定排序、无时间戳和独立 `timedOut` 使同一提交在重放/重启后产生相同 digest；不同顺序或不同 refs 必须产生不同 digest 并按身份不匹配拒绝。
-- `seq`/`prev`/`commandDigest`/torn-tail 规则不变；S3-A 已记录的“CAS 引用内容 domain-aware replay 校验仍未实现”仍是后续 runtime/reducer 工作，本推荐包不声称已补上。
+- `seq`/`prev`/`commandDigest`/torn-tail 规则不变；S3-A 已记录的“CAS 引用内容 domain-aware replay 校验仍未实现”仍是后续 runtime/reducer 工作，本 amendment 不声称已补上。
 
 ## 5. 权限、预算与复杂度影响
 
@@ -301,7 +302,7 @@ C-02 证据必须能证明：模型只提供 output IDs 和 draft flag，不提�
 
 ### 6.1 K1–K6 不变
 
-| 既有语义 | 本推荐包影响 |
+| 既有语义 | 本 amendment 影响 |
 |---|---|
 | K1 `Fact.commandDigest` + `command` domain；一 command 一 fact | 不变；receipt/manifest 不新增 command 或 fact |
 | K2 journal `seq=0`、JCS NDJSON/LF、epoch ms、deadline exclusive | 不变；receipt/manifest 不改变 journal framing |
@@ -312,7 +313,7 @@ C-02 证据必须能证明：模型只提供 output IDs 和 draft flag，不提�
 
 ### 6.2 明确不兼容清单
 
-以下不是“实现选择”，而是与推荐包不兼容；若不接受，应拒绝推荐包而不是静默兼容：
+以下不是“实现选择”，而是与已批准语义不兼容；实现必须修正，不能静默兼容：
 
 - **A0**：任何已按未列 domain 或其他 domain 计算/落盘的 `AcceptanceRef` 或含该 ref 的 `TaskContract` 不兼容；必须重新 seal。当前无生产数据。
 - **Receipt 总 verdict**：接收 verifier 自报 `outcome`/`classification` 或依赖该字段决定 `verified`/`failed`/`invalid` 的实现不兼容。
@@ -325,33 +326,35 @@ C-02 证据必须能证明：模型只提供 output IDs 和 draft flag，不提�
 - **Size cap**：把 output size cap 写成协议字段/冻结 limit 的实现不兼容；cap 属于部署 policy，manifest 只记录实际 bytes。
 - **Invalid receipt**：把 invalid receipt 写入 Evidence、扩展 `ExecutionRecord` 增加 receipt ref、或让 invalid 产生领域分数的实现不兼容；invalid receipt 仅诊断。
 - **PrivateReceipt**：冻结 privateReceipt schema 或把它暴露给 worker/RSI/模型/feedback 的实现不兼容。
-- **Conformance**：把 C-02/C-03/C-11 或任何场景因本推荐包改为 `proven` 的实现不兼容；本推荐包不提供实现证据。
-- **文档状态**：当前 `README.md`/`docs/build-plan.md` 仍描述 Q1–Q11 待决定。本任务按范围不修改它们；这是明确的文档滞后，不是规范冲突。批准时必须把 README/build-plan 与新规范同步更新。
+- **Conformance**：把 C-02/C-03/C-11 或任何场景因本 amendment 改为 `proven` 的实现不兼容；本 amendment 不提供实现证据。
+- **文档状态**：`README.md` 与 `docs/build-plan.md` 已在本变更同步，声明 S3-B1 schema 进行中、S3-B 执行未开始；继续把它们描述为 Q1–Q11 待决定或“规范阻断”属于不兼容的旧文档。
 
-## 7. Conformance 不变
+## 7. Conformance 不变与证据边界
 
-- 本推荐包不修改 `docs/conformance.md`，也不把任何场景改为 `proven`。
-- 若获批并实现，C-02/C-03/C-11 应增加正负例；C-18（missing/invalid evidence is insufficient, not zero）应复用 “invalid 无领域分数、不得填零”的边界。
-- 真实证据出现前，C-02/C-03/C-11 及相关场景继续保持 `unproven`。`pnpm verify` 或静态 schema 通过不能替代真实 DSH/真实模型/领域验收证据。
-- 本 amendment 本身不实现、不跑 conformance，只提交待确认语义。
+- 本变更只更新 `docs/conformance.md` 的 amendment 链接和验收/提交/重放证据边界，不把任何场景改为 `proven`。
+- C-02/C-03/C-11 的实现证据必须覆盖 A0–A9；C-18（missing/invalid evidence is insufficient, not zero）复用“invalid 无领域分数、不得填零”的边界。
+- 真实证据出现前，C-02/C-03/C-11 及相关场景继续保持 `unproven`。`pnpm verify`、静态 schema 通过或文档 digest 一致不能替代真实 DSH/真实模型/领域验收证据。
+- 本 amendment 不实现、不跑 conformance；批准不等于实现或验证。
 
 ## 8. 用户确认记录
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | **最终候选；待用户一次性确认；未批准、未实现** |
-| 确认人 | 尚未确认 |
-| 确认日期 | — |
-| 本文件效力 | 最终候选；不是已批准 amendment，不替代 `docs/framework.md` |
-| 规范/spec-lock/conformance 修改 | 本变更未修改；批准后需在同一获批变更更新并重新计算 digest |
-| 代码/构建修改 | 无 |
-| 实现许可 | 未授予；获批前不得用这些字段实现 `PublicReceipt`/`SubmissionManifest` |
+| 状态 | **已批准并纳入正式规范；实现与 conformance 证据待后续** |
+| 确认人 | 用户 |
+| 确认日期 | 2026-10-30 |
+| 用户原话 | “全部确定，以后不需要向我确认任何事，自行推进” |
+| 批准范围 | amendment 002 A0–A9 整体包 |
+| 本文件效力 | 已批准 amendment；A0–A9 已并入 `docs/framework.md`；框架为唯一规范权威 |
+| 规范/spec-lock/conformance 修改 | 同一变更已更新 framework、spec-lock、conformance 链接、README 与 build-plan；conformance 全部保持 `unproven` |
+| 代码/构建修改 | 无；本变更不修改源码 |
+| 实现许可 | 已授予后续实现；实现仍需独立测试与证据，不得把规范纳入写成功能完成 |
 
-## 9. Q1–Q11 收敛与单一批准决定
+## 9. Q1–Q11 收敛与批准记录
 
-### 9.1 推荐映射
+### 9.1 批准映射
 
-| 原问题 | 推荐值 |
+| 原问题 | 批准值 |
 |---|---|
 | Q1 `AcceptanceRef` domain | `AcceptanceRef = object`；`provider` 与冻结 acceptance provider/Evidence provider id+digest 相等 |
 | Q2 receipt 总 verdict | 不设总 verdict；host 从 required criteria + exit + `timedOut` 派生 `verified`/`failed`/`invalid` |
@@ -365,11 +368,22 @@ C-02 证据必须能证明：模型只提供 output IDs 和 draft flag，不提�
 | Q10 conformance | 不改变任何状态；C-02/C-03/C-11 保持 `unproven` |
 | Q11 invalid receipt | 仅 operator 诊断；不写 Evidence、不扩 `ExecutionRecord`、不进入公开 trace |
 
-### 9.2 单一批准决定
+### 9.2 批准结果与后续
 
-**请用户只做一个决定：批准或拒绝上述推荐包。**
+用户已批准上述整体包，A0–A9 已按同一变更纳入 `docs/framework.md`、`spec-lock.json`、`docs/conformance.md`、`README.md` 与 `docs/build-plan.md`。Q1–Q11 已由该单一批准决定收敛，不再需要逐项确认，也不再存在“待确认/规范阻断”状态。
 
-- **批准**：amendment 002 的推荐语义成为待落地的正式规范变更；后续同一获批变更更新 `docs/framework.md`、`spec-lock.json`、`docs/conformance.md`、`README.md` 与 `docs/build-plan.md`，实现另立任务。本次变更不实现、不改这些文件。
-- **拒绝**：维持现状，A0–A9 字段不冻结，`PublicReceipt`/`SubmissionManifest` 不得实现，C-02/C-03/C-11 继续 `unproven`。
+后续实现必须：
 
-不需要逐项回答 Q1–Q11；9.1 已将全部问题收敛为单一推荐包。
+1. 在 protocol 中实现 `AcceptanceRef=object`、`PublicReceipt`/`SubmissionManifest` strict schema、校验和负例，并先建立失败证据；
+2. 在 runtime/DSH 集成中实现 host 分类、digest 顺序、`exit`/`timedOut`、`checks`、`privateReceipt` 过滤和 invalid receipt 仅诊断，但不新增 fact/domain/writer/fold；
+3. 用真实 DSH、真实模型和领域验收证据推进 C-02/C-03/C-11；在证据出现前保持 `unproven`；
+4. 不把 schema 类型、`pnpm verify`、fixture pass 或文档 digest 一致表述为功能完成或领域收益。
+
+## 10. 本次纳入的验证与未覆盖项
+
+- 实际运行：官方 Node `24.9.0`（`/tmp/node249/bin`）、pnpm `11.18.0`；独立 worktree、HOME 与 pnpm store；`pnpm install --frozen-lockfile`、根 `pnpm verify` 与 `git diff --check`。
+- 根 `pnpm verify` 结果：protocol `189/189`、app `6/6`、runtime `30/30`（合计 `225`）通过；该结果只证明当前仓库门禁，不证明 receipt/manifest 已实现。
+- 纳入后 `spec-lock.json` `sha256:5f33aa339f21496c375de637ef447656fc66d98d3054a5b6e0a1d3c8dc612b6f` 与实际 `docs/framework.md` 一致；任何进一步规范修改必须重新计算。
+- 未覆盖：`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现与测试、真实 verifier/DSH/模型验收、C-02/C-03/C-11 的 `proven` 证据、runtime host 分类执行、privateReceipt 运行时过滤；这些仍是后续工作。
+
+Q1–Q11 已由 2026-10-30 的单一批准决定收敛；后续只需按 §9.2 的实现清单推进，不再逐项确认，也不得把批准本身当作实现或 conformance 证据。
