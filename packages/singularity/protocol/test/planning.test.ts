@@ -8,24 +8,24 @@ import { parseProtocolValue } from '../src/schema.ts'
 
 const digestA = `sha256:${'a'.repeat(64)}`
 
-const levelZero: PlanningSketch['levels'][number] = {
-  level: 0,
+const levelZero = {
+  level: 0 as const,
   purpose: 'Coordinate this Run and decide whether the work needs direct children',
   likelyChildren: [],
   expectedInputs: ['current frozen TaskSpec'],
   expectedOutputs: ['integrated result'],
 }
 
-const levelOne: PlanningSketch['levels'][number] = {
-  level: 1,
+const levelOne = {
+  level: 1 as const,
   purpose: 'Build the bounded implementation part',
-  likelyChildren: ['build-part'],
+  likelyChildren: ['build-part', 'probe-part'],
   expectedInputs: ['frozen input object'],
   expectedOutputs: ['implementation artifact'],
 }
 
-const levelTwo: PlanningSketch['levels'][number] = {
-  level: 2,
+const levelTwo = {
+  level: 2 as const,
   purpose: 'Probe the implementation part from its own child scope',
   likelyChildren: ['probe-part'],
   expectedInputs: ['implementation artifact'],
@@ -98,6 +98,29 @@ void test('PlanningSketch accepts structural two-level and three-level plans', (
   )
 })
 
+void test('PlanningSketch accepts only ordered [0,1] or [0,1,2] levels', () => {
+  const invalidSequences: readonly {
+    readonly label: string
+    readonly levels: readonly unknown[]
+  }[] = [
+    { label: 'empty levels', levels: [] },
+    { label: 'only level 0', levels: [levelZero] },
+    { label: 'duplicate level 0', levels: [levelZero, levelZero] },
+    { label: 'out of order levels', levels: [levelOne, levelZero] },
+    { label: 'skips level 1', levels: [levelZero, levelTwo] },
+    { label: 'duplicate level 2', levels: [levelZero, levelOne, levelTwo, levelTwo] },
+    { label: 'more than three levels', levels: [levelZero, levelOne, levelTwo, levelZero] },
+  ]
+
+  for (const { label, levels } of invalidSequences) {
+    const sketch = { ...clone(threeLevelSketch), levels }
+    assert.throws(
+      () => parseProtocolValue(planningSketchSchema, sketch),
+      label,
+    )
+  }
+})
+
 void test('PlanningSketch preserves absent optional-looking fields and does not mutate input', () => {
   const sketch: PlanningSketch = {
     ...threeLevelSketch,
@@ -105,6 +128,13 @@ void test('PlanningSketch preserves absent optional-looking fields and does not 
       {
         level: 0,
         purpose: 'Keep only frozen fields',
+        likelyChildren: [],
+        expectedInputs: [],
+        expectedOutputs: [],
+      },
+      {
+        level: 1,
+        purpose: 'Keep one direct child intent without extra fields',
         likelyChildren: [],
         expectedInputs: [],
         expectedOutputs: [],
@@ -219,6 +249,22 @@ void test('PlanningSketch rejects directPlan.join and other direct-plan authorit
       field,
     )
   }
+})
+
+void test('PlanningSketch keeps directPlan as flat level-1 entries without a level field', () => {
+  const parsed = parseProtocolValue(planningSketchSchema, clone(threeLevelSketch))
+  const levelOneEntry = parsed.levels.at(1)
+  assert.ok(levelOneEntry !== undefined)
+  assert.equal(levelOneEntry.level, 1)
+
+  for (const entry of parsed.directPlan) {
+    assert.deepEqual(Object.keys(entry).sort(), ['bindingId', 'purpose'])
+    assert.ok(levelOneEntry.likelyChildren.includes(entry.bindingId))
+  }
+
+  const sketch = clone(threeLevelSketch)
+  firstDirectPlan(sketch)['level'] = 1
+  assert.throws(() => parseProtocolValue(planningSketchSchema, sketch))
 })
 
 void test('PlanningSketch rejects missing required fields and wrong frozen types', () => {
