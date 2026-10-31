@@ -432,12 +432,13 @@ void test('S4-A3 rejects interface, catalog, transport, and contract mismatches'
     })
     await expectCode(readMcpServers(store, duplicateServer.method, duplicateServer.template, duplicateServer.contract.resources.mcpServers), 'CONTRACT_INVALID')
 
-    const http = await scenario(store, {
+    // HTTP manifest/asset with a stdio-shaped config must fail closed-key validation.
+    const httpWithStdioConfig = await scenario(store, {
       manifest: manifest({ transport: 'streamable-http' }),
       config: config({ transport: 'streamable-http', url: 'http://127.0.0.1:9/mcp' }),
       tools: refs => [toolAsset(refs, { transport: 'streamable-http' })],
     })
-    await expectCode(readMcpServers(store, http.method, http.template, http.contract.resources.mcpServers), 'UNSUPPORTED_RESOURCES')
+    await expectCode(readMcpServers(store, httpWithStdioConfig.method, httpWithStdioConfig.template, httpWithStdioConfig.contract.resources.mcpServers), 'CONTRACT_INVALID')
   })
 })
 

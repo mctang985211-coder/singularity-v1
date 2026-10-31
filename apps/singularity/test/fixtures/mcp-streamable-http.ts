@@ -4,7 +4,7 @@ import type { Socket } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
-import { fromJsonSchema, McpServer, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/server'
+import { fromJsonSchema, McpServer, ResourceTemplate, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/server'
 import type { CallToolResult, JsonSchemaType } from '@modelcontextprotocol/server'
 
 export const FIXTURE_INSTRUCTIONS_FRAGMENT = 'SINGULARITY S1-C MCP streamable-http spike fixture.'
@@ -24,6 +24,9 @@ const SPIKE_INSTRUCTIONS = [
   'and hang to exercise host timeout and cancellation;',
   FIXTURE_INSTRUCTIONS_TAIL,
 ].join(' ')
+
+/** Exact server instructions consumed by the A4 frozen manifest tests. */
+export const STREAMABLE_HTTP_INSTRUCTIONS = SPIKE_INSTRUCTIONS
 
 const messageInputSchema: JsonSchemaType = {
   type: 'object',
@@ -97,6 +100,11 @@ export interface StreamableHttpFixture {
   close(): Promise<void>
 }
 
+export interface StreamableHttpFixtureOptions {
+  /** Register the A4 static resource and expanded template; S1 defaults to none. */
+  readonly resources?: boolean
+}
+
 const SECRET_KEY = /(secret|token|password|passwd|api[-_]?key|authorization|credential)/i
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -157,7 +165,9 @@ function parseBody(text: string): unknown {
   }
 }
 
-export async function startStreamableHttpFixture(): Promise<StreamableHttpFixture> {
+export async function startStreamableHttpFixture(
+  options: StreamableHttpFixtureOptions = {},
+): Promise<StreamableHttpFixture> {
   const records: StreamableHttpLogRecord[] = []
   const sockets = new Set<Socket>()
   const enableJsonResponse = true
@@ -246,6 +256,23 @@ export async function startStreamableHttpFixture(): Promise<StreamableHttpFixtur
       ctx.mcpReq.signal.addEventListener('abort', abort, { once: true })
     })
   })
+
+  if (options.resources === true) {
+    mcp.registerResource(
+      'note',
+      's4a4://note',
+      { title: 'A4 fixture note', mimeType: 'text/plain' },
+      uri => ({ contents: [{ uri: uri.href, text: `note:${uri.href}` }] }),
+    )
+    mcp.registerResource(
+      'note-template',
+      new ResourceTemplate('s4a4://note/{id}', { list: undefined }),
+      { title: 'A4 fixture note template', mimeType: 'text/plain' },
+      (uri, variables) => ({
+        contents: [{ uri: uri.href, text: `note:${String(variables.id)}` }],
+      }),
+    )
+  }
 
   const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,

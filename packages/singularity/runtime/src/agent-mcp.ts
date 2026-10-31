@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import * as mcpClient from '@deepseek-ai/dsh-mcp-client'
-import type { StdioConfig } from '@deepseek-ai/dsh-mcp-client'
+import type { StdioConfig, StreamableHttpConfig } from '@deepseek-ai/dsh-mcp-client'
 import { canonicalize } from '@singularity/protocol'
 import type { JsonValue } from '@singularity/protocol'
 
@@ -14,8 +14,8 @@ import { MCP_RESOURCE_TOOL_NAMES } from './mcp-resources.ts'
 import type { FrozenMcpServer } from './mcp-resources.ts'
 
 /**
- * Creates the Run-owned root that holds materialized server bundles and their
- * isolated HOMEs. The caller removes it after the Agent handle is disposed.
+ * Creates the Run-owned root that holds materialized stdio server bundles and
+ * their isolated HOMEs. HTTP-only Runs never call this.
  */
 export async function createMcpResourceRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'singularity-mcp-'))
@@ -52,36 +52,62 @@ const XDG_HOME_DIRS = {
 } as const
 
 /**
- * Materializes each frozen server bundle under the Run root and mounts it with
- * the native DSH stdio client in the Agent scope. A failed mount leaves the
- * Agent setup transaction to unwind previously mounted scoped clients.
+ * Materializes stdio server bundles under the Run root and mounts every frozen
+ * server with the native DSH client in template order. HTTP entries use the
+ * native streamable-http config and never create a host directory or child env.
  */
 export async function mountMcpServers(
   agentCtx: Context,
   servers: readonly FrozenMcpServer[],
-  root: string,
+  root: string | undefined,
 ): Promise<void> {
   const prepared = servers.map((server, index) => ({
     server,
-    serverRoot: join(root, `${String(index)}-${server.serverName}`),
-    home: join(root, 'home', `${String(index)}-${server.serverName}`),
+    serverRoot: join(root ?? '.', `${String(index)}-${server.serverName}`),
+    home: join(root ?? '.', 'home', `${String(index)}-${server.serverName}`),
   }))
-  // Materialize every bundle before the first child starts so no server can
-  // observe or rewrite a later server's partially written root.
-  for (const entry of prepared) {
+  const stdio = prepared.filter(entry => entry.server.transport === 'stdio')
+  if (stdio.length > 0 && root === undefined) {
+    throw new MethodResourceError(
+      'method',
+      'UNSUPPORTED_RESOURCES',
+      'host did not create the MCP resource root required by stdio Method server bindings',
+    )
+  }
+  // Materialize every stdio bundle before the first child starts so no server
+  // can observe or rewrite a later server's partially written root.
+  for (const entry of stdio) {
     await materializeServer(entry.serverRoot, entry.server)
   }
   for (const entry of prepared) {
-    const env = await mcpChildEnv(entry.home)
-    const config: StdioConfig = {
-      transport: 'stdio',
+    if (entry.server.transport === 'stdio') {
+      const env = await mcpChildEnv(entry.home)
+      const config: StdioConfig = {
+        transport: 'stdio',
+        serverName: entry.server.serverName,
+        command: process.execPath,
+        args: [join(entry.serverRoot, entry.server.entrypoint)],
+        cwd: entry.serverRoot,
+        env,
+        toolCallTimeoutMs: entry.server.configValue.toolCallTimeoutMs,
+        maxInstructionBytes: entry.server.configValue.maxInstructionBytes,
+        failOnStartupError: true,
+        reconnect: { enabled: false },
+      }
+      await agentCtx.plugin(mcpClient, config)
+      continue
+    }
+    const httpConfig = entry.server.configValue
+    if (httpConfig.transport !== 'streamable-http') {
+      throw new MethodResourceError('method', 'CONTRACT_INVALID', 'HTTP MCP server is missing its HTTP config')
+    }
+    const config: StreamableHttpConfig = {
+      transport: 'streamable-http',
       serverName: entry.server.serverName,
-      command: process.execPath,
-      args: [join(entry.serverRoot, entry.server.entrypoint)],
-      cwd: entry.serverRoot,
-      env,
-      toolCallTimeoutMs: entry.server.configValue.toolCallTimeoutMs,
-      maxInstructionBytes: entry.server.configValue.maxInstructionBytes,
+      url: httpConfig.url,
+      headers: httpConfig.headers,
+      toolCallTimeoutMs: httpConfig.toolCallTimeoutMs,
+      maxInstructionBytes: httpConfig.maxInstructionBytes,
       failOnStartupError: true,
       reconnect: { enabled: false },
     }

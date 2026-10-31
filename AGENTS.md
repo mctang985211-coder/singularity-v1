@@ -44,8 +44,9 @@
 | `runtime/src/prompt.ts` | 固定 cards、NodeView 类型与模型可见预算展示 | 由 Run/agent composition 调用 |
 | `runtime/src/resources.ts` | Method/template/guidance/skill/MCP 冻结资源编排与授权视图、structured digest、own guidance 8 KiB、Composition resource equality 与 platform prompt 校验 | 由 run/recovery/agent 调用；app 通过 host 组合注入 `PLATFORM_PROMPT_SERVICE` renderer |
 | `runtime/src/skill-resources.ts` | Method skill 资产解析、bundle/SKILL.md/引用文件校验、discovery 8 KiB 与 result 16 KiB 上限、contract bundle refs 相等 | 由 `resources.ts` 调用；agent 只消费冻结结果 |
-| `runtime/src/mcp-resources.ts` | Method MCP 资产解析、manifest/config/schema/bundle/sourceFiles 校验、deployment capability allowlist、public name、Composition 六字段相等、DSH instruction/resource section 投影 | 由 `resources.ts`/`run.ts`/`agent-mcp.ts` 调用；不挂载或写宿主目录 |
-| `runtime/src/agent-mcp.ts` | frozen MCP bundle 先全量 materialize（0700 root、`O_EXCL` 0600）、Run 专属 HOME/XDG/credential-channel env、DSH 原生 stdio mount、实际 scoped surface 校验与 cleanup | 由 `agent.ts` setup 调用；不解析 Method 身份；不是完整 sandbox |
+| `runtime/src/mcp-resources.ts` | Method MCP 资产解析、manifest/config/schema/bundle/sourceFiles 校验、deployment capability allowlist、public name、Composition 六字段相等、DSH instruction/resource section 投影；stdio/HTTP transport 共用同一身份链 | 由 `resources.ts`/`run.ts`/`agent-mcp.ts` 调用；不挂载或写宿主目录 |
+| `runtime/src/mcp-http-config.ts` | streamable-http config 的 closed-key、无凭据 loopback URL、空 headers、timeout/instructions cap 校验；这是初始 URL policy，不是连接级网络隔离 | 只由 `mcp-resources.ts` 调用；不解析 Method/catalog |
+| `runtime/src/agent-mcp.ts` | stdio bundle 先全量 materialize（0700 root、`O_EXCL` 0600）、Run 专属 HOME/XDG/credential-channel env；stdio 与 HTTP 共用原生 DSH mount/surface/cleanup；HTTP 不创建宿主目录 | 由 `agent.ts` setup 调用；不解析 Method 身份；不是完整 sandbox |
 | `runtime/src/resource-bundle.ts` | 只读 sealed tree manifest/CAS 文件读取、路径/排序/structured digest/字节数校验 | 由 `skill-resources.ts`/`mcp-resources.ts` 调用；不写 workspace 或宿主目录 |
 | `runtime/src/workspace.ts` | workspace 准备、no-follow 遍历、输出冻结 | 由 Run 提交路径调用 |
 | `runtime/src/verification.ts` | 独立 verifier、receipt 校验、Evidence/ExecutionRecord 值构建 | 由 run-settlement 结算调用 |
@@ -127,6 +128,7 @@ pnpm verify
 
 - secrets、私有 validation payload、golden answers 和私有 verifier 数据仅进入其授权边界；文档、Composition、日志和证据使用公开引用。
 - 候选 MCP server 在隔离环境运行，配置明确的 filesystem/network/capability/resource limits、timeout 和 cleanup；启动与清理结果按协议结算。
+- HTTP MCP 当前只做初始 URL loopback policy，不是连接级网络隔离：redirect/DNS/proxy egress、SSE reconnect 和运行中 `list_changed` 冻结重验未覆盖，不得声称已实现完整网络边界。
 - 构建任务可在 build-plan 范围内创建分支、提交和 PR，并运行已声明预算内的验证；CI 通过后使用既定自动批准与 squash merge 流程，main 历史保持线性且受保护。
 - S4–S7 必要的小规模模型/领域验证按本轮授权执行：先在任务卡固定 case、请求/token/时间上限和清理条件，再运行并登记全部尝试及费用。更大规模实验按其单独授权执行。
 - 生产部署、生产 Method activation、构建协作流程以外的外部写入和权限扩张按明确的对应授权执行。
