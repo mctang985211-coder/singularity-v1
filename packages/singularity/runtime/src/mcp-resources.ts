@@ -34,7 +34,7 @@ const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
 const manifestSchema = z.object({
   serverName: z.string().regex(SERVER_NAME),
   transport: z.enum(['stdio', 'streamable-http']),
-  instructions: z.string().max(8192),
+  instructions: z.string().refine(text => Buffer.byteLength(text, 'utf8') <= 8192, 'MCP instructions exceed 8KiB'),
   entrypoint: workspaceRelativePathSchema,
   limits: z.object({ maxBundleBytes: z.number().int().positive().max(MAX_BUNDLE_BYTES) }),
 })
