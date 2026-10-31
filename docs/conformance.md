@@ -33,6 +33,8 @@ Amendment 002（[docs/amendments/002-acceptance-and-submission.md](amendments/00
 | C-23 | two consecutive Rounds use active-head CAS and cannot overwrite each other | §10.2、§18 | RSI/evaluation runtime | unproven |
 | C-24 | single-case gain with validation regression is not improved | §18 | comparator/domain adapter | unproven |
 
+S4-B1（2026-10-31）只登记局部回归：真实 DSH fixture 覆盖 prepare 的完整 `TaskExample`（app 对冻结 example 做 deepEqual）、`interface.instanceSchema`、host 派生 join/brief/template 身份、A2 skill summary、持久 `tool/result` 后的 status `current`、无 child/fact/预算副作用，以及 commit action 的 `INVALID_ARGUMENT` 拒绝。`next-step-required`/`stale`、preview/receipt domain 互读、example/result 12/32 KiB、result refs/order/source/tamper、NodeView 8 KiB preflight、no-child guard 与 directPlan 可见性由 runtime unit 覆盖，不冒充真实 DSH 场景。未实现 commit admission、child dispatch、required/probe join 或 parent yield，因此 C-04/C-05 保持 `unproven`，不因本片 prepare 或 `pnpm verify` 通过而升级。
+
 ## C-02 证据（proven）
 
 - **状态**：`proven`（2026-10-30，S3-B2 单 Run 执行闭环）。

@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。S1–S3 已完成，S4-A1/A2/A3/A4 已完成；下一阶段为 S4-B。C-02/C-03/C-11/C-12 已有真实 DSH + 真实模型证据；child、RSI 和领域改进尚未实现。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。S1–S3 已完成，S4-A1/A2/A3/A4 已完成，S4-B1 decompose prepare 已实现；下一阶段为 S4-B2 commit/child dispatch。C-02/C-03/C-11/C-12 已有真实 DSH + 真实模型证据；child、RSI 和领域改进尚未实现。S4-B1 的 prepare 只交付冻结 child example 与持久 preview/receipt，不创建 child、不写 fact、不实现 commit。
 
 ## 权威入口
 
@@ -17,7 +17,7 @@ Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中�
 
 - Node `>=24.9.0`
 - pnpm `11.18.0`
-- DSH `0.2.2-alpha.2`（S1-A–S1-E 与 S2/S3 全部完成，S4-A1/A2/A3/A4 完成；C-02/C-03/C-11/C-12 proven，下一阶段为 S4-B）
+- DSH `0.2.2-alpha.2`（S1-A–S1-E 与 S2/S3 全部完成，S4-A1/A2/A3/A4 与 S4-B1 prepare 完成；C-02/C-03/C-11/C-12 proven，下一阶段为 S4-B2 commit/child dispatch）
 - 默认真实模型路由：OpenAI-compatible chat `http://127.0.0.1:16660/v1`，`deepseek-v4.1-flash`，`reasoning=max`；可用 `SINGULARITY_SPIKE_BASE_URL` 覆盖 endpoint，API key 只通过 `SINGULARITY_SPIKE_API_KEY` 进程环境提供，不写入仓库。
 - MCP HTTP 当前只实施初始 URL loopback policy，不是连接级网络隔离：DSH 默认 fetch 的 redirect、localhost 系统 resolver、`NODE_USE_ENV_PROXY` 等 proxy egress 未验证；`reconnect=false` 只覆盖 DSH supervisor，SSE reconnect 与运行中 `list_changed` 冻结重验未覆盖。URL path 不是授权通道，不得用于携带 secret。
 
@@ -39,6 +39,8 @@ pnpm verify
 CI 只保留一个 `verify` job。S3-C 的 fresh retry、完整 Composition、稳定 wake、真实 journal replay/torn-tail 和 workspace freshness 已完成；C-02/C-03/C-11/C-12 均有真实模型证据。最终复核与后续遗留项见 [`docs/tasks/s3-final-review.md`](docs/tasks/s3-final-review.md)，Run/Agent/恢复及统一结算的当前职责见 [`docs/tasks/s3-s4-structure-handoff.md`](docs/tasks/s3-s4-structure-handoff.md)，模块边界以 [`AGENTS.md`](AGENTS.md) 为施工入口。
 
 当前 profile 关闭自动 compaction，避免尚未预留的独立 summarizer 请求绕过 Task 预算。普通请求使用 DSH 原生 hook，并按 route 声明的完整上下文容量保守预留；缺失容量、剩余不足或 usage 未知时停止购买。模型仅看到预算百分比；NodeView 与 dispatch 共用提交门禁，self-read/tool schema 有固定分页和大小上限。retry 通过 DSH `SessionHeader.cwd` 核对本 Task 全部历史 attempt 的 canonical workspace freshness；三次尝试的复用、别名和缺失 cwd 已有专项回归，真实模型仍为既有两次尝试证据。自动压缩计量、不可停止进程的实际 sandbox quarantine 和完整 evaluation Capsule 归后续切片。
+
+S4-B1 的 `singularity_decompose(action="prepare")` 只写 preview CAS（preview domain）与 delivery receipt（object domain）；成功 DSH `tool/result` 是唯一交付证据，status 从已提交 session log 重建 `current/next-step-required/stale`。prepare 不创建 Task/child/session/workspace、不预留预算、不写 fact；commit 尚未注册，收到 `commit` 以既有 `INVALID_ARGUMENT` 拒绝。preview/child dispatch、join、parent yield 与 feedback 仍归后续切片。B1 更新了 worker card；pre-B1 旧 card 创建的 open Run 恢复会因 scoped platform prompt 不同按 `COMPOSITION_MISMATCH` fail closed，不保留 legacy 兼容分支。
 
 ## 协作流程
 

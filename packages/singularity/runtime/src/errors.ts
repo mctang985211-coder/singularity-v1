@@ -40,3 +40,23 @@ export class MethodResourceError extends SingleRunError {
     this.resource = resource
   }
 }
+
+/** Existing tool-facing rejection used by the prepare-only decompose slice. */
+export type DecomposeErrorCode =
+  | 'INVALID_ARGUMENT'
+  | 'BINDING_FIXED'
+  | 'LIMIT_EXCEEDED'
+  | 'PREVIEW_REQUIRED'
+  | 'PREVIEW_STALE'
+  | 'NEXT_STEP_REQUIRED'
+
+/** Internal decompose rejection; maps to an existing protocol tool code. */
+export class DecomposeError extends Error {
+  override readonly name = 'DecomposeError'
+  readonly code: DecomposeErrorCode
+
+  constructor(code: DecomposeErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.code = code
+  }
+}

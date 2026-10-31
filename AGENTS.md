@@ -40,9 +40,12 @@
 | `runtime/src/run-settlement.ts` | 提交与执行记录的统一结算、CAS/fact commit、结果封存与返回值构造 | 由 run 与 recovery-execution 调用；不拥有 Run admission 或 DSH loop |
 | `runtime/src/recovery-execution.ts` | 既有 Run 的继续、关闭、恢复，以及 frozen journal/Composition/submission 读取 | 复用 run-settlement 与 agent 观察 |
 | `runtime/src/recovery.ts` | retry/resume 宿主入口、固定 retry policy、fresh workspace 检查 | 调用 recovery-execution |
-| `runtime/src/tools.ts` | DSH scoped Task tools 与共享 dispatch guard（含未绑定 skill/MCP server/tool/resource 拒绝） | 由 Run setup 注册 |
+| `runtime/src/tools.ts` | DSH scoped Task tools 与共享 dispatch guard（含 prepare-only decompose、未绑定 skill/MCP server/tool/resource 拒绝） | 由 Run setup 注册 |
+| `runtime/src/receipts.ts` | DSH committed session 的 tool/call、tool/result、surface、epoch 只读适配；不解析业务 preview | 由 decompose/status 与 B2 commit 共用 |
+| `runtime/src/decompose.ts` | prepare preview CAS、object-domain delivery receipt、prepare 行为与 receipt reader/classifier；不写 fact、不 dispatch | 由 `tools.ts` 调用；B2 commit 复用同一 reader |
+| `runtime/src/node-view.ts` | live NodeView 与 admission 静态 8 KiB preflight 的共享投影；不拥有 Run 状态 | 由 `run.ts`/recovery 调用 |
 | `runtime/src/prompt.ts` | 固定 cards、NodeView 类型与模型可见预算展示 | 由 Run/agent composition 调用 |
-| `runtime/src/resources.ts` | Method/template/guidance/skill/MCP 冻结资源编排与授权视图、structured digest、own guidance 8 KiB、Composition resource equality 与 platform prompt 校验 | 由 run/recovery/agent 调用；app 通过 host 组合注入 `PLATFORM_PROMPT_SERVICE` renderer |
+| `runtime/src/resources.ts` | Method/template/guidance/skill/MCP 冻结资源编排与授权视图、child example 12 KiB、template resource summary、structured digest、own guidance 8 KiB、Composition resource equality 与 platform prompt 校验 | 由 run/recovery/agent/decompose 调用；app 通过 host 组合注入 `PLATFORM_PROMPT_SERVICE` renderer |
 | `runtime/src/skill-resources.ts` | Method skill 资产解析、bundle/SKILL.md/引用文件校验、discovery 8 KiB 与 result 16 KiB 上限、contract bundle refs 相等 | 由 `resources.ts` 调用；agent 只消费冻结结果 |
 | `runtime/src/mcp-resources.ts` | Method MCP 资产解析、manifest/config/schema/bundle/sourceFiles 校验、deployment capability allowlist、public name、Composition 六字段相等、DSH instruction/resource section 投影；stdio/HTTP transport 共用同一身份链 | 由 `resources.ts`/`run.ts`/`agent-mcp.ts` 调用；不挂载或写宿主目录 |
 | `runtime/src/mcp-http-config.ts` | streamable-http config 的 closed-key、无凭据 loopback URL、空 headers、timeout/instructions cap 校验；这是初始 URL policy，不是连接级网络隔离 | 只由 `mcp-resources.ts` 调用；不解析 Method/catalog |

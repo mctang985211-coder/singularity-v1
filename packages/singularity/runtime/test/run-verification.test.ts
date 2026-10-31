@@ -18,6 +18,7 @@ import type {
 
 import { DomainStore } from '../src/store.ts'
 import { initialContextEpoch } from '../src/epoch.ts'
+import type { FrozenMethodResources } from '../src/resources.ts'
 import { RunToolController } from '../src/tools.ts'
 import {
   VERIFIER_ERROR_REASON,
@@ -695,5 +696,189 @@ void test('tool dispatch uses the exact host budget check while preserving read 
     assert.ok(stopTool)
     await stopTool.execute({ reason: 'blocked', message: 'no further work' }, execution('singularity_stop'))
     assertSubmissionGate('RUN_CLOSED')
+  })
+})
+
+void test('S4-B1 registers prepare-only decompose for empty child bindings and accepts duplicate directPlan', async () => {
+  const contract = makeContract()
+  await withStore(async store => {
+    const contextEpoch = initialContextEpoch('b1-guard-session')
+    const agent = { session: { id: 'b1-guard-session', snapshotEvents: () => [] } } as unknown as Agent
+    const callId = 'b1-guard-call' as ToolRunContext['callId']
+    const execution = (name: string, args: unknown = {}): ToolRunContext => ({
+      name, agent, arguments: args, callId, rootCallId: callId,
+      token: Symbol() as ToolRunContext['token'], signal: new AbortController().signal,
+      deferContext() {}, concludeTurn() {},
+    })
+    const register = (controller: RunToolController): Map<string, ToolDefinition> => {
+      const definitions = new Map<string, ToolDefinition>()
+      controller.register({ get: () => ({ list: () => [] }), tools: {
+        register: (definition: ToolDefinition) => {
+          definitions.set(definition.name, definition)
+          return () => undefined
+        },
+        guard() {},
+      } } as unknown as Context, agent)
+      return definitions
+    }
+    const resources = {
+      method: { templates: [] },
+      template: { children: [] },
+      guidance: { id: 'guidance', digest: digestA },
+      guidanceText: '',
+      skills: [],
+      mcpServers: [],
+    } as unknown as FrozenMethodResources
+
+    const noChild = new RunToolController({
+      contract,
+      runId: 'b1-no-child-run',
+      sessionId: 'b1-guard-session',
+      workspace: '/workspace',
+      skillNames: [],
+      mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
+      childBindingIds: [],
+      decompose: { methodResources: resources, reader: store },
+      writer: store,
+      maxOutputBytes: 1024,
+      clock: () => 1000,
+      budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+      checkBudget: () => true,
+      epoch: () => contextEpoch,
+      commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+    })
+    const noChildTools = register(noChild)
+    assert.ok(noChildTools.has('singularity_decompose'), 'prepare schema must stay discoverable without child bindings')
+    assert.equal(noChild.obligations().canDecompose, false)
+    const noChildGuard = noChild.checkGuard(execution('singularity_decompose', { action: 'prepare', bindingId: 'b1' }))
+    assert.ok(noChildGuard)
+    assert.equal((JSON.parse(noChildGuard) as { readonly code: string }).code, 'BINDING_FIXED')
+    const noChildPrepare = noChildTools.get('singularity_decompose')
+    assert.ok(noChildPrepare)
+    await assert.rejects(
+      noChildPrepare.execute({ action: 'prepare', bindingId: 'b1' }, execution('singularity_decompose')),
+      /BINDING_FIXED/,
+    )
+
+    const planner = new RunToolController({
+      contract,
+      runId: 'b1-plan-run',
+      sessionId: 'b1-guard-session',
+      workspace: '/workspace',
+      skillNames: [],
+      mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
+      childBindingIds: ['b1'],
+      writer: store,
+      maxOutputBytes: 1024,
+      clock: () => 1000,
+      budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+      checkBudget: () => true,
+      epoch: () => contextEpoch,
+      commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+    })
+    const plannerTools = register(planner)
+    const readTool = plannerTools.get('singularity_read')
+    const planTool = plannerTools.get('singularity_plan')
+    assert.ok(readTool && planTool)
+    let cursor: string | undefined
+    do {
+      const page = await readTool.execute(
+        { kind: 'self', ...(cursor === undefined ? {} : { cursor }) },
+        execution('singularity_read'),
+      ) as { readonly nextCursor?: string }
+      cursor = page.nextCursor
+    } while (cursor !== undefined)
+    const sketch = (directPlan: readonly { readonly bindingId: string; readonly purpose: string }[]) => ({
+      v: 1,
+      taskId: contract.taskId,
+      runId: 'b1-plan-run',
+      contextEpoch,
+      objective: 'exercise directPlan visibility',
+      sourceContract: contract.digest,
+      levels: [0, 1].map(level => ({
+        level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
+      })),
+      directPlan,
+      assumptions: [],
+    })
+    await planTool.execute({ sketch: sketch([
+      { bindingId: 'b1', purpose: 'first attempt' },
+      { bindingId: 'b1', purpose: 'later batch or replacement' },
+    ]) }, execution('singularity_plan'))
+    await assert.rejects(
+      planTool.execute({ sketch: sketch([{ bindingId: 'missing', purpose: 'not visible' }]) }, execution('singularity_plan')),
+      /BINDING_FIXED/,
+    )
+  })
+})
+
+void test('S4-B1 prepare is gated by self read and the current PlanningSketch', async () => {
+  const contract = makeContract()
+  await withStore(async store => {
+    const contextEpoch = initialContextEpoch('b1-gate-session')
+    const agent = { session: { id: 'b1-gate-session', snapshotEvents: () => [] } } as unknown as Agent
+    const callId = 'b1-gate-call' as ToolRunContext['callId']
+    const execution = (name: string, args: unknown = {}): ToolRunContext => ({
+      name, agent, arguments: args, callId, rootCallId: callId,
+      token: Symbol() as ToolRunContext['token'], signal: new AbortController().signal,
+      deferContext() {}, concludeTurn() {},
+    })
+    const resources = {
+      method: { templates: [] },
+      template: { children: [] },
+      guidance: { id: 'guidance', digest: digestA },
+      guidanceText: '',
+      skills: [],
+      mcpServers: [],
+    } as unknown as FrozenMethodResources
+    const definitions = new Map<string, ToolDefinition>()
+    const controller = new RunToolController({
+      contract,
+      runId: 'b1-gate-run',
+      sessionId: 'b1-gate-session',
+      workspace: '/workspace',
+      skillNames: [],
+      mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
+      childBindingIds: ['b1'],
+      decompose: { methodResources: resources, reader: store },
+      writer: store,
+      maxOutputBytes: 1024,
+      clock: () => 1000,
+      budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+      checkBudget: () => true,
+      epoch: () => contextEpoch,
+      commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+    })
+    controller.register({ get: () => ({ list: () => [] }), tools: {
+      register: (definition: ToolDefinition) => {
+        definitions.set(definition.name, definition)
+        return () => undefined
+      },
+      guard() {},
+    } } as unknown as Context, agent)
+    const prepare = definitions.get('singularity_decompose')
+    const read = definitions.get('singularity_read')
+    assert.ok(prepare && read)
+    const codeOf = (value: string | undefined): string | undefined => value === undefined
+      ? undefined
+      : (JSON.parse(value) as { readonly code: string }).code
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_decompose', { action: 'prepare', bindingId: 'b1' }))), 'READ_SELF_FIRST')
+    await assert.rejects(
+      prepare.execute({ action: 'prepare', bindingId: 'b1' }, execution('singularity_decompose')),
+      /READ_SELF_FIRST/,
+    )
+    let cursor: string | undefined
+    do {
+      const page = await read.execute(
+        { kind: 'self', ...(cursor === undefined ? {} : { cursor }) },
+        execution('singularity_read'),
+      ) as { readonly nextCursor?: string }
+      cursor = page.nextCursor
+    } while (cursor !== undefined)
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_decompose', { action: 'prepare', bindingId: 'b1' }))), 'PLAN_FIRST')
+    await assert.rejects(
+      prepare.execute({ action: 'prepare', bindingId: 'b1' }, execution('singularity_decompose')),
+      /PLAN_FIRST/,
+    )
   })
 })

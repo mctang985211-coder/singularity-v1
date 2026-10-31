@@ -7,6 +7,7 @@ import {
   methodRevisionSchema,
   parseJsonText,
   parseProtocolValue,
+  taskExampleSchema,
   taskTemplateSchema,
   verifyDigest,
 } from '@singularity/protocol'
@@ -17,10 +18,11 @@ import type {
   MethodRevision,
   Ref,
   TaskContract,
+  TaskExample,
   TaskTemplate,
 } from '@singularity/protocol'
 
-import { MethodResourceError } from './errors.ts'
+import { DecomposeError, MethodResourceError } from './errors.ts'
 import { readMcpServers } from './mcp-resources.ts'
 import type { FrozenMcpServer } from './mcp-resources.ts'
 import { readSkills, sameRef } from './skill-resources.ts'
@@ -56,6 +58,107 @@ export interface FrozenMethodResources {
   readonly mcpServers: readonly FrozenMcpServer[]
 }
 
+/** Model-visible identity summary for a child template's frozen resources. */
+export interface TemplateResourceSummary {
+  readonly skills: readonly { readonly id: string; readonly name: string }[]
+  readonly mcpServers: readonly {
+    readonly id: string
+    readonly serverName: string
+    readonly transport: 'stdio' | 'streamable-http'
+    readonly tools: readonly string[]
+  }[]
+}
+
+/** Fixed child-example cap from docs/framework.md §14.3. */
+const TASK_EXAMPLE_MAX_BYTES = 12 * 1024
+
+/** Reads one frozen template example and enforces its model-visible cap. */
+export async function loadTaskExample(
+  reader: CasObjectReader,
+  ref: Ref,
+): Promise<TaskExample> {
+  let value: JsonValue
+  try {
+    value = await readJson(reader, ref, 'object', 'Method example', 'CONTRACT_INVALID')
+  } catch (error) {
+    if (error instanceof MethodResourceError) {
+      throw new DecomposeError('INVALID_ARGUMENT', error.message, { cause: error })
+    }
+    throw error
+  }
+  let example: TaskExample
+  try {
+    example = parseProtocolValue(taskExampleSchema, value)
+  } catch (error) {
+    throw new DecomposeError(
+      'INVALID_ARGUMENT',
+      'Method example is not a strict TaskExample',
+      { cause: error },
+    )
+  }
+  const bytes = textEncoder.encode(canonicalize(example as unknown as JsonValue)).byteLength
+  if (bytes > TASK_EXAMPLE_MAX_BYTES) {
+    throw new DecomposeError(
+      'LIMIT_EXCEEDED',
+      `child example is ${String(bytes)} bytes, above the ${String(TASK_EXAMPLE_MAX_BYTES)} byte budget`,
+    )
+  }
+  return example
+}
+
+/** Pure identity projection shared by the prepare response and its tests. */
+export function summarizeTemplateResources(
+  skills: readonly Pick<FrozenSkillResource, 'id' | 'name'>[],
+  mcpServers: readonly Pick<FrozenMcpServer, 'id' | 'serverName' | 'transport' | 'publicToolNames'>[],
+): TemplateResourceSummary {
+  return {
+    skills: skills.map(skill => ({ id: skill.id, name: skill.name })),
+    mcpServers: mcpServers.map(server => ({
+      id: server.id,
+      serverName: server.serverName,
+      transport: server.transport,
+      tools: [...server.publicToolNames],
+    })),
+  }
+}
+
+/**
+ * Resolves one (not necessarily the current) template's skill and MCP
+ * identities through the same A2-A4 readers used by Run setup. It does not
+ * mount or materialize anything.
+ */
+export async function readTemplateResourceSummaries(
+  reader: CasObjectReader,
+  method: MethodRevision,
+  template: TaskTemplate,
+): Promise<TemplateResourceSummary> {
+  const skillRefs = template.skills.map(id => {
+    const matches = method.skills.filter(skill => skill.id === id)
+    if (matches.length !== 1) {
+      throw new MethodResourceError(
+        'method',
+        'CONTRACT_INVALID',
+        `template skill ${JSON.stringify(id)} must resolve to exactly one skill in the pinned Method revision`,
+      )
+    }
+    return matches[0].bundle
+  })
+  const toolRefs = template.tools.map(id => {
+    const matches = method.tools.filter(tool => tool.id === id)
+    if (matches.length !== 1) {
+      throw new MethodResourceError(
+        'method',
+        'CONTRACT_INVALID',
+        `template tool ${JSON.stringify(id)} must resolve to exactly one MCP server in the pinned Method revision`,
+      )
+    }
+    return matches[0].server.bundle
+  })
+  const skills = await readSkills(reader, method, template, skillRefs)
+  const mcpServers = await readMcpServers(reader, method, template, toolRefs)
+  return summarizeTemplateResources(skills, mcpServers)
+}
+
 /**
  * Reads the Method revision pinned by the contract, resolves exactly its own
  * template, and decodes the template guidance as the frozen text object.
@@ -83,6 +186,25 @@ export async function loadMethodResources(
     )
   }
   const template = matches[0]
+  const bindingIds = new Set<string>()
+  for (const binding of template.children) {
+    if (bindingIds.has(binding.bindingId)) {
+      throw new MethodResourceError(
+        'method',
+        'CONTRACT_INVALID',
+        `template child binding ${JSON.stringify(binding.bindingId)} appears more than once`,
+      )
+    }
+    bindingIds.add(binding.bindingId)
+    const childTemplates = method.templates.filter(candidate => candidate.id === binding.templateId)
+    if (childTemplates.length !== 1) {
+      throw new MethodResourceError(
+        'method',
+        'CONTRACT_INVALID',
+        `template child binding ${JSON.stringify(binding.bindingId)} must resolve to exactly one template in the pinned Method revision`,
+      )
+    }
+  }
   const skills = await readSkills(reader, method, template, contract.resources.skills)
   const mcpServers = await readMcpServers(
     reader,
