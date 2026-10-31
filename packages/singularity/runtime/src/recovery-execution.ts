@@ -36,6 +36,7 @@ import type {
 import { snapshotSession } from './agent.ts'
 import type { OpenedRunMode, SessionSnapshot } from './agent.ts'
 import { initialContextEpoch } from './epoch.ts'
+import { preflightNodeView } from './node-view.ts'
 import { SingleRunError } from './errors.ts'
 import {
   MethodResourceError,
@@ -161,6 +162,20 @@ async function loadPreparedRun(
   const workspace = resolve(request.workspace)
   const baseToolNames = await resolveBaseToolNames(contract, service)
   assertToolsAvailable(baseToolNames, request.ctx)
+  const lastAttempt = lastAttemptFromState(view.state, view.taskId, request.runId)
+  preflightNodeView({
+    contract,
+    runId: request.runId,
+    workspace,
+    baseToolNames,
+    template: methodResources.template,
+    skills: methodResources.skills,
+    mcpServers: methodResources.mcpServers,
+    budget: { tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 },
+    lastAttempt,
+    asOf: clock(),
+    contextEpoch: initialContextEpoch(request.sessionId),
+  })
   return buildPreparedRun({
     actor,
     clock,
@@ -170,7 +185,7 @@ async function loadPreparedRun(
     workspace,
     methodResources,
     baseToolNames,
-    lastAttempt: lastAttemptFromState(view.state, view.taskId, request.runId),
+    lastAttempt,
     request,
   })
 }

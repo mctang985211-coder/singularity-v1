@@ -49,6 +49,7 @@ import type {
   SubmissionManifest,
   TaskContract,
   TaskContractPayload,
+  TaskExample,
   ToolAsset,
 } from '@singularity/protocol'
 import {
@@ -309,6 +310,13 @@ async function makeScenario(
     readonly otherGuidanceText?: string
     readonly skills?: readonly SkillFixture[]
     readonly mcpServers?: readonly McpServerFixture[]
+    readonly childBinding?: {
+      readonly bindingId: string
+      readonly templateId: string
+      readonly brief: string
+      readonly join: 'required' | 'probe'
+      readonly example: TaskExample
+    }
   },
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
@@ -343,6 +351,9 @@ async function makeScenario(
         text: options.otherGuidanceText,
       })
     const example = await seedObject(store, 'example:s3c', { v: 1, goal: 'fixture example' })
+    const childExample = options.childBinding === undefined
+      ? undefined
+      : await seedObject(store, 'example:s3c-child', options.childBinding.example)
     const acceptancePolicy = await seedObject(store, 'acceptance-policy:s3c', { v: 1, kind: 'fixture-policy' })
     const verifierObject = seal('object', {
       v: 1,
@@ -363,22 +374,46 @@ async function makeScenario(
       acceptancePolicy,
       skills: skillAssets.map(skill => skill.id),
       tools: toolAssets.map(tool => tool.id),
-      children: [],
+      children: options.childBinding === undefined
+        ? []
+        : [{
+          bindingId: options.childBinding.bindingId,
+          templateId: options.childBinding.templateId,
+          brief: options.childBinding.brief,
+          join: options.childBinding.join,
+        }],
+    }
+    const templates = otherGuidance === undefined
+      ? [currentTemplate]
+      : [
+        currentTemplate,
+        {
+          ...currentTemplate,
+          id: 'template:s3c-other',
+          guidance: otherGuidance,
+        },
+      ]
+    if (options.childBinding !== undefined) {
+      assert.ok(childExample)
+      templates.push({
+        id: options.childBinding.templateId,
+        brief: options.childBinding.brief,
+        guidance,
+        example: childExample,
+        instanceSchema: {},
+        requiredCriteria: [],
+        requiredOutputs: [],
+        acceptancePolicy,
+        skills: skillAssets.map(skill => skill.id),
+        tools: toolAssets.map(tool => tool.id),
+        children: [],
+      })
     }
     const method = sealMethodRevision({
       v: 1,
       id: 'method:s3c',
       entryTemplateId: 'template:s3c',
-      templates: otherGuidance === undefined
-        ? [currentTemplate]
-        : [
-          currentTemplate,
-          {
-            ...currentTemplate,
-            id: 'template:s3c-other',
-            guidance: otherGuidance,
-          },
-        ],
+      templates,
       skills: skillAssets,
       tools: toolAssets,
     })
@@ -5762,4 +5797,257 @@ void test('S4-A4 resumes the frozen HTTP Composition with zero new model request
   } finally {
     await httpFixture.close()
   }
+})
+
+// ---------------------------------------------------------------------------
+// S4-B1 — decompose prepare delivery and persisted receipt
+// ---------------------------------------------------------------------------
+
+const S4B1_BINDING = 'binding:s4b1-probe'
+const S4B1_EXAMPLE_MARKER = 'S4B1 complete frozen child example'
+
+function s4b1Example(): TaskExample {
+  return {
+    goal: {
+      summary: `${S4B1_EXAMPLE_MARKER}: inspect the supplied sample and report one result.`,
+      deliverable: 'A short result and a local note.',
+      scope: ['single child sample'],
+      constraints: ['Use the frozen example only; this prepare slice creates no child task.'],
+    },
+    localCriteria: [{
+      id: 's4b1-local-criterion',
+      statement: 'The local note records the observed sample.',
+    }],
+    inputs: [{
+      id: 's4b1-sample',
+      exampleText: 'sample input for the frozen child example',
+    }],
+    localOutputs: [{
+      id: 's4b1-notes',
+      path: 'notes.txt',
+      kind: 'file',
+      description: 'Local note for the child example.',
+    }],
+  }
+}
+
+void test('S4-B1 prepare delivers a persisted preview and status reconstructs it without a child', { timeout: 240_000 }, async () => {
+  const taskId = `task-s4b1-prepare-${String(process.pid)}-${String(Date.now())}`
+  const sessionId = `${taskId}-session`
+  const runId = `${taskId}-run`
+  let scenario: Scenario | undefined
+  let result: Awaited<ReturnType<typeof executeSingleRun>> | undefined
+  const createdSessions: string[] = []
+  const prompts: string[] = []
+  const contexts: string[] = []
+
+  await withHarness((request, index) => {
+    const first = selfReadAndPlan(request, index, scenario, taskId, runId)
+    if (first !== undefined) return first
+    if (index === 2) {
+      return {
+        reasoning: 'Prepare the frozen child example without committing a child.',
+        toolCalls: [{
+          id: 's4b1-prepare',
+          name: 'singularity_decompose',
+          arguments: JSON.stringify({ action: 'prepare', bindingId: S4B1_BINDING }),
+        }],
+        usage: fixtureUsage(2),
+      }
+    }
+    if (index === 3) {
+      return {
+        reasoning: 'Read status to confirm the prepare receipt is still current.',
+        toolCalls: [{
+          id: 's4b1-status',
+          name: 'singularity_read',
+          arguments: JSON.stringify({ kind: 'status' }),
+        }],
+        usage: fixtureUsage(3),
+      }
+    }
+    if (index === 4) {
+      return {
+        reasoning: 'Commit is not part of this slice; verify the explicit rejection.',
+        toolCalls: [{
+          id: 's4b1-commit',
+          name: 'singularity_decompose',
+          arguments: JSON.stringify({ action: 'commit' }),
+        }],
+        usage: fixtureUsage(4),
+      }
+    }
+    if (index === 5) return writeOutputReply()
+    if (index === 6) return submitReply()
+    return { content: `unexpected S4-B1 request ${String(index + 1)}`, usage: fixtureUsage(index) }
+  }, async ({ spike, fixture, workspace, storeRoot }) => {
+    scenario = await makeScenario(storeRoot, spike.ctx, {
+      taskId,
+      maxRuns: 1,
+      skills: [s4a2Skill()],
+      childBinding: {
+        bindingId: S4B1_BINDING,
+        templateId: 'template:s3c-child',
+        brief: 'Inspect the supplied sample and produce a local note.',
+        join: 'probe',
+        example: s4b1Example(),
+      },
+    })
+    const active = scenario
+    const disposeAgents = spike.ctx.on('agent/created', ({ agent }) => {
+      if (String(agent.session.id) === sessionId) createdSessions.push(String(agent.session.id))
+      return undefined
+    })
+    const disposePrompts = captureAgentPrompts(spike, sessionId, prompts)
+    const disposeContexts = captureAgentContexts(spike, sessionId, contexts)
+    const events = recordSessionEvents(spike, sessionId)
+    try {
+      result = await executeSingleRun({
+        ctx: spike.ctx,
+        journalRoot: storeRoot,
+        workspace,
+        sessionId,
+        runId,
+        admission: active.runAdmission,
+        composition: active.composition,
+        agentOptions: agentOptions(),
+        maxOutputBytes: 1024 * 1024,
+        verifier: {
+          provider: active.provider,
+          verify(request) {
+            return Promise.resolve(sealPublicReceipt({
+              v: 1,
+              provider: active.provider,
+              operationId: request.operationId,
+              contractDigest: request.task.digest,
+              inputDigests: request.inputs.map(ref => ref.digest),
+              outputDigests: request.outputs.map(ref => ref.digest),
+              criteria: request.task.spec.criteria
+                .filter(criterion => criterion.required)
+                .map(criterion => ({
+                  id: criterion.id,
+                  verdict: 'pass' as const,
+                  reason: 'fixture criterion passed',
+                })),
+              exit: { code: 0, signal: null },
+              timedOut: false,
+            }))
+          },
+        },
+        transientInvalidReasons: [],
+      })
+    } finally {
+      events.dispose()
+      disposeContexts()
+      disposePrompts()
+      disposeAgents()
+    }
+
+    assert.equal(result.classification, 'verified', result.executionRecord?.reason)
+    assert.equal(fixture.requests.length, 7, 'S4-B1 must use exactly the scripted prepare/status/commit-rejection/integration steps')
+    assert.deepEqual(createdSessions, [sessionId])
+    const firstRequest = fixture.requests[0] ?? {}
+    assert.ok(toolSchemaNames(firstRequest).includes('singularity_decompose'))
+    assert.ok(contexts[0]?.includes(S4B1_BINDING))
+    assert.ok(contexts[0]?.includes('"join":"probe"'))
+    assert.ok(contexts[0]?.includes('"canDecompose":false'))
+    assert.ok(prompts[0])
+    assert.equal(active.composition.platformPrompt, computeDigest('object', { v: 1, text: prompts[0] ?? '' }))
+    assert.ok(Buffer.byteLength(JSON.stringify(firstRequest.tools ?? [])) <= 12 * 1024)
+    assert.ok(Buffer.byteLength(contexts[0] ?? '') <= 8 * 1024)
+
+    const prepareResultEvent = events.events.find(
+      (event): event is Extract<SessionEvent, { readonly type: 'tool/result' }> =>
+        event.type === 'tool/result' && event.data.message.toolCallId === 's4b1-prepare',
+    )
+    assert.ok(prepareResultEvent, 'the successful prepare tool result must be persisted')
+    const prepareText = prepareResultEvent.data.message.content
+      .map(block => block.type === 'text' ? block.text : '')
+      .join('')
+    const prepareOutput = JSON.parse(prepareText) as {
+      readonly status: string
+      readonly previewRef: Ref
+      readonly deliveryReceiptRef: Ref
+      readonly bindingId: string
+      readonly join: string
+      readonly brief: string
+      readonly templateRef: Ref
+      readonly methodRef: Ref
+      readonly example: TaskExample
+      readonly resolved: { readonly skills: readonly { readonly id: string; readonly name: string }[] }
+      readonly interface: { readonly instanceSchema: unknown }
+      readonly contextEpoch: string
+    }
+    assert.equal(prepareOutput.status, 'preview')
+    assert.equal(prepareOutput.bindingId, S4B1_BINDING)
+    assert.equal(prepareOutput.join, 'probe')
+    assert.equal(prepareOutput.example.goal.summary.includes(S4B1_EXAMPLE_MARKER), true)
+    assert.deepEqual(prepareOutput.example, s4b1Example())
+    assert.equal(prepareOutput.resolved.skills.some(skill => skill.name === S4A2_SKILL_NAME), true)
+    assert.equal(prepareOutput.brief, 'Inspect the supplied sample and produce a local note.')
+    assert.deepEqual(prepareOutput.interface.instanceSchema, {})
+    assert.equal(prepareOutput.templateRef.id, 'template:s3c-child')
+    assert.equal(prepareOutput.templateRef.digest, prepareOutput.methodRef.digest)
+
+    const statusResultEvent = events.events.find(
+      (event): event is Extract<SessionEvent, { readonly type: 'tool/result' }> =>
+        event.type === 'tool/result' && event.data.message.toolCallId === 's4b1-status',
+    )
+    assert.ok(statusResultEvent, 'the status tool result must be persisted')
+    const statusText = statusResultEvent.data.message.content
+      .map(block => block.type === 'text' ? block.text : '')
+      .join('')
+    const statusOutput = JSON.parse(statusText) as {
+      readonly data: { readonly previews: readonly { readonly state: string; readonly previewRef: Ref }[] }
+    }
+    assert.equal(statusOutput.data.previews.length, 1)
+    assert.equal(statusOutput.data.previews[0]?.state, 'current')
+    assert.deepEqual(statusOutput.data.previews[0]?.previewRef, prepareOutput.previewRef)
+
+    const store = await DomainStore.open({ root: storeRoot })
+    try {
+      await store.readObject(prepareOutput.previewRef, 'preview')
+      await assert.rejects(store.readObject(prepareOutput.previewRef, 'object'), /digest|domain|corrupt/i)
+      await store.readObject(prepareOutput.deliveryReceiptRef, 'object')
+      await assert.rejects(store.readObject(prepareOutput.deliveryReceiptRef, 'preview'), /digest|domain|corrupt/i)
+      const facts = store.facts()
+      assert.equal(facts.some(fact => fact.type === 'task/children-admitted'), false)
+      assert.deepEqual(facts.map(fact => fact.type), [
+        'task/admitted',
+        'run/opened',
+        'run/submitted',
+        'run/closed',
+        'task/closed',
+      ])
+    } finally {
+      await store.close()
+    }
+
+    const requestTexts = messageTexts(fixture.requests[4] ?? {})
+    assert.ok(requestTexts.some(text => text.includes('"state":"current"')))
+    assert.ok(requestTexts.some(text => text.includes(S4B1_EXAMPLE_MARKER)))
+    const commitTexts = messageTexts(fixture.requests[5] ?? {})
+    assert.ok(commitTexts.some(text => text.includes('"code":"INVALID_ARGUMENT"')), 'commit must be rejected with INVALID_ARGUMENT')
+    const usage = result.usage
+    if (process.env.SINGULARITY_S4B1_EVIDENCE === '1') {
+      console.log('S4-B1 evidence:', JSON.stringify({
+        prepareRef: prepareOutput.previewRef,
+        receiptRef: prepareOutput.deliveryReceiptRef,
+        contextEpoch: prepareOutput.contextEpoch,
+        usage,
+        systemBytes: Buffer.byteLength(prompts[0] ?? ''),
+        nodeViewBytes: Buffer.byteLength(contexts[0] ?? ''),
+        toolSchemaBytes: Buffer.byteLength(JSON.stringify(firstRequest.tools ?? [])),
+        request0Bytes: Buffer.byteLength(JSON.stringify(firstRequest)),
+        sessionEvents: events.events.length,
+        eventTypes: events.events.map(event => event.type),
+        toolResults: events.events
+          .filter((event): event is Extract<SessionEvent, { readonly type: 'tool/result' }> => event.type === 'tool/result')
+          .map(event => String(event.data.message.toolCallId)),
+      }))
+    }
+    assert.ok(usage.inputTokens > 0)
+    assert.ok(usage.outputTokens > 0)
+    assert.equal(usage.unknownRequests, 0)
+  })
 })

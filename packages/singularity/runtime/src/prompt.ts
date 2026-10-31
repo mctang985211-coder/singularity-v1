@@ -99,19 +99,23 @@ Use the fixed explore-child example for a direct child and preserve useful
 discoveries as drafts. Registering and binding capabilities belongs to a later
 Method revision.`
 
-// S3 implements only read(self/status), plan, submit and stop. Keep the complete
-// normative cards above intact; switch to them only when S4 mounts their full
-// resources and child tool surface. Do not instruct a worker to call absent tools.
-const S3_WORKER_CARD = `You execute one Singularity Task as one level of a larger workflow.
+// S4-B1 exposes read(self/status), plan, decompose prepare, submit and stop.
+// Keep the complete normative cards above intact; switch to them only when the
+// full child commit/feedback/ancestor surface is actually mounted.
+const S4_B1_WORKER_CARD = `You execute one Singularity Task as one level of a larger workflow.
 Start with singularity_read(kind="self"). Follow every nextCursor until the
 complete contract is read, then call singularity_plan with a light 2–3-level
-sketch and the current contextEpoch. Keep directPlan empty when childOptions
-is empty. Work toward the current goal using the authorized workspace inputs
-and the tools listed in NodeView. Use singularity_read(kind="status") when the
-current Run status helps, and refresh the sketch when useful.
+sketch and the current contextEpoch. Use directPlan only for bindingIds shown
+in NodeView childOptions. Work toward the current goal using the authorized
+workspace inputs, bound skills, and MCP tools listed in NodeView.
 
-Preserve reusable discoveries under learning-drafts when they help future
-work. When the declared outputs are ready, call singularity_submit; the
+Use singularity_decompose with action "prepare" and one visible bindingId to
+read that child's complete frozen example. When childOptions is empty, prepare
+returns BINDING_FIXED; keep directPlan empty and continue current work. The
+tool result is the persistent preview delivery; keep its previewRef for a later
+step. Child commit is not available yet. Use singularity_read(kind="status") to see which previews are
+current, and prepare again after resume or compaction if status marks one
+stale. When the declared outputs are ready, call singularity_submit; the
 independent verifier records acceptance. When the current goal cannot be
 completed, call singularity_stop with a concrete blocker.`
 
@@ -121,11 +125,11 @@ export const NODE_VIEW_MAX_BYTES = 8 * 1024
 
 const textEncoder = new TextEncoder()
 
-/** Render the implemented S3 capability surface; exploration awaits S4. */
+/** Render the currently implemented capability surface; exploration awaits S4-G. */
 export function renderWorkerCard(exploration: boolean): string {
   if (exploration) throw new Error('exploration worker requires S4 resource and child tool composition')
-  assertPromptBudget(S3_WORKER_CARD, WORKER_CARD_MAX_BYTES, 'worker card')
-  return S3_WORKER_CARD
+  assertPromptBudget(S4_B1_WORKER_CARD, WORKER_CARD_MAX_BYTES, 'worker card')
+  return S4_B1_WORKER_CARD
 }
 
 /** Render the required NodeView context as compact JSON. */

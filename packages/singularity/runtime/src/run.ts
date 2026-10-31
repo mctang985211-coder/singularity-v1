@@ -1,3 +1,5 @@
+import { resolve } from 'node:path'
+
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -25,7 +27,6 @@ import type {
   SubmissionManifest,
   TaskContract,
   TaskRunState,
-  TaskTemplate,
   UsageRecord,
 } from '@singularity/protocol'
 
@@ -34,9 +35,9 @@ import type { OpenedRunMode } from './agent.ts'
 import { initialContextEpoch } from './epoch.ts'
 import { SingleRunError } from './errors.ts'
 import { mcpDispatchPlan } from './mcp-resources.ts'
-import type { FrozenMcpServer } from './mcp-resources.ts'
+import { preflightNodeView, renderLiveNodeView } from './node-view.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
-import { clampPercent, renderNodeView } from './prompt.ts'
+import { clampPercent } from './prompt.ts'
 import type { NodeView } from './prompt.ts'
 import {
   MethodResourceError,
@@ -44,7 +45,6 @@ import {
   loadMethodResources,
 } from './resources.ts'
 import type { FrozenMethodResources } from './resources.ts'
-import type { FrozenSkillResource } from './skill-resources.ts'
 import {
   buildExecutionResult,
   commitFact,
@@ -202,6 +202,29 @@ async function openSingleRun(
   const baseToolNames = await resolveBaseToolNames(contract, service)
   assertToolsAvailable(baseToolNames, request.ctx)
 
+  const state = await service.taskRunState(request.transientInvalidReasons ?? [])
+  const existing = state.runs.get(request.runId)
+  if (existing !== undefined) {
+    throw new SingleRunError(
+      existing.phase === 'closed' ? 'RUN_ALREADY_CLOSED' : 'RUN_ALREADY_OPENED',
+      `Run ${JSON.stringify(request.runId)} already exists`,
+    )
+  }
+  const lastAttempt = lastAttemptFromState(state, contract.taskId, request.runId)
+  preflightNodeView({
+    contract,
+    runId: request.runId,
+    workspace: resolve(request.workspace),
+    baseToolNames,
+    template: methodResources.template,
+    skills: methodResources.skills,
+    mcpServers: methodResources.mcpServers,
+    budget: { tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 },
+    lastAttempt,
+    asOf: clock(),
+    contextEpoch: initialContextEpoch(request.sessionId),
+  })
+
   const contractRef = await putSealed(service, contract.taskId, contract, 'contract')
   await ensureObject(service, contract.acceptance, request.admission.acceptanceBytes)
   await ensureObject(service, contract.environment.seed, request.admission.workspaceSeedBytes)
@@ -227,15 +250,6 @@ async function openSingleRun(
       `Task ${JSON.stringify(contract.taskId)} was admitted with a different contract digest`,
     )
   }
-  const state = await service.taskRunState(request.transientInvalidReasons ?? [])
-  const existing = state.runs.get(request.runId)
-  if (existing !== undefined) {
-    throw new SingleRunError(
-      existing.phase === 'closed' ? 'RUN_ALREADY_CLOSED' : 'RUN_ALREADY_OPENED',
-      `Run ${JSON.stringify(request.runId)} already exists`,
-    )
-  }
-
   const composition = seal('composition', compositionPayload)
   const compositionRef = await putSealed(service, `${request.runId}:composition`, composition, 'composition')
   const runOpened = await commitFact(
@@ -267,7 +281,8 @@ async function openSingleRun(
     request.transientInvalidReasons ?? [],
   ) as Extract<Fact, { readonly type: 'run/opened' }>
 
-  const workspace = await prepareWorkspace(request.workspace, contract.spec.inputs, service)
+  await prepareWorkspace(request.workspace, contract.spec.inputs, service)
+  const workspace = resolve(request.workspace)
 
   return buildPreparedRun({
     actor,
@@ -278,7 +293,7 @@ async function openSingleRun(
     workspace,
     methodResources,
     baseToolNames,
-    lastAttempt: lastAttemptFromState(state, contract.taskId, request.runId),
+    lastAttempt,
     request,
   })
 }
@@ -378,15 +393,20 @@ export async function drivePreparedRun(
     checkBudget,
     stopBudget,
     startBudget,
-    renderView: () => renderNodeView(buildNodeView(
-      runtime,
-      prepared.methodResources.template,
-      prepared.methodResources.skills,
-      prepared.methodResources.mcpServers,
-      request,
+    renderView: () => renderLiveNodeView({
+      contract: runtime.contract,
+      runId: request.runId,
+      workspace: runtime.workspace,
+      baseToolNames: runtime.baseToolNames,
+      template: prepared.methodResources.template,
+      skills: prepared.methodResources.skills,
+      mcpServers: prepared.methodResources.mcpServers,
+      budget: budget(),
+      lastAttempt: runtime.lastAttempt,
+      asOf: runtime.clock(),
+      contextEpoch: initialContextEpoch(request.sessionId),
       controller,
-      budget(),
-    )),
+    }),
   })
   const { snapshot } = observation
   const tools = controller.snapshot()
@@ -603,6 +623,11 @@ async function createToolController(
     workspace: runtime.workspace,
     skillNames: prepared.methodResources.skills.map(skill => skill.name),
     mcpPlan: mcpDispatchPlan(prepared.methodResources.mcpServers),
+    childBindingIds: prepared.methodResources.template.children.map(binding => binding.bindingId),
+    decompose: {
+      methodResources: prepared.methodResources,
+      reader: service,
+    },
     writer: service,
     maxOutputBytes: runtime.maxOutputBytes,
     clock: runtime.clock,
@@ -658,55 +683,6 @@ async function commitRunSubmitted(
     },
     runtime.transientInvalidReasons,
   )
-}
-
-function buildNodeView(
-  runtime: RuntimeContext,
-  template: TaskTemplate,
-  skills: readonly FrozenSkillResource[],
-  mcpServers: readonly FrozenMcpServer[],
-  request: ExecuteSingleRunRequest,
-  controller: RunToolController,
-  budget: RemainingBudgetPct,
-): NodeView {
-  const tools = controller.snapshot()
-  const asOf = runtime.clock()
-  const obligations = controller.obligations()
-  const toolNames = [...runtime.baseToolNames]
-  if (skills.length > 0 && !toolNames.includes('skill')) toolNames.push('skill')
-  const mcpPlan = mcpDispatchPlan(mcpServers)
-  for (const name of [...mcpPlan.publicToolNames, ...mcpPlan.resourceToolNames]) {
-    if (!toolNames.includes(name)) toolNames.push(name)
-  }
-  return {
-    v: 1,
-    asOf,
-    contextEpoch: tools.contextEpoch,
-    task: {
-      id: runtime.contract.taskId,
-      runId: request.runId,
-      goalSummary: runtime.contract.spec.goal.summary,
-      contractDigest: runtime.contract.digest,
-      phase: tools.submission === undefined ? 'working' : 'integrating',
-      mode: 'guided',
-    },
-    method: runtime.contract.method,
-    ownTemplate: { id: template.id, brief: template.brief },
-    documents: [],
-    skills: skills.map(skill => ({ id: skill.id, name: skill.name })),
-    tools: toolNames.map(name => ({ name })),
-    childOptions: [],
-    requiredObligations: [],
-    childBatch: null,
-    childHistory: { total: 0, outcomes: {} },
-    recentChildResults: [],
-    obligations,
-    planningSketchRef: tools.planningSketchRef ?? null,
-    feedback: { count: 0 },
-    lastAttempt: runtime.lastAttempt,
-    budget,
-    workspace: { cwd: runtime.workspace, outputs: runtime.contract.spec.outputs },
-  }
 }
 
 function computeBudget(
