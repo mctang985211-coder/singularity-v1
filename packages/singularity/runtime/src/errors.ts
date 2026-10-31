@@ -1,4 +1,4 @@
-/** Stable request/flow rejection shared by Run and recovery modules. */
+/** Stable request/flow rejection shared by Run and retry modules. */
 export type SingleRunErrorCode =
   | 'INVALID_ARGUMENT'
   | 'CONTRACT_INVALID'
@@ -26,7 +26,7 @@ export class SingleRunError extends Error {
   }
 }
 
-/** Explicit frozen-resource failure; recovery closes these as invalid. */
+/** Invalid frozen resource or host composition; reject before further execution. */
 export class MethodResourceError extends SingleRunError {
   readonly resource: 'method' | 'composition'
 
@@ -41,7 +41,7 @@ export class MethodResourceError extends SingleRunError {
   }
 }
 
-/** Existing tool-facing rejection used by the prepare-only decompose slice. */
+/** Existing tool-facing rejection used by decompose prepare/commit. */
 export type DecomposeErrorCode =
   | 'INVALID_ARGUMENT'
   | 'BINDING_FIXED'
@@ -49,6 +49,10 @@ export type DecomposeErrorCode =
   | 'PREVIEW_REQUIRED'
   | 'PREVIEW_STALE'
   | 'NEXT_STEP_REQUIRED'
+  | 'CHILD_BATCH_ACTIVE'
+  | 'REQUIRED_FEEDBACK_REPLAN'
+  | 'INPUT_NOT_AUTHORIZED'
+  | 'IDEMPOTENCY_CONFLICT'
 
 /** Internal decompose rejection; maps to an existing protocol tool code. */
 export class DecomposeError extends Error {
@@ -59,4 +63,13 @@ export class DecomposeError extends Error {
     super(message, options)
     this.code = code
   }
+}
+
+/** Finish native cleanup while retaining the original failure and any cleanup failures. */
+export function throwCollectedErrors(errors: readonly unknown[]): void {
+  if (errors.length === 1) {
+    const error = errors[0]
+    throw error instanceof Error ? error : new Error(String(error), { cause: error })
+  }
+  if (errors.length > 1) throw new AggregateError(errors, 'Execution and lifecycle cleanup failed')
 }

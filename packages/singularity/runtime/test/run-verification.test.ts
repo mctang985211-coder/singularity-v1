@@ -1,31 +1,32 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { mkdtemp,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { JobView } from '@deepseek-ai/dsh-jobs'
-import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition,ToolRunContext } from '@deepseek-ai/dsh-tools'
 
-import { sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type {
-  PublicReceipt,
-  Ref,
-  TaskContract,
+PublicReceipt,
+Ref,
+TaskContract,
 } from '@singularity/protocol'
+import { sealPublicReceipt,sealTaskContract } from '@singularity/protocol'
 
-import { DomainStore } from '../src/store.ts'
+import type { DecomposeCommitResult } from '../src/decompose-commit.ts'
 import { initialContextEpoch } from '../src/epoch.ts'
+import { DecomposeError } from '../src/errors.ts'
 import type { FrozenMethodResources } from '../src/resources.ts'
+import { DomainStore } from '../src/store.ts'
 import { RunToolController } from '../src/tools.ts'
+import type { RunVerifier,VerifierRequest } from '../src/verification.ts'
 import {
-  VERIFIER_ERROR_REASON,
-  VERIFIER_TIMEOUT_REASON,
-  verifyRunSubmission,
+VERIFIER_TIMEOUT_REASON,
+verifyRunSubmission
 } from '../src/verification.ts'
-import type { RunVerifier, VerifierRequest } from '../src/verification.ts'
 
 const digestA = `sha256:${'a'.repeat(64)}`
 const digestB = `sha256:${'b'.repeat(64)}`
@@ -133,42 +134,58 @@ async function run(
   }, clock)
 }
 
-void test('host deadline bounds a verifier that never returns', async () => {
+void test('verifier deadline cancels native domain work and waits for process close before invalid', async () => {
   await withStore(async store => {
     const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    const result = await Promise.race([
-      run(store, {
-        contract, outputRef,
-        verifier: { provider: contract.acceptance, verify: () => new Promise<never>(() => {}) },
-      }, () => contract.limits.deadlineAt - 10),
-      new Promise<'hung'>(resolve => { setTimeout(() => { resolve('hung') }, 100) }),
-    ])
-    assert.notEqual(result, 'hung')
-    assert.equal(typeof result === 'object' && result.verdict, 'invalid')
-    assert.equal(typeof result === 'object' && 'code' in result && result.code, 'verifier-timeout')
+    let closed = false
+    const result = await run(store, {
+      contract, outputRef,
+      verifier: { provider: contract.acceptance, verify: request => new Promise((_resolve, reject) => {
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'],
+          { signal: request.signal, stdio: 'ignore' })
+        let failure: Error | undefined
+        child.once('error', error => { failure = error })
+        child.once('close', () => {
+          closed = true
+          reject(failure ?? new Error('verifier process closed'))
+        })
+      }) },
+    }, () => contract.limits.deadlineAt - 50)
+    assert.equal(closed, true, 'no closure while the domain process is still alive')
+    assert.equal(result.verdict, 'invalid')
+    assert.equal('code' in result && result.code, 'verifier-timeout')
   })
 })
 
-void test('host rejects receipts returned at the deadline or after an invalid clock change', async () => {
+void test('host rejects receipts returned at the deadline', async () => {
   await withStore(async store => {
     const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'), 'object')
     const contract = makeContract()
-    for (const finishedAt of [contract.limits.deadlineAt, contract.limits.deadlineAt - 2, NaN]) {
-      let now = contract.limits.deadlineAt - 1
-      const result = await run(store, {
+    let now = contract.limits.deadlineAt - 1
+    const result = await run(store, {
         contract, outputRef,
         verifier: {
           provider: contract.acceptance,
           verify() {
-            now = finishedAt
+            now = contract.limits.deadlineAt
             return Promise.resolve(receipt(contract, contract.acceptance, { outputDigest: outputRef.digest }))
           },
         },
       }, () => now)
-      assert.equal(result.verdict, 'invalid')
-      assert.equal('code' in result && result.code, 'verifier-timeout')
-    }
+    assert.equal(result.verdict, 'invalid')
+    assert.equal('code' in result && result.code, 'verifier-timeout')
+  })
+})
+
+void test('an upstream TimeoutError is a host failure, not the verifier deadline', async () => {
+  await withStore(async store => {
+    const contract = makeContract()
+    const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'))
+    const failure = new DOMException('upstream request timed out', 'TimeoutError')
+    await assert.rejects(run(store, { contract, outputRef,
+      verifier: { provider: contract.acceptance, verify: () => Promise.reject(failure) },
+    }), error => error === failure)
   })
 })
 
@@ -293,16 +310,10 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
     })
     assert.equal(allPassExitOne.verdict, 'invalid')
 
-    const thrown = await run(store, {
-      contract,
-      outputRef,
-      verifier: {
-        provider,
-        verify: () => Promise.reject(new Error('infrastructure down')),
-      },
-    })
-    if (thrown.verdict !== 'invalid') assert.fail('expected invalid verifier error')
-    assert.ok(thrown.reason.startsWith(VERIFIER_ERROR_REASON))
+    const hostFailure = new Error('infrastructure down')
+    await assert.rejects(run(store, { contract, outputRef,
+      verifier: { provider, verify: () => Promise.reject(hostFailure) },
+    }), error => error === hostFailure)
   })
 })
 
@@ -334,7 +345,7 @@ void test('frozen acceptance rejects a substituted verifier before it receives C
       { ...contract.acceptance, digest: digestB },
     ]) {
       let called = false
-      const result = await run(store, {
+      await assert.rejects(run(store, {
         contract,
         outputRef,
         verifier: {
@@ -344,8 +355,7 @@ void test('frozen acceptance rejects a substituted verifier before it receives C
             return Promise.resolve(receipt(contract, provider, { outputDigest: outputRef.digest }))
           },
         },
-      })
-      assert.equal(result.verdict, 'invalid')
+      }), { code: 'COMPOSITION_MISMATCH' })
       assert.equal(called, false)
     }
   })
@@ -358,7 +368,7 @@ void test('skill dispatch is denied after stop and after submission', async () =
   try {
     await withStore(async store => {
       const contextEpoch = initialContextEpoch('skill-guard-session')
-      const agent = { session: { id: 'skill-guard-session', snapshotEvents: () => [] } } as unknown as Agent
+      const agent = { session: { id: 'skill-guard-session', seq: 0, firstLiveSeq: 0, surface: { replaceGeneration: 0 }, snapshotEvents: () => [] } } as unknown as Agent
       const callId = 'skill-guard-call' as ToolRunContext['callId']
       const execution = (name: string, args: unknown = {}): ToolRunContext => ({
         name, agent, arguments: args, callId, rootCallId: callId,
@@ -457,8 +467,8 @@ void test('MCP dispatch guard admits only frozen public tools/resources and keep
   try {
     await withStore(async store => {
       const contextEpoch = initialContextEpoch('mcp-guard-session')
-      const agent = { session: { id: 'mcp-guard-session', snapshotEvents: () => [] } } as unknown as Agent
-      const otherAgent = { session: { id: 'mcp-guard-other', snapshotEvents: () => [] } } as unknown as Agent
+      const agent = { session: { id: 'mcp-guard-session', seq: 0, firstLiveSeq: 0, surface: { replaceGeneration: 0 }, snapshotEvents: () => [] } } as unknown as Agent
+      const otherAgent = { session: { id: 'mcp-guard-other', seq: 0, firstLiveSeq: 0, surface: { replaceGeneration: 0 }, snapshotEvents: () => [] } } as unknown as Agent
       const callId = 'mcp-guard-call' as ToolRunContext['callId']
       const execution = (name: string, args: unknown = {}, target: Agent = agent): ToolRunContext => ({
         name, agent: target, arguments: args, callId, rootCallId: callId,
@@ -607,7 +617,6 @@ void test('tool dispatch uses the exact host budget check while preserving read 
     const contract = makeContract(['领域约束'.repeat(4096)])
     const contextEpoch = initialContextEpoch('session-guard')
     const definitions = new Map<string, ToolDefinition>()
-    const jobs: JobView[] = []
     let allowed = true
     const controller = new RunToolController({
       contract,
@@ -624,8 +633,8 @@ void test('tool dispatch uses the exact host budget check while preserving read 
       epoch: () => contextEpoch,
       commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
     })
-    const agent = { session: { id: 'session-guard', snapshotEvents: () => [] } } as unknown as Agent
-    controller.register({ get: () => ({ list: () => jobs }), tools: {
+    const agent = { session: { id: 'session-guard', seq: 0, firstLiveSeq: 0, surface: { replaceGeneration: 0 }, snapshotEvents: () => [] } } as unknown as Agent
+    controller.register({ tools: {
       register: (definition: ToolDefinition) => definitions.set(definition.name, definition),
       guard() {},
     } } as unknown as Context, agent)
@@ -674,16 +683,6 @@ void test('tool dispatch uses the exact host budget check while preserving read 
       directPlan: [], assumptions: [],
     } }, execution('singularity_plan'))
     assertSubmissionGate(undefined)
-    jobs.push({
-      id: 'bash-active' as JobView['id'], kind: 'bash', label: 'writes output',
-      owner: agent.session.id, status: 'running', startedAt: 0,
-      output: { total: 0, earliest: 0 },
-    })
-    assertSubmissionGate('ACTIVE_JOB')
-    jobs[0] = { ...jobs[0], status: 'stopping' }
-    assertSubmissionGate('ACTIVE_JOB')
-    jobs[0] = { ...jobs[0], status: 'completed' }
-    assertSubmissionGate(undefined)
     assert.equal(controller.checkGuard(execution('bash')), undefined)
     allowed = false
     assertSubmissionGate('LIMIT_EXCEEDED')
@@ -699,11 +698,11 @@ void test('tool dispatch uses the exact host budget check while preserving read 
   })
 })
 
-void test('S4-B1 registers prepare-only decompose for empty child bindings and accepts duplicate directPlan', async () => {
+void test('S4-B1/B2 registers decompose for empty child bindings and accepts duplicate directPlan', async () => {
   const contract = makeContract()
   await withStore(async store => {
     const contextEpoch = initialContextEpoch('b1-guard-session')
-    const agent = { session: { id: 'b1-guard-session', snapshotEvents: () => [] } } as unknown as Agent
+    const agent = { session: { id: 'b1-guard-session', seq: 0, firstLiveSeq: 0, surface: { replaceGeneration: 0 }, snapshotEvents: () => [] } } as unknown as Agent
     const callId = 'b1-guard-call' as ToolRunContext['callId']
     const execution = (name: string, args: unknown = {}): ToolRunContext => ({
       name, agent, arguments: args, callId, rootCallId: callId,
@@ -816,7 +815,7 @@ void test('S4-B1 prepare is gated by self read and the current PlanningSketch', 
   const contract = makeContract()
   await withStore(async store => {
     const contextEpoch = initialContextEpoch('b1-gate-session')
-    const agent = { session: { id: 'b1-gate-session', snapshotEvents: () => [] } } as unknown as Agent
+    const agent = { session: { id: 'b1-gate-session', seq: 0, firstLiveSeq: 0, surface: { replaceGeneration: 0 }, snapshotEvents: () => [] } } as unknown as Agent
     const callId = 'b1-gate-call' as ToolRunContext['callId']
     const execution = (name: string, args: unknown = {}): ToolRunContext => ({
       name, agent, arguments: args, callId, rootCallId: callId,
@@ -880,5 +879,240 @@ void test('S4-B1 prepare is gated by self read and the current PlanningSketch', 
       prepare.execute({ action: 'prepare', bindingId: 'b1' }, execution('singularity_decompose')),
       /PLAN_FIRST/,
     )
+  })
+})
+
+void test('S4-B2 decompose commit guards, maps errors, and concludes the parent turn', async () => {
+  const contract = makeContract()
+  await withStore(async store => {
+    const sessionId = 's4b2-commit-guard'
+    const contextEpoch = initialContextEpoch(sessionId)
+    const agent = { session: { id: sessionId, seq: 0, firstLiveSeq: 0, surface: { replaceGeneration: 0 }, snapshotEvents: () => [] } } as unknown as Agent
+    const callId = 's4b2-commit-call' as ToolRunContext['callId']
+    let concluded = 0
+    const execution = (name: string, args: unknown = {}): ToolRunContext => ({
+      name, agent, arguments: args, callId, rootCallId: callId,
+      token: Symbol() as ToolRunContext['token'], signal: new AbortController().signal,
+      deferContext() {}, concludeTurn() { concluded += 1 },
+    })
+    const register = (controller: RunToolController): Map<string, ToolDefinition> => {
+      const definitions = new Map<string, ToolDefinition>()
+      controller.register({ get: () => ({ list: () => [] }), tools: {
+        register: (definition: ToolDefinition) => {
+          definitions.set(definition.name, definition)
+          return () => undefined
+        },
+        guard() {},
+      } } as unknown as Context, agent)
+      return definitions
+    }
+    const resources = {
+      method: { templates: [] },
+      template: { children: [] },
+      guidance: { id: 'guidance', digest: digestA },
+      guidanceText: '',
+      skills: [],
+      mcpServers: [],
+    } as unknown as FrozenMethodResources
+    const task = {
+      goal: {
+        summary: 'Inspect the authorized sample.',
+        deliverable: 'One result.',
+        scope: ['child'],
+        constraints: [],
+      },
+      localCriteria: [{ id: 'local', statement: 'Record the result.' }],
+      inputs: [],
+      localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
+    }
+    const commitArgs = {
+      action: 'commit' as const,
+      children: [{ bindingId: 'b1', ackPreview: digestA, task }],
+    }
+    const calls: { readonly args: unknown; readonly callId: string }[] = []
+    const admittedResult: DecomposeCommitResult = {
+      status: 'admitted',
+      parentRunId: 'run-s4b2-guard',
+      batchId: 'batch:s4b2',
+      children: [{ taskId: 'task-child', bindingId: 'b1', join: 'probe' }],
+      deliveryReceiptRefs: [],
+      fact: {} as never,
+    }
+    const controller = new RunToolController({
+      contract,
+      runId: 'run-s4b2-guard',
+      sessionId,
+      workspace: '/workspace',
+      skillNames: [],
+      mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
+      childBindingIds: ['b1'],
+      decompose: { methodResources: resources, reader: store },
+      writer: store,
+      maxOutputBytes: 1024,
+      clock: () => 1000,
+      budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+      checkBudget: () => true,
+      epoch: () => contextEpoch,
+      commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+      commitChildBatch: (args, id) => {
+        calls.push({ args, callId: id })
+        return Promise.resolve(admittedResult)
+      },
+    })
+    const definitions = register(controller)
+    const decompose = definitions.get('singularity_decompose')
+    const read = definitions.get('singularity_read')
+    const plan = definitions.get('singularity_plan')
+    const submit = definitions.get('singularity_submit')
+    assert.ok(decompose && read && plan && submit)
+    const codeOf = (value: string | undefined): string | undefined => value === undefined
+      ? undefined
+      : (JSON.parse(value) as { readonly code: string }).code
+
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_decompose', commitArgs))), 'READ_SELF_FIRST')
+    let cursor: string | undefined
+    do {
+      const page = await read.execute(
+        { kind: 'self', ...(cursor === undefined ? {} : { cursor }) },
+        execution('singularity_read'),
+      ) as { readonly nextCursor?: string }
+      cursor = page.nextCursor
+    } while (cursor !== undefined)
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_decompose', commitArgs))), 'PLAN_FIRST')
+    await plan.execute({ sketch: {
+      v: 1,
+      taskId: contract.taskId,
+      runId: 'run-s4b2-guard',
+      contextEpoch,
+      objective: 'commit one child',
+      sourceContract: contract.digest,
+      levels: [0, 1].map(level => ({
+        level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
+      })),
+      directPlan: [],
+      assumptions: [],
+    } }, execution('singularity_plan'))
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_decompose', commitArgs))), undefined)
+
+    await assert.rejects(
+      decompose.execute({ action: 'commit' }, execution('singularity_decompose')),
+      /INVALID_ARGUMENT/,
+    )
+    await assert.rejects(
+      decompose.execute({
+        action: 'commit',
+        children: [{ ...commitArgs.children[0], task: { ...task, join: 'required' } }],
+      }, execution('singularity_decompose')),
+      /INVALID_ARGUMENT/,
+    )
+    await assert.rejects(
+      decompose.execute({
+        action: 'commit',
+        children: [{ ...commitArgs.children[0], extra: true }],
+      }, execution('singularity_decompose')),
+      /INVALID_ARGUMENT/,
+    )
+
+    const output = await decompose.execute(commitArgs, execution('singularity_decompose')) as {
+      readonly status: string
+      readonly batchId: string
+      readonly parentRunId: string
+      readonly children: readonly unknown[]
+    }
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.callId, String(callId))
+    assert.deepEqual(calls[0]?.args, commitArgs)
+    assert.equal(concluded, 1)
+    assert.equal(output.status, 'admitted')
+    assert.equal(output.batchId, 'batch:s4b2')
+    assert.equal(output.parentRunId, 'run-s4b2-guard')
+    assert.deepEqual(output.children, admittedResult.children)
+
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_decompose', commitArgs))), 'CHILD_BATCH_ACTIVE')
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_submit'))), 'CHILD_BATCH_ACTIVE')
+    assert.equal(codeOf(controller.checkGuard(execution('bash', {}))), 'CHILD_BATCH_ACTIVE')
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_stop'))), 'CHILD_BATCH_ACTIVE')
+    assert.equal(codeOf(controller.checkGuard(execution('singularity_read', { kind: 'status' }))), undefined)
+    assert.equal(controller.obligations().canSubmit, false)
+    assert.deepEqual(controller.obligations().denialCodes, ['CHILD_BATCH_ACTIVE'])
+    await assert.rejects(
+      decompose.execute(commitArgs, execution('singularity_decompose')),
+      /CHILD_BATCH_ACTIVE/,
+    )
+    assert.equal(calls.length, 1)
+
+    const retryController = new RunToolController({
+      contract,
+      runId: 'run-s4b2-retry',
+      sessionId,
+      workspace: '/workspace',
+      skillNames: [],
+      mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
+      childBindingIds: ['b1'],
+      decompose: { methodResources: resources, reader: store },
+      writer: store,
+      maxOutputBytes: 1024,
+      clock: () => 1000,
+      budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+      checkBudget: () => true,
+      epoch: () => contextEpoch,
+      commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+      commitChildBatch: () => Promise.reject(new DecomposeError('PREVIEW_REQUIRED', 'prepare first')),
+    })
+    const retryDefinitions = register(retryController)
+    const retryDecompose = retryDefinitions.get('singularity_decompose')
+    const retryRead = retryDefinitions.get('singularity_read')
+    const retryPlan = retryDefinitions.get('singularity_plan')
+    assert.ok(retryDecompose && retryRead && retryPlan)
+    let retryCursor: string | undefined
+    do {
+      const page = await retryRead.execute(
+        { kind: 'self', ...(retryCursor === undefined ? {} : { cursor: retryCursor }) },
+        execution('singularity_read'),
+      ) as { readonly nextCursor?: string }
+      retryCursor = page.nextCursor
+    } while (retryCursor !== undefined)
+    await retryPlan.execute({ sketch: {
+      v: 1,
+      taskId: contract.taskId,
+      runId: 'run-s4b2-retry',
+      contextEpoch,
+      objective: 'retry commit',
+      sourceContract: contract.digest,
+      levels: [0, 1].map(level => ({
+        level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
+      })),
+      directPlan: [],
+      assumptions: [],
+    } }, execution('singularity_plan'))
+    await assert.rejects(
+      retryDecompose.execute(commitArgs, execution('singularity_decompose')),
+      /PREVIEW_REQUIRED/,
+    )
+    assert.equal(codeOf(retryController.checkGuard(execution('singularity_decompose', commitArgs))), undefined)
+
+    const activeController = new RunToolController({
+      contract,
+      runId: 'run-s4b2-active',
+      sessionId,
+      workspace: '/workspace',
+      skillNames: [],
+      mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
+      childBindingIds: ['b1'],
+      childBatchActive: true,
+      decompose: { methodResources: resources, reader: store },
+      writer: store,
+      maxOutputBytes: 1024,
+      clock: () => 1000,
+      budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+      checkBudget: () => true,
+      epoch: () => contextEpoch,
+      commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+      commitChildBatch: () => Promise.resolve(admittedResult),
+    })
+    register(activeController)
+    assert.equal(codeOf(activeController.checkGuard(execution('singularity_decompose', commitArgs))), 'CHILD_BATCH_ACTIVE')
+    assert.equal(codeOf(activeController.checkGuard(execution('singularity_submit'))), 'CHILD_BATCH_ACTIVE')
+    assert.equal(codeOf(activeController.checkGuard(execution('singularity_read', { kind: 'self' }))), undefined)
   })
 })

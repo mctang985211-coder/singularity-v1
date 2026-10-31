@@ -67,7 +67,6 @@ export const executionRecordPayloadSchema = closedObject({
   usage: usageRecordSchema,
   sessionCut: sessionCutSchema,
   reason: z.string(),
-  drainPending: z.boolean().optional(),
 })
 
 export type ExecutionRecordPayload = z.infer<typeof executionRecordPayloadSchema>

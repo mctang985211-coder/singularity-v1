@@ -1,9 +1,16 @@
 import { z } from 'zod'
+import { computeDigest } from './digest.ts'
+import { globalResourceSnapshotSchema, resolveTemplateView } from './exploration.ts'
+import type { GlobalResourceSnapshot } from './exploration.ts'
 
 import { canonicalize } from './json.ts'
+import type { JsonValue } from './json.ts'
 import type { ToolErrorCode } from './errors.ts'
+import { budgetReservationSchema } from './fact.ts'
+import type { BudgetReservation } from './fact.ts'
+import { validateInstanceSchema } from './instance-schema.ts'
 import { methodRevisionSchema, verifyMethodRevision } from './method.ts'
-import type { ChildBinding, MethodRevision } from './method.ts'
+import type { ChildBinding, MethodRevision, TaskTemplate } from './method.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
 import {
@@ -22,12 +29,9 @@ import type {
   InputRef,
   LocalOutput,
   OutputSpec,
-  ResourceBinding,
   TaskContract,
   TaskLimits,
   TaskProposal,
-  TaskRootOrigin,
-  TaskSpec,
 } from './task.ts'
 
 /** Fixed learning-draft output from docs/framework.md §6.2. */
@@ -94,6 +98,7 @@ export const childAdmissionRequestSchema = closedObject({
   resources: resourceBindingSchema,
   environment: taskEnvironmentSchema,
   limits: taskLimitsSchema,
+  budgetReservation: budgetReservationSchema,
 })
 
 export type ChildAdmissionRequest = z.infer<typeof childAdmissionRequestSchema>
@@ -109,6 +114,7 @@ export type ActiveBatchProjection = z.infer<typeof activeBatchProjectionSchema>
 export const childBatchAdmissionInputSchema = closedObject({
   parent: taskContractSchema,
   method: methodRevisionSchema,
+  exploration: globalResourceSnapshotSchema.optional(),
   parentRunId: z.string(),
   batchId: z.string(),
   activeBatch: activeBatchProjectionSchema.optional(),
@@ -122,6 +128,7 @@ export interface AdmittedChildContract {
   readonly bindingId: string
   readonly join: ChildBinding['join']
   readonly contract: TaskContract
+  readonly budgetReservation: BudgetReservation
 }
 
 /** Pure result of child admission; no fact is appended and no budget is reserved. */
@@ -131,8 +138,6 @@ export interface AdmittedChildBatch {
   readonly batchId: string
   readonly children: readonly AdmittedChildContract[]
 }
-
-type ContractEnvironment = z.infer<typeof taskEnvironmentSchema>
 
 function parseAdmission<Schema extends z.ZodType>(
   schema: Schema,
@@ -208,16 +213,6 @@ function assertUniqueOutputs(outputs: readonly OutputSpec[]): void {
   }
 }
 
-function copyOutput(output: OutputSpec): OutputSpec {
-  return {
-    id: output.id,
-    path: output.path,
-    kind: output.kind,
-    role: output.role,
-    required: output.required,
-  }
-}
-
 function toSupportingOutput(output: LocalOutput): OutputSpec {
   return {
     id: output.id,
@@ -235,6 +230,13 @@ function validateBaseOutputs(outputs: readonly OutputSpec[], label: string): voi
   }
 }
 
+/** Static interface checks shared by child admission and MethodPatch precheck. */
+export function assertTaskTemplateInterface(template: TaskTemplate): void {
+  assertUniqueIds(template.requiredCriteria, `Template ${JSON.stringify(template.id)} requiredCriteria`)
+  validateBaseOutputs(template.requiredOutputs, `Template ${JSON.stringify(template.id)} requiredOutputs`)
+  assertUniqueOutputs(template.requiredOutputs)
+}
+
 function validateLocalOutputs(outputs: readonly LocalOutput[]): void {
   for (const output of outputs) {
     assertNoReservedOutput(output, 'localOutputs')
@@ -247,73 +249,13 @@ function mergeOutputs(
   local: readonly LocalOutput[],
 ): readonly OutputSpec[] {
   const merged = [
-    ...base.map(copyOutput),
+    ...base,
     ...local.map(toSupportingOutput),
-    copyOutput(SKILL_DRAFTS_OUTPUT),
-    copyOutput(MCP_DRAFTS_OUTPUT),
+    SKILL_DRAFTS_OUTPUT,
+    MCP_DRAFTS_OUTPUT,
   ]
   assertUniqueOutputs(merged)
   return merged
-}
-
-function copyGoal(goal: TaskSpec['goal']): TaskSpec['goal'] {
-  return {
-    summary: goal.summary,
-    deliverable: goal.deliverable,
-    scope: [...goal.scope],
-    constraints: [...goal.constraints],
-  }
-}
-
-function copySpec(spec: TaskSpec, outputs: readonly OutputSpec[]): TaskSpec {
-  return {
-    goal: copyGoal(spec.goal),
-    criteria: spec.criteria.map(criterion => ({ ...criterion })),
-    ...(spec.localGuidance === undefined
-      ? {}
-      : { localGuidance: spec.localGuidance.map(criterion => ({ ...criterion })) }),
-    inputs: spec.inputs.map(copyInput),
-    outputs: outputs.map(copyOutput),
-  }
-}
-
-function copyInput(input: InputRef): InputRef {
-  return {
-    id: input.id,
-    object: { ...input.object },
-    path: input.path,
-    access: input.access,
-  }
-}
-
-function copyResources(resources: ResourceBinding): ResourceBinding {
-  return {
-    baseTools: resources.baseTools.map(tool => ({ ...tool })),
-    skills: resources.skills.map(skill => ({ ...skill })),
-    mcpServers: resources.mcpServers.map(server => ({ ...server })),
-    ...(resources.exploration === undefined
-      ? {}
-      : { exploration: { ...resources.exploration } }),
-  }
-}
-
-function copyEnvironment(environment: ContractEnvironment): ContractEnvironment {
-  return {
-    seed: { ...environment.seed },
-    profile: { ...environment.profile },
-  }
-}
-
-function copyLimits(limits: TaskLimits): TaskLimits {
-  return { ...limits }
-}
-
-function copyRootOrigin(origin: TaskRootOrigin): TaskRootOrigin {
-  return {
-    kind: 'root',
-    purpose: origin.purpose,
-    requestRef: { ...origin.requestRef },
-  }
 }
 
 function assertRootTemplateRef(method: { readonly digest: string }, template: { readonly id: string; readonly digest: string }): void {
@@ -339,14 +281,14 @@ export function admitRootTask(input: RootAdmissionInput): TaskContract {
     return sealTaskContract({
       v: 1,
       taskId: parsed.taskId,
-      spec: copySpec(parsed.spec, outputs),
-      origin: copyRootOrigin(parsed.origin),
+      spec: { ...parsed.spec, outputs },
+      origin: parsed.origin,
       method: { ...parsed.method },
       template: { ...parsed.template },
-      resources: copyResources(parsed.resources),
+      resources: parsed.resources,
       acceptance: { ...parsed.acceptance },
-      environment: copyEnvironment(parsed.environment),
-      limits: copyLimits(parsed.limits),
+      environment: parsed.environment,
+      limits: parsed.limits,
     })
   } catch (error) {
     if (error instanceof AdmissionError) throw error
@@ -367,8 +309,8 @@ function findBinding(
   return binding
 }
 
-function findTemplate(method: MethodRevision, templateId: string) {
-  const template = method.templates.find(candidate => candidate.id === templateId)
+function findTemplate(method: MethodRevision, templateId: string, exploration?: GlobalResourceSnapshot) {
+  const template = resolveTemplateView(method, templateId, exploration)
   if (template === undefined) {
     invalidArgument(`Child template ${JSON.stringify(templateId)} is absent from the Method revision`)
   }
@@ -384,6 +326,19 @@ function assertAuthorizedInputs(
       'INPUT_NOT_AUTHORIZED',
       'Child inputs must exactly match the host-authorized inputs in order',
     )
+  }
+}
+
+function assertReservation(reservation: BudgetReservation, limits: TaskLimits): void {
+  if (!Number.isSafeInteger(reservation.tokens) || reservation.tokens <= 0
+    || !Number.isSafeInteger(reservation.steps) || reservation.steps <= 0
+    || !Number.isSafeInteger(reservation.deadlineAt) || reservation.deadlineAt <= 0) {
+    invalidArgument('Child budgetReservation must use positive safe integers')
+  }
+  if (reservation.tokens > limits.maxTokens
+    || reservation.steps > limits.maxStepsPerRun
+    || reservation.deadlineAt > limits.deadlineAt) {
+    throw new AdmissionError('LIMIT_EXCEEDED', 'Child budgetReservation exceeds the child Task limits')
   }
 }
 
@@ -440,7 +395,11 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
   if (parent.template.digest !== method.digest) {
     bindingFixed('Parent TemplateRef.digest must equal the pinned Method digest')
   }
-  const parentTemplate = findTemplate(method, parent.template.id)
+  if (parsed.exploration !== undefined
+    && parent.resources.exploration?.digest !== computeDigest('object', parsed.exploration)) {
+    bindingFixed('Exploration resources must equal the frozen parent snapshot')
+  }
+  const parentTemplate = findTemplate(method, parent.template.id, parsed.exploration)
 
   if (parsed.children.length > parent.limits.maxBatchChildren) {
     throw new AdmissionError(
@@ -452,6 +411,8 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
   const seenBindings = new Set<string>()
   const seenTaskIds = new Set<string>()
   const admitted: AdmittedChildContract[] = []
+  let totalTokens = 0
+  let totalSteps = 0
   for (const request of parsed.children) {
     if (seenBindings.has(request.bindingId)) {
       invalidArgument(
@@ -467,16 +428,27 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
     seenTaskIds.add(request.taskId)
 
     const binding = findBinding(parentTemplate, request.bindingId)
-    const template = findTemplate(method, binding.templateId)
+    const template = findTemplate(method, binding.templateId, parsed.exploration)
 
     assertChildLimitsWithinParent(parent.limits, request.limits)
+    assertReservation(request.budgetReservation, request.limits)
+    totalTokens += request.budgetReservation.tokens
+    totalSteps += request.budgetReservation.steps
+    if (totalTokens > parent.limits.maxTokens || totalSteps > parent.limits.maxStepsPerRun) {
+      limitExceeded('Child batch budget reservations exceed the parent Run budget')
+    }
     assertAuthorizedInputs(request.proposal, request.authorizedInputs)
-    assertUniqueIds(
-      template.requiredCriteria,
-      `Template ${JSON.stringify(template.id)} requiredCriteria`,
+    const schemaValidation = validateInstanceSchema(
+      template.instanceSchema,
+      request.proposal as unknown as JsonValue,
     )
+    if (!schemaValidation.valid) {
+      invalidArgument(
+        `Child proposal does not satisfy template ${JSON.stringify(template.id)} instanceSchema: ${schemaValidation.reason}`,
+      )
+    }
+    assertTaskTemplateInterface(template)
     assertUniqueIds(request.proposal.inputs, 'Child spec.inputs')
-    validateBaseOutputs(template.requiredOutputs, `Template ${JSON.stringify(template.id)} requiredOutputs`)
     const localOutputs = request.proposal.localOutputs ?? []
     validateLocalOutputs(localOutputs)
     const outputs = mergeOutputs(template.requiredOutputs, localOutputs)
@@ -487,7 +459,7 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
         v: 1,
         taskId: request.taskId,
         spec: {
-          goal: copyGoal(request.proposal.goal),
+          goal: request.proposal.goal,
           criteria: template.requiredCriteria.map(criterion => ({ ...criterion })),
           ...(request.proposal.localCriteria === undefined
             ? {}
@@ -496,8 +468,8 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
                   ...criterion,
                 })),
               }),
-          inputs: request.proposal.inputs.map(copyInput),
-          outputs: outputs.map(copyOutput),
+          inputs: request.proposal.inputs,
+          outputs: outputs,
         },
         origin: {
           kind: 'child',
@@ -508,10 +480,10 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
         },
         method: { ...parent.method },
         template: { id: template.id, digest: method.digest },
-        resources: copyResources(request.resources),
+        resources: request.resources,
         acceptance: { ...template.acceptancePolicy },
-        environment: copyEnvironment(request.environment),
-        limits: copyLimits(request.limits),
+        environment: request.environment,
+        limits: request.limits,
       })
     } catch (error) {
       if (error instanceof AdmissionError) throw error
@@ -520,13 +492,11 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
       })
     }
 
-    if (!verifyTaskContract(contract)) {
-      invalidArgument('Sealed child contract failed verification')
-    }
     admitted.push({
       bindingId: request.bindingId,
       join: binding.join,
       contract,
+      budgetReservation: { ...request.budgetReservation },
     })
   }
 

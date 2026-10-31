@@ -4,10 +4,9 @@ import test from 'node:test'
 import { z } from 'zod'
 
 import { digestSchema } from '../src/digest.ts'
-import { CanonicalJsonError } from '../src/errors.ts'
-import { refSchema } from '../src/refs.ts'
 import type { Ref } from '../src/refs.ts'
-import { ProtocolSchemaError, closedObject, parseProtocolValue } from '../src/schema.ts'
+import { refSchema } from '../src/refs.ts'
+import { ProtocolSchemaError,closedObject,parseProtocolValue,protocolJsonSchema } from '../src/schema.ts'
 
 const digest = `sha256:${'a'.repeat(64)}`
 
@@ -52,7 +51,7 @@ void test('Ref schema derives the Ref type from { id, digest }', () => {
   assert.throws(() => refSchema.parse({ id: 'asset-1', digest: digest.toUpperCase() }))
 })
 
-void test('parseProtocolValue canonicalizes input, parses, and canonicalizes output', () => {
+void test('parseProtocolValue uses the declared schema without serialization round trips', () => {
   const schema = closedObject({
     nested: closedObject({ b: z.string(), a: z.number() }),
     list: z.array(z.string()),
@@ -62,45 +61,10 @@ void test('parseProtocolValue canonicalizes input, parses, and canonicalizes out
   assert.deepEqual(parseProtocolValue(schema, value), value)
 })
 
-void test('parseProtocolValue rejects accessors, undefined, and non-JSON input', () => {
-  const schema = closedObject({ value: z.string() })
-  const inputs: unknown[] = [
-    { get value(): string { return 'x' } },
-    { value: 'x', missing: undefined },
-    { value: 1n },
-    { value: new Date(0) },
-    { value: Number.NaN },
-    { value: Number.POSITIVE_INFINITY },
-    { value: Symbol('x') },
-    { value: () => 'x' },
-  ]
-
-  for (const input of inputs) {
-    assert.throws(
-      () => parseProtocolValue(schema, input),
-      (error: unknown) => error instanceof CanonicalJsonError,
-    )
+void test('schema transforms and defaults are rejected when publishing the schema', () => {
+  for (const schema of [z.string().transform(value => value.toUpperCase()), closedObject({ value: z.string().default('fallback') })]) {
+    assert.throws(() => protocolJsonSchema(schema), ProtocolSchemaError)
   }
-})
-
-void test('parseProtocolValue rejects schemas that transform or default the JSON value', () => {
-  const transformed = z.string().transform(value => value.toUpperCase())
-  assert.throws(
-    () => parseProtocolValue(transformed, 'abc'),
-    (error: unknown) => error instanceof ProtocolSchemaError && error.code === 'TRANSFORM_OUTPUT',
-  )
-
-  const defaulted = closedObject({ value: z.string().default('fallback') })
-  assert.throws(
-    () => parseProtocolValue(defaulted, {}),
-    (error: unknown) => error instanceof ProtocolSchemaError && error.code === 'TRANSFORM_OUTPUT',
-  )
-
-  const coerced = z.coerce.number()
-  assert.throws(
-    () => parseProtocolValue(coerced, '1'),
-    (error: unknown) => error instanceof ProtocolSchemaError && error.code === 'TRANSFORM_OUTPUT',
-  )
 })
 
 void test('parseProtocolValue propagates ordinary schema failures', () => {

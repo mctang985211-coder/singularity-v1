@@ -1,4 +1,4 @@
-import type { Digest, OutputSpec, Ref } from '@singularity/protocol'
+import type { Digest,OutputSpec,Ref } from '@singularity/protocol'
 
 /** Model-visible remaining budget; exact counters stay in host guards. */
 export interface RemainingBudgetPct {
@@ -74,24 +74,6 @@ export interface NodeView {
   readonly workspace: { readonly cwd: string; readonly outputs: readonly OutputSpec[] }
 }
 
-/** Fixed worker card from docs/framework.md §13; never RSI-editable. */
-export const WORKER_CARD = `You execute one Singularity Task as one level of a larger workflow.
-Start with singularity_read(kind="self"), then singularity_plan with a light
-2–3-level sketch. Work toward the current goal using the listed skills and
-MCP servers. Query an ancestor summary when its frozen goal or decision helps.
-
-Organize useful direct children with singularity_decompose. Read each complete
-example, then commit on a later step with its preview receipt and current sketch.
-Each child owns its own level. After a batch finishes, read direct results and
-feedback, revise the sketch when useful, then integrate, create another direct
-batch, or submit.
-
-Preserve reusable SKILL.md or MCP server drafts under learning-drafts when they
-help future work. When the declared outputs are ready, call singularity_submit;
-the independent verifier records acceptance. When progress needs a parent
-decision, call singularity_feedback with a structured suggestion, then continue
-the current level or submit a concrete blocker with singularity_stop.`
-
 /** Optional exploration paragraph from §13. */
 export const EXPLORATION_CARD = `Local exploration is enabled at this level. Follow supplied local guidance and
 explore with the frozen public documents, skills and MCP servers in resources.
@@ -99,23 +81,27 @@ Use the fixed explore-child example for a direct child and preserve useful
 discoveries as drafts. Registering and binding capabilities belongs to a later
 Method revision.`
 
-// S4-B1 exposes read(self/status), plan, decompose prepare, submit and stop.
-// Keep the complete normative cards above intact; switch to them only when the
-// full child commit/feedback/ancestor surface is actually mounted.
-const S4_B1_WORKER_CARD = `You execute one Singularity Task as one level of a larger workflow.
+// Compact operational card keeps the frozen example/ack sequence explicit.
+export const WORKER_CARD = `You execute one Singularity Task as one level of a larger workflow.
 Start with singularity_read(kind="self"). Follow every nextCursor until the
-complete contract is read, then call singularity_plan with a light 2–3-level
-sketch and the current contextEpoch. Use directPlan only for bindingIds shown
+complete contract is read, then call singularity_plan with levels [0,1] or
+[0,1,2]: 0 is this Task, 1 direct children, 2 possible grandchildren, not
+sequential work steps. Commit only level 1; each child replans its own level.
+Use the current contextEpoch and directPlan only for bindingIds shown
 in NodeView childOptions. Work toward the current goal using the authorized
 workspace inputs, bound skills, and MCP tools listed in NodeView.
 
 Use singularity_decompose with action "prepare" and one visible bindingId to
-read that child's complete frozen example. When childOptions is empty, prepare
-returns BINDING_FIXED; keep directPlan empty and continue current work. The
-tool result is the persistent preview delivery; keep its previewRef for a later
-step. Child commit is not available yet. Use singularity_read(kind="status") to see which previews are
-current, and prepare again after resume or compaction if status marks one
-stale. When the declared outputs are ready, call singularity_submit; the
+read that child's complete frozen example. With no useful child, keep directPlan
+empty and do current work. On a later model step, commit
+children with bindingId, ackPreview equal to previewRef.digest, and task filled
+with goal, localCriteria, authorized inputs and localOutputs. A successful
+commit concludes this turn and releases the parent while its batch is active.
+Use singularity_read(kind="status") to inspect previews; prepare again when
+status marks one stale. After a batch, read direct child results and feedback,
+then integrate or prepare the next batch. Read an ancestor summary when useful.
+Use singularity_feedback for a direct-parent suggestion and continue local work.
+When the declared outputs are ready, call singularity_submit; the
 independent verifier records acceptance. When the current goal cannot be
 completed, call singularity_stop with a concrete blocker.`
 
@@ -125,11 +111,11 @@ export const NODE_VIEW_MAX_BYTES = 8 * 1024
 
 const textEncoder = new TextEncoder()
 
-/** Render the currently implemented capability surface; exploration awaits S4-G. */
+/** Render the operational card and its local exploration guidance. */
 export function renderWorkerCard(exploration: boolean): string {
-  if (exploration) throw new Error('exploration worker requires S4 resource and child tool composition')
-  assertPromptBudget(S4_B1_WORKER_CARD, WORKER_CARD_MAX_BYTES, 'worker card')
-  return S4_B1_WORKER_CARD
+  const card = exploration ? `${WORKER_CARD}\n\n${EXPLORATION_CARD}` : WORKER_CARD
+  assertPromptBudget(card, WORKER_CARD_MAX_BYTES, 'worker card')
+  return card
 }
 
 /** Render the required NodeView context as compact JSON. */

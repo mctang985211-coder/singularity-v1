@@ -1,32 +1,36 @@
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 
-import {
-  canonicalize,
-  computeDigest,
-  methodRevisionSchema,
-  parseJsonText,
-  parseProtocolValue,
-  taskExampleSchema,
-  taskTemplateSchema,
-  verifyDigest,
-} from '@singularity/protocol'
 import type {
-  CompositionPayload,
-  Digest,
-  JsonValue,
-  MethodRevision,
-  Ref,
-  TaskContract,
-  TaskExample,
-  TaskTemplate,
+CompositionPayload,
+Digest,
+GlobalResourceSnapshot,
+JsonValue,
+MethodRevision,
+Ref,
+TaskContract,
+TaskExample,
+TaskTemplate,
+} from '@singularity/protocol'
+import {
+canonicalize,
+computeDigest,
+EXPLORE_TEMPLATE_ID,
+methodRevisionSchema,
+parseJsonText,
+parseProtocolValue,
+resolveTemplateView,
+taskExampleSchema,
+taskTemplateSchema,
+verifyDigest,
 } from '@singularity/protocol'
 
-import { DecomposeError, MethodResourceError } from './errors.ts'
-import { readMcpServers } from './mcp-resources.ts'
+import { DecomposeError,MethodResourceError } from './errors.ts'
+import { loadGlobalResources } from './global-resources.ts'
 import type { FrozenMcpServer } from './mcp-resources.ts'
-import { readSkills, sameRef } from './skill-resources.ts'
+import { readMcpServers } from './mcp-resources.ts'
 import type { FrozenSkillResource } from './skill-resources.ts'
+import { readSkills,sameRef } from './skill-resources.ts'
 import type { CasObjectReader } from './workspace.ts'
 
 export { MethodResourceError } from './errors.ts'
@@ -43,7 +47,7 @@ export const METHOD_GUIDANCE_SECTION = 'singularity:method-guidance'
 export const METHOD_GUIDANCE_ORDER = 200
 
 /** Fixed own-guidance cap from docs/framework.md §14.3. */
-const METHOD_GUIDANCE_MAX_BYTES = 8 * 1024
+export const METHOD_GUIDANCE_MAX_BYTES = 8 * 1024
 
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
 const textEncoder = new TextEncoder()
@@ -56,6 +60,33 @@ export interface FrozenMethodResources {
   readonly guidanceText: string
   readonly skills: readonly FrozenSkillResource[]
   readonly mcpServers: readonly FrozenMcpServer[]
+  readonly exploration?: GlobalResourceSnapshot
+}
+
+/** Asset lookup is a read-only catalog, never a replacement Method revision. */
+export function resourceAssetCatalog(resources: Pick<FrozenMethodResources, 'method' | 'exploration'>): Pick<MethodRevision, 'skills' | 'tools'> {
+  if (resources.exploration === undefined) return resources.method
+  for (const [owned, global] of [[resources.method.skills, resources.exploration.skills], [resources.method.tools, resources.exploration.tools]]) {
+    for (const asset of global) {
+      const duplicate = owned.find(own => own.id === asset.id)
+      if (duplicate !== undefined && canonicalize(duplicate) !== canonicalize(asset)) {
+        throw new MethodResourceError('method', 'CONTRACT_INVALID', `public asset ${JSON.stringify(asset.id)} conflicts with the pinned Method`)
+      }
+    }
+  }
+  return {
+    skills: [...resources.method.skills, ...resources.exploration.skills.filter(asset => !resources.method.skills.some(own => own.id === asset.id))],
+    tools: [...resources.method.tools, ...resources.exploration.tools.filter(asset => !resources.method.tools.some(own => own.id === asset.id))],
+  }
+}
+
+export function resolveResourceTemplate(resources: Pick<FrozenMethodResources, 'method' | 'exploration'>, id: string): TaskTemplate | undefined {
+  return resolveTemplateView(resources.method, id, resources.exploration)
+}
+
+export function usesExploration(resources: Pick<FrozenMethodResources, 'template' | 'exploration'>): boolean {
+  return resources.exploration !== undefined
+    && (resources.template.id === EXPLORE_TEMPLATE_ID || resources.template.children.some(binding => binding.templateId === EXPLORE_TEMPLATE_ID))
 }
 
 /** Model-visible identity summary for a child template's frozen resources. */
@@ -70,32 +101,15 @@ export interface TemplateResourceSummary {
 }
 
 /** Fixed child-example cap from docs/framework.md §14.3. */
-const TASK_EXAMPLE_MAX_BYTES = 12 * 1024
+export const TASK_EXAMPLE_MAX_BYTES = 12 * 1024
 
 /** Reads one frozen template example and enforces its model-visible cap. */
 export async function loadTaskExample(
   reader: CasObjectReader,
   ref: Ref,
 ): Promise<TaskExample> {
-  let value: JsonValue
-  try {
-    value = await readJson(reader, ref, 'object', 'Method example', 'CONTRACT_INVALID')
-  } catch (error) {
-    if (error instanceof MethodResourceError) {
-      throw new DecomposeError('INVALID_ARGUMENT', error.message, { cause: error })
-    }
-    throw error
-  }
-  let example: TaskExample
-  try {
-    example = parseProtocolValue(taskExampleSchema, value)
-  } catch (error) {
-    throw new DecomposeError(
-      'INVALID_ARGUMENT',
-      'Method example is not a strict TaskExample',
-      { cause: error },
-    )
-  }
+  const value = await readJson(reader, ref, 'object', 'Method example', 'CONTRACT_INVALID')
+  const example = parseProtocolValue(taskExampleSchema, value)
   const bytes = textEncoder.encode(canonicalize(example as unknown as JsonValue)).byteLength
   if (bytes > TASK_EXAMPLE_MAX_BYTES) {
     throw new DecomposeError(
@@ -129,7 +143,7 @@ export function summarizeTemplateResources(
  */
 export async function readTemplateResourceSummaries(
   reader: CasObjectReader,
-  method: MethodRevision,
+  method: Pick<MethodRevision, 'skills' | 'tools'>,
   template: TaskTemplate,
 ): Promise<TemplateResourceSummary> {
   const skillRefs = template.skills.map(id => {
@@ -177,15 +191,19 @@ export async function loadMethodResources(
       'contract.template must reference the same Method revision as contract.method',
     )
   }
-  const matches = method.templates.filter(template => template.id === contract.template.id)
-  if (matches.length !== 1) {
+  if (method.templates.some(template => template.id === EXPLORE_TEMPLATE_ID)) {
+    throw new MethodResourceError('method', 'CONTRACT_INVALID', 'Method templates cannot replace the reserved platform exploration template')
+  }
+  const exploration = contract.resources.exploration === undefined ? undefined
+    : await loadGlobalResources(reader, contract.resources.exploration)
+  const template = resolveTemplateView(method, contract.template.id, exploration)
+  if (template === undefined) {
     throw new MethodResourceError(
       'method',
       'CONTRACT_INVALID',
       `contract.template ${JSON.stringify(contract.template.id)} must resolve to exactly one template in the pinned Method revision`,
     )
   }
-  const template = matches[0]
   const bindingIds = new Set<string>()
   for (const binding of template.children) {
     if (bindingIds.has(binding.bindingId)) {
@@ -196,8 +214,7 @@ export async function loadMethodResources(
       )
     }
     bindingIds.add(binding.bindingId)
-    const childTemplates = method.templates.filter(candidate => candidate.id === binding.templateId)
-    if (childTemplates.length !== 1) {
+    if (resolveTemplateView(method, binding.templateId, exploration) === undefined) {
       throw new MethodResourceError(
         'method',
         'CONTRACT_INVALID',
@@ -205,10 +222,11 @@ export async function loadMethodResources(
       )
     }
   }
-  const skills = await readSkills(reader, method, template, contract.resources.skills)
+  const catalog = resourceAssetCatalog({ method, ...(exploration === undefined ? {} : { exploration }) })
+  const skills = await readSkills(reader, catalog, template, contract.resources.skills)
   const mcpServers = await readMcpServers(
     reader,
-    method,
+    catalog,
     template,
     contract.resources.mcpServers,
   )
@@ -220,6 +238,7 @@ export async function loadMethodResources(
     guidanceText,
     skills,
     mcpServers,
+    ...(exploration === undefined ? {} : { exploration }),
   }
 }
 
@@ -227,7 +246,7 @@ export async function loadMethodResources(
  * Re-verifies that the frozen Composition carries the same template body,
  * guidance, skill bundles, and MCP server identities that the pinned Method
  * revision defines. This is a semantic check on top of CAS ref validation,
- * used by host assembly and recovery.
+ * used by host assembly and fresh retry.
  */
 export async function assertCompositionResources(
   reader: CasObjectReader,
@@ -414,12 +433,7 @@ async function readJson(
   code: 'CONTRACT_INVALID' | 'COMPOSITION_MISMATCH',
 ): Promise<JsonValue> {
   const resource = code === 'COMPOSITION_MISMATCH' ? 'composition' : 'method'
-  let bytes: Uint8Array
-  try {
-    ({ bytes } = await reader.readObject(ref, domain))
-  } catch (error) {
-    throw new MethodResourceError(resource, code, `${label} CAS object is missing or unreadable`, { cause: error })
-  }
+  const { bytes } = await reader.readObject(ref, domain)
   let text: string
   try {
     text = strictUtf8.decode(bytes)

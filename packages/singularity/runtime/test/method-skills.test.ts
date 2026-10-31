@@ -1,37 +1,38 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
 import { renderSkillContent } from '@deepseek-ai/dsh-skill'
-import {
-  canonicalize,
-  computeDigest,
-  computeDigestBytes,
-  seal,
-  sealMethodRevision,
-  sealTaskContract,
-} from '@singularity/protocol'
 import type {
-  JsonObject,
-  JsonValue,
-  MethodRevision,
-  Ref,
-  SkillAsset,
-  TaskContract,
-  TaskTemplate,
+JsonObject,
+JsonValue,
+MethodRevision,
+Ref,
+SkillAsset,
+TaskContract,
+TaskTemplate,
+} from '@singularity/protocol'
+import {
+canonicalize,
+computeDigest,
+computeDigestBytes,
+seal,
+sealMethodRevision,
+sealTaskContract,
 } from '@singularity/protocol'
 
-import { MethodResourceError, assertCompositionResources, loadMethodResources } from '../src/resources.ts'
-import { TreeBundleError, readTreeBundle } from '../src/resource-bundle.ts'
+import { materializeSkills } from '../src/agent-skills.ts'
+import { TreeBundleError,readTreeBundle } from '../src/resource-bundle.ts'
+import { MethodResourceError,assertCompositionResources,loadMethodResources } from '../src/resources.ts'
 import { DomainStore } from '../src/store.ts'
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder('utf-8', { fatal: true })
 const RESOURCE_BASE = {
-  kind: 'opaque' as const,
-  description: 'Referenced files are frozen in the skill bundle; this slice exposes only SKILL.md.',
+  kind: 'directory' as const,
+  path: '.',
 }
 const SKILL_NAME = 'bounded-work'
 const SKILL_DESCRIPTION = 'Use the frozen instructions for one bounded work step.'
@@ -441,7 +442,7 @@ void test('S4-A2 validates sealed tree bundles, paths, file bytes, and raw/struc
     const tamperedMethod = methodFor(guidance, [skillAsset('skill:a', SKILL_NAME, SKILL_DESCRIPTION, tampered)])
     await store.putObject(tamperedMethod.id, jsonBytes(tamperedMethod), 'method')
     await writeFile(join(store.objectsPath, tamperFile.digest.slice('sha256:'.length)), textEncoder.encode('tampered'))
-    await expectCode(loadMethodResources(store, contractFor(tamperedMethod, [tampered])), 'CONTRACT_INVALID')
+    await assert.rejects(loadMethodResources(store, contractFor(tamperedMethod, [tampered])), { code: 'OBJECT_CORRUPT' })
   })
 })
 
@@ -479,7 +480,10 @@ void test('S4-A2 validates SKILL.md presence, UTF-8, frontmatter, and limits', a
       }])
       const frontmatterMethod = methodFor(guidance, [skillAsset('skill:a', SKILL_NAME, SKILL_DESCRIPTION, frontmatter)])
       await store.putObject(frontmatterMethod.id, jsonBytes(frontmatterMethod), 'method')
-      await expectCode(loadMethodResources(store, contractFor(frontmatterMethod, [frontmatter])), 'UNSUPPORTED_RESOURCES')
+      const loaded = await loadMethodResources(store, contractFor(frontmatterMethod, [frontmatter]))
+      assert.equal(loaded.skills[0]?.content, content.replace(/^\uFEFF/, ''))
+      assert.equal(loaded.skills[0]?.name, SKILL_NAME)
+      assert.equal(loaded.skills[0]?.description, SKILL_DESCRIPTION)
     }
 
     const resultFixed = textEncoder.encode(renderSkillContent({
@@ -496,7 +500,9 @@ void test('S4-A2 validates SKILL.md presence, UTF-8, frontmatter, and limits', a
       description: SKILL_DESCRIPTION,
       content: exactContent,
     }] })
-    assert.equal((await loadMethodResources(store, exact.contract)).skills[0]?.content.length, exactContent.length)
+    const exactSkills = (await loadMethodResources(store, exact.contract)).skills
+    assert.equal(exactSkills[0]?.content.length, exactContent.length)
+    await expectCode(materializeSkills(exactSkills, '/workspace/.singularity/skills'), 'CONTRACT_INVALID')
     const over = await scenario(store, { skills: [{
       id: 'skill:a',
       name: SKILL_NAME,
@@ -537,6 +543,7 @@ void test('S4-A2 validates referenced files, ancestor conflicts, and declared-si
     }
     const state = await scenario(store, { skills: [skill] })
     const resources = await loadMethodResources(store, state.contract)
+    assert.equal(textDecoder.decode(resources.skills[0]?.bundleFiles.find(file => file.path === 'refs/notes.txt')?.data), 'S4A2 REFERENCE NOTES')
     const bundleRef = resources.skills[0]?.bundle
     assert.ok(bundleRef)
     const bundle = await readTreeBundle(store, bundleRef, 1024 * 1024)
@@ -548,7 +555,7 @@ void test('S4-A2 validates referenced files, ancestor conflicts, and declared-si
     const notes = bundle.manifest.files.find(file => file.path === 'refs/notes.txt')
     assert.ok(notes)
     await writeFile(join(store.objectsPath, notes.object.digest.slice('sha256:'.length)), textEncoder.encode('tampered'))
-    await expectCode(loadMethodResources(store, state.contract), 'CONTRACT_INVALID')
+    await assert.rejects(loadMethodResources(store, state.contract), { code: 'OBJECT_CORRUPT' })
 
     const ancestor = await putTree(store, [
       { path: 'a', bytes: textEncoder.encode('file') },
@@ -556,7 +563,7 @@ void test('S4-A2 validates referenced files, ancestor conflicts, and declared-si
     ])
     await assert.rejects(
       readTreeBundle(store, ancestor, 1024 * 1024),
-      error => error instanceof TreeBundleError && /ancestor/.test(error.message),
+      error => error instanceof TreeBundleError && /conflict/.test(error.message),
     )
 
     const missingFile: Ref = { id: 'missing-file', digest: computeDigest('object', { v: 1 }) }

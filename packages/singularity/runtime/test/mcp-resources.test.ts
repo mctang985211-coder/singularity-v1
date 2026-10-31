@@ -23,7 +23,7 @@ import type {
 
 import { MethodResourceError } from '../src/errors.ts'
 import { DomainStore } from '../src/store.ts'
-import { mcpCompositionEntry, mcpDispatchPlan, mcpPromptSections, readMcpServers } from '../src/mcp-resources.ts'
+import { mcpCompositionEntry, mcpPromptSections, readMcpServers } from '../src/mcp-resources.ts'
 import { assertCompositionResources, loadMethodResources } from '../src/resources.ts'
 
 const textEncoder = new TextEncoder()
@@ -308,26 +308,7 @@ void test('S4-A3 uses the exact DSH instruction section bytes and trims empty ta
     const whitespaceServers = await readMcpServers(store, whitespace.method, whitespace.template, whitespace.contract.resources.mcpServers)
     assert.deepEqual(mcpPromptSections(whitespaceServers, 3100).map(entry => entry.name), ['mcp-resource-servers'])
 
-    const overManifest = await scenario(store, {
-      manifest: manifest({
-        instructions: body,
-        limits: { ...limits, maxInstructionBytes: textEncoder.encode(body).byteLength },
-      }),
-      config: config({ maxInstructionBytes: textEncoder.encode(body).byteLength }),
-    })
-    await expectCode(
-      readMcpServers(store, overManifest.method, overManifest.template, overManifest.contract.resources.mcpServers),
-      'CONTRACT_INVALID',
-    )
 
-    const overConfig = await scenario(store, {
-      manifest: manifest({ instructions: body, limits }),
-      config: config({ maxInstructionBytes: sectionBytes - 1 }),
-    })
-    await expectCode(
-      readMcpServers(store, overConfig.method, overConfig.template, overConfig.contract.resources.mcpServers),
-      'CONTRACT_INVALID',
-    )
   })
 })
 
@@ -442,108 +423,29 @@ void test('S4-A3 rejects interface, catalog, transport, and contract mismatches'
   })
 })
 
-void test('S4-A3 enforces the deployment capability allowlist instead of arbitrary metadata', async () => {
+void test('trusted MCP metadata is descriptive; native transport consumes its config', async () => {
   await withStore(async store => {
-    const unknown = await scenario(store, {
-      manifest: manifest({ capabilities: ['filesystem.read'] }),
-      tools: refs => [toolAsset(refs, { capabilities: ['filesystem.read'] })],
+    const state = await scenario(store, {
+      manifest: manifest({ capabilities: ['domain.simulator'], deploymentNote: 'trusted bundle' }),
+      config: config({ command: 'python3', args: ['server.py'], env: { LANG: 'C' }, extraMetadata: true }),
+      tools: refs => [toolAsset(refs, { capabilities: ['domain.simulator'] })],
     })
-    await expectCode(readMcpServers(store, unknown.method, unknown.template, unknown.contract.resources.mcpServers), 'UNSUPPORTED_RESOURCES')
-
-    const empty = await scenario(store, {
-      manifest: manifest({ capabilities: [] }),
-      tools: refs => [toolAsset(refs, { capabilities: [] })],
-    })
-    await expectCode(readMcpServers(store, empty.method, empty.template, empty.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const duplicate = await scenario(store, {
-      manifest: manifest({ capabilities: ['tools', 'tools'] }),
-      tools: refs => [toolAsset(refs, { capabilities: ['tools', 'tools'] })],
-    })
-    await expectCode(readMcpServers(store, duplicate.method, duplicate.template, duplicate.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const missingTools = await scenario(store, {
-      manifest: manifest({ capabilities: ['resources'] }),
-      tools: refs => [toolAsset(refs, { capabilities: ['resources'] })],
-    })
-    await expectCode(readMcpServers(store, missingTools.method, missingTools.template, missingTools.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const resourcesOnly = await scenario(store, {
-      manifest: manifest({ capabilities: ['resources', 'resource-templates'] }),
-      tools: refs => [toolAsset(refs, { capabilities: ['resources', 'resource-templates'], exposedTools: [] })],
-    })
-    const [server] = await readMcpServers(store, resourcesOnly.method, resourcesOnly.template, resourcesOnly.contract.resources.mcpServers)
-    assert.ok(server)
-    assert.deepEqual(server.capabilities, ['resources', 'resource-templates'])
-    assert.deepEqual(server.publicToolNames, [])
-
-    const toolsOnly = await scenario(store, {
-      manifest: manifest({ capabilities: ['tools'] }),
-      tools: refs => [toolAsset(refs, { capabilities: ['tools'] })],
-    })
-    const [toolsOnlyServer] = await readMcpServers(store, toolsOnly.method, toolsOnly.template, toolsOnly.contract.resources.mcpServers)
-    assert.ok(toolsOnlyServer)
-    assert.deepEqual(toolsOnlyServer.capabilities, ['tools'])
-    assert.deepEqual(mcpDispatchPlan([toolsOnlyServer]).resourceToolNames, [
-      'list_mcp_resources',
-      'list_mcp_resource_templates',
-      'read_mcp_resource',
-    ])
+    const [server] = await readMcpServers(store, state.method, state.template, state.contract.resources.mcpServers)
+    assert.deepEqual(server.capabilities, ['domain.simulator'])
+    assert.partialDeepStrictEqual(server.configValue, { command: 'python3', args: ['server.py'], env: { LANG: 'C' } })
   })
 })
 
-void test('S4-A3 rejects unsafe config, manifest, schema, and tree objects', async () => {
+void test('MCP consumed fields and entrypoint references remain structural input checks', async () => {
   await withStore(async store => {
-    const absoluteConfig = await scenario(store, { config: config({ args: ['/host/server.js'] }) })
-    await expectCode(readMcpServers(store, absoluteConfig.method, absoluteConfig.template, absoluteConfig.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const secretConfig = await scenario(store, { config: config({ env: { API_KEY: 'raw-secret' } }) })
-    await expectCode(readMcpServers(store, secretConfig.method, secretConfig.template, secretConfig.contract.resources.mcpServers), 'UNSUPPORTED_RESOURCES')
-
-    const wrongEntrypoint = await scenario(store, { manifest: manifest({ entrypoint: 'dist/missing.js' }) })
-    await expectCode(readMcpServers(store, wrongEntrypoint.method, wrongEntrypoint.template, wrongEntrypoint.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const wrongInstructions = await scenario(store, { config: config({ maxInstructionBytes: 9000 }) })
-    await expectCode(readMcpServers(store, wrongInstructions.method, wrongInstructions.template, wrongInstructions.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const tinyBundle = await scenario(store, {
-      manifest: manifest({
-        limits: { maxBundleBytes: 8, maxInstructionBytes: 8192, toolCallTimeoutMs: 250 },
-      }),
-    })
-    await expectCode(readMcpServers(store, tinyBundle.method, tinyBundle.template, tinyBundle.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const subset = await scenario(store, {
-      sourceFiles: [{ path: 'other/source.js', content: '// not in the bundle\n' }],
-    })
-    await expectCode(readMcpServers(store, subset.method, subset.template, subset.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const unknownManifestKey = await scenario(store, { manifest: manifest({ unexpected: true }) })
-    await expectCode(readMcpServers(store, unknownManifestKey.method, unknownManifestKey.template, unknownManifestKey.contract.resources.mcpServers), 'CONTRACT_INVALID')
-
-    const shellConfig = await scenario(store, { config: config({ command: 'sh' }) })
-    await expectCode(readMcpServers(store, shellConfig.method, shellConfig.template, shellConfig.contract.resources.mcpServers), 'UNSUPPORTED_RESOURCES')
-
-    const dirtyName = await scenario(store, {
-      tools: refs => [toolAsset(refs, {
-        exposedTools: [{
-          name: 'bad-name',
-          description: 'Dirty tool name.',
-          parameters: { type: 'object', additionalProperties: false, properties: {} },
-        }],
-      })],
-    })
-    await expectCode(readMcpServers(store, dirtyName.method, dirtyName.template, dirtyName.contract.resources.mcpServers), 'UNSUPPORTED_RESOURCES')
-
-    const longName = await scenario(store, {
-      tools: refs => [toolAsset(refs, {
-        exposedTools: [{
-          name: 'x'.repeat(61),
-          description: 'Overlong public name.',
-          parameters: { type: 'object', additionalProperties: false, properties: {} },
-        }],
-      })],
-    })
-    await expectCode(readMcpServers(store, longName.method, longName.template, longName.contract.resources.mcpServers), 'UNSUPPORTED_RESOURCES')
+    for (const options of [
+      { manifest: manifest({ entrypoint: 'dist/missing.js' }) },
+      { manifest: manifest({ entrypoint: '../server.js' }) },
+      { config: config({ args: 'not-an-array' }) },
+      { manifest: manifest({ limits: { maxBundleBytes: 8 } }) },
+    ]) {
+      const state = await scenario(store, options)
+      await expectCode(readMcpServers(store, state.method, state.template, state.contract.resources.mcpServers), 'CONTRACT_INVALID')
+    }
   })
 })

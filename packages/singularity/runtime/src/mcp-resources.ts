@@ -1,38 +1,25 @@
-import {
-  canonicalize,
-  computeDigest,
-  parseJsonText,
-  seal,
-} from '@singularity/protocol'
+import { z } from 'zod'
 import type {
-  JsonObject,
-  JsonValue,
-  MethodRevision,
-  Ref,
-  TaskTemplate,
-  ToolAsset,
+JsonObject,
+JsonValue,
+MethodRevision,
+Ref,
+TaskTemplate,
+ToolAsset,
+} from '@singularity/protocol'
+import {
+computeDigest,
+parseJsonText,
+seal,workspaceRelativePathSchema,
 } from '@singularity/protocol'
 
 import { MethodResourceError } from './errors.ts'
-import { validateHttpConfig } from './mcp-http-config.ts'
-import type { McpHttpConfig } from './mcp-http-config.ts'
-import { TreeBundleError, readTreeBundle } from './resource-bundle.ts'
+import { TreeBundleError,readTreeBundle } from './resource-bundle.ts'
 import type { CasObjectReader } from './workspace.ts'
 
 const SERVER_NAME = /^[A-Za-z0-9_-]{1,32}$/
 const TOOL_NAME = /^[A-Za-z0-9_]+$/
 const MAX_BUNDLE_BYTES = 1024 * 1024
-const MAX_INSTRUCTION_BYTES = 8192
-const MAX_TOOL_CALL_TIMEOUT_MS = 60_000
-/**
- * A3 deployment allowlist. These are declarations only: they authorize the
- * frozen Method surface, not a filesystem/network sandbox or capability broker.
- */
-const CAPABILITY_ALLOWLIST: ReadonlySet<string> = new Set([
-  'tools',
-  'resources',
-  'resource-templates',
-])
 /** Native DSH resource tools exposed once at least one MCP server is mounted. */
 export const MCP_RESOURCE_TOOL_NAMES = [
   'list_mcp_resources',
@@ -41,37 +28,32 @@ export const MCP_RESOURCE_TOOL_NAMES = [
 ] as const
 
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
-const textEncoder = new TextEncoder()
 
-interface McpManifest {
-  readonly v: 1
-  readonly serverName: string
-  readonly transport: 'stdio' | 'streamable-http'
-  readonly capabilities: readonly string[]
-  readonly instructions: string
-  readonly entrypoint: string
-  readonly limits: {
-    readonly maxBundleBytes: number
-    readonly maxInstructionBytes: number
-    readonly toolCallTimeoutMs: number
-  }
+// Trusted deployment assets: parse only the fields consumed here. Extra
+// metadata and capability descriptions do not grant or restrict OS authority.
+const manifestSchema = z.object({
+  serverName: z.string().regex(SERVER_NAME),
+  transport: z.enum(['stdio', 'streamable-http']),
+  instructions: z.string().refine(text => Buffer.byteLength(text, 'utf8') <= 8192, 'MCP instructions exceed 8KiB'),
+  entrypoint: workspaceRelativePathSchema,
+  limits: z.object({ maxBundleBytes: z.number().int().positive().max(MAX_BUNDLE_BYTES) }),
+})
+const configFields = {
+  toolCallTimeoutMs: z.number().int().positive(),
+  maxInstructionBytes: z.number().int().positive(),
 }
-
-interface McpStdioConfig {
-  readonly v: 1
-  readonly serverName: string
-  readonly transport: 'stdio'
-  readonly command: string
-  readonly args: readonly string[]
-  readonly cwd: '.'
-  readonly env: Readonly<Record<string, never>>
-  readonly toolCallTimeoutMs: number
-  readonly maxInstructionBytes: number
-  readonly failOnStartupError: true
-  readonly reconnect: { readonly enabled: false }
-}
-
-type McpTransportConfig = McpStdioConfig | McpHttpConfig
+const configSchema = z.discriminatedUnion('transport', [
+  z.object({ transport: z.literal('stdio'), command: z.string().min(1),
+    args: z.array(z.string()), env: z.record(z.string(), z.string()), ...configFields }),
+  z.object({ transport: z.literal('streamable-http'),
+    url: z.url({ protocol: /^https?$/ }).pipe(z.string().refine(value => {
+      const url = new URL(value)
+      return url.username === '' && url.password === ''
+    }, 'credentials belong in deployment, outside public Method assets')),
+    headers: z.record(z.string(), z.string()), ...configFields }),
+])
+type McpManifest = z.infer<typeof manifestSchema>
+type McpTransportConfig = z.infer<typeof configSchema>
 
 interface CatalogTool {
   readonly asset: ToolAsset
@@ -79,7 +61,7 @@ interface CatalogTool {
   readonly manifestRef: Ref
   readonly bundle: Awaited<ReturnType<typeof readTreeBundle>>
   readonly sourceFiles: Awaited<ReturnType<typeof readTreeBundle>>
-  readonly configValue: McpTransportConfig | undefined
+  readonly configValue: McpTransportConfig
 }
 
 /** One frozen MCP server consumed by host composition and Agent setup. */
@@ -112,12 +94,12 @@ export interface McpDispatchPlan {
 /**
  * Resolves the template's ordered tool ids against the pinned Method, validates
  * the complete Method tool catalog, and verifies the contract authorizes
- * exactly the bound server bundle refs. Both stdio and strict loopback
+ * exactly the bound server bundle refs. Both stdio and deployment HTTP/HTTPS
  * streamable-http transports use the same identity and deployment shape.
  */
 export async function readMcpServers(
   reader: CasObjectReader,
-  method: MethodRevision,
+  method: Pick<MethodRevision, 'tools'>,
   template: TaskTemplate,
   contractRefs: readonly Ref[],
 ): Promise<readonly FrozenMcpServer[]> {
@@ -141,9 +123,6 @@ export async function readMcpServers(
   for (const tool of selected) {
     const bundle = tool.bundle
     const configValue = tool.configValue
-    if (configValue === undefined) {
-      fail('CONTRACT_INVALID', `MCP server ${JSON.stringify(tool.manifest.serverName)} is missing its transport config`)
-    }
     const schemaPayload = deriveSchema(tool.manifest.serverName, tool.asset.server.exposedTools)
     const schema: Ref = {
       id: `${tool.asset.id}:schema`,
@@ -273,10 +252,9 @@ async function readToolCatalog(
     }
     bundleKeys.add(bundleKey)
     const manifestRef = asset.server.manifest
-    const manifest = validateManifest(
-      await readSealedObject(reader, manifestRef, `MCP server ${JSON.stringify(asset.id)} manifest`),
-      asset,
-    )
+    const manifest = parseAsset(manifestSchema,
+      await readJson(reader, manifestRef, `MCP server ${JSON.stringify(asset.id)} manifest`))
+    if (manifest.transport !== asset.server.transport) fail('CONTRACT_INVALID', 'MCP manifest transport differs from ToolAsset')
     if (serverNames.has(manifest.serverName)) {
       fail('CONTRACT_INVALID', `MCP serverName ${JSON.stringify(manifest.serverName)} appears more than once`)
     }
@@ -308,136 +286,19 @@ async function readToolCatalog(
       `MCP server ${JSON.stringify(manifest.serverName)} sourceFiles`,
       manifest.limits.maxBundleBytes,
     )
-    assertSourceSubset(bundle, sourceFiles, manifest.serverName)
     if (!bundle.contents.has(manifest.entrypoint)) {
       fail('CONTRACT_INVALID', `MCP server ${JSON.stringify(manifest.serverName)} bundle must contain entrypoint ${JSON.stringify(manifest.entrypoint)}`)
     }
-    const configObject = await readSealedObject(
+    const configObject = await readJson(
       reader,
       asset.server.config,
       `MCP server ${JSON.stringify(manifest.serverName)} config`,
     )
-    const instructionBytes = textEncoder.encode(
-      instructionSectionText(manifest.serverName, manifest.instructions),
-    ).byteLength
-    const configValue = manifest.transport === 'stdio'
-      ? validateConfig(configObject, manifest, instructionBytes)
-      : validateHttpConfig(configObject, manifest.serverName, manifest.limits, instructionBytes)
+    const configValue = parseAsset(configSchema, configObject)
+    if (configValue.transport !== manifest.transport) fail('CONTRACT_INVALID', 'MCP config transport differs from manifest')
     catalog.set(asset.id, { asset, manifest, manifestRef, bundle, sourceFiles, configValue })
   }
   return catalog
-}
-
-function validateCapabilities(
-  capabilities: readonly string[],
-  exposedTools: ToolAsset['server']['exposedTools'],
-  label: string,
-): void {
-  if (capabilities.length === 0) fail('CONTRACT_INVALID', `${label} must not be empty`)
-  const seen = new Set<string>()
-  for (const capability of capabilities) {
-    if (seen.has(capability)) fail('CONTRACT_INVALID', `${label} must not contain duplicates`)
-    if (!CAPABILITY_ALLOWLIST.has(capability)) {
-      fail('UNSUPPORTED_RESOURCES', `${label} contains unsupported capability ${JSON.stringify(capability)}`)
-    }
-    seen.add(capability)
-  }
-  if (exposedTools.length > 0 && !seen.has('tools')) {
-    fail('CONTRACT_INVALID', `${label} must include "tools" when exposedTools is non-empty`)
-  }
-}
-
-function validateManifest(value: JsonObject, asset: ToolAsset): McpManifest {
-  assertExactKeys(value, ['v', 'serverName', 'transport', 'capabilities', 'instructions', 'entrypoint', 'limits', 'digest'], 'MCP manifest')
-  if (value['v'] !== 1) fail('CONTRACT_INVALID', 'MCP manifest v must be 1')
-  const serverName = value['serverName']
-  if (typeof serverName !== 'string' || !SERVER_NAME.test(serverName)) {
-    fail('CONTRACT_INVALID', 'MCP manifest serverName must match [A-Za-z0-9_-]{1,32}')
-  }
-  const transport = value['transport']
-  if (transport !== 'stdio' && transport !== 'streamable-http') {
-    fail('CONTRACT_INVALID', 'MCP manifest transport must be stdio or streamable-http')
-  }
-  if (transport !== asset.server.transport) {
-    fail('CONTRACT_INVALID', `MCP manifest transport does not match ToolAsset.server.transport for ${JSON.stringify(asset.id)}`)
-  }
-  const capabilities = value['capabilities']
-  if (!Array.isArray(capabilities) || capabilities.some(entry => typeof entry !== 'string')) {
-    fail('CONTRACT_INVALID', `MCP manifest capabilities must be strings for ${JSON.stringify(asset.id)}`)
-  }
-  const validatedCapabilities: readonly string[] = capabilities.map(entry => entry as string)
-  validateCapabilities(validatedCapabilities, asset.server.exposedTools, `MCP manifest capabilities for ${JSON.stringify(asset.id)}`)
-  validateCapabilities(asset.server.capabilities, asset.server.exposedTools, `MCP ToolAsset capabilities for ${JSON.stringify(asset.id)}`)
-  if (canonicalize(validatedCapabilities) !== canonicalize(asset.server.capabilities)) {
-    fail('CONTRACT_INVALID', `MCP manifest capabilities must equal ToolAsset.server.capabilities for ${JSON.stringify(asset.id)}`)
-  }
-  const instructions = value['instructions']
-  if (typeof instructions !== 'string') fail('CONTRACT_INVALID', 'MCP manifest instructions must be a string')
-  const entrypoint = value['entrypoint']
-  if (!isSafeRelativePath(entrypoint)) fail('CONTRACT_INVALID', 'MCP manifest entrypoint must be a safe relative path')
-  const limits = value['limits']
-  if (!isRecord(limits)) fail('CONTRACT_INVALID', 'MCP manifest limits must be an object')
-  assertExactKeys(limits, ['maxBundleBytes', 'maxInstructionBytes', 'toolCallTimeoutMs'], 'MCP manifest limits')
-  const maxBundleBytes = positiveInteger(limits['maxBundleBytes'], 'MCP manifest maxBundleBytes', MAX_BUNDLE_BYTES)
-  const maxInstructionBytes = positiveInteger(limits['maxInstructionBytes'], 'MCP manifest maxInstructionBytes', MAX_INSTRUCTION_BYTES)
-  const instructionBytes = textEncoder.encode(instructionSectionText(serverName, instructions)).byteLength
-  if (instructionBytes > maxInstructionBytes) {
-    fail('CONTRACT_INVALID', `MCP manifest instruction section exceeds its ${String(maxInstructionBytes)} byte cap`)
-  }
-  const toolCallTimeoutMs = positiveInteger(limits['toolCallTimeoutMs'], 'MCP manifest toolCallTimeoutMs', MAX_TOOL_CALL_TIMEOUT_MS)
-  return {
-    v: 1,
-    serverName,
-    transport,
-    capabilities: [...validatedCapabilities],
-    instructions,
-    entrypoint,
-    limits: { maxBundleBytes, maxInstructionBytes, toolCallTimeoutMs },
-  }
-}
-
-function validateConfig(value: JsonObject, manifest: McpManifest, instructionBytes: number): McpStdioConfig {
-  assertExactKeys(value, [
-    'v', 'serverName', 'transport', 'command', 'args', 'cwd', 'env',
-    'toolCallTimeoutMs', 'maxInstructionBytes', 'failOnStartupError', 'reconnect',
-    'digest',
-  ], 'MCP stdio config')
-  if (value['v'] !== 1) fail('CONTRACT_INVALID', 'MCP config v must be 1')
-  if (value['serverName'] !== manifest.serverName) fail('CONTRACT_INVALID', 'MCP config serverName must equal manifest.serverName')
-  if (value['transport'] !== 'stdio') fail('CONTRACT_INVALID', 'MCP stdio config transport must be stdio')
-  if (value['command'] !== 'node') fail('UNSUPPORTED_RESOURCES', 'S4-A3 only allows the logical stdio command "node"')
-  const args = value['args']
-  if (!Array.isArray(args) || args.length !== 1 || args[0] !== manifest.entrypoint || !isSafeRelativePath(args[0])) {
-    fail('CONTRACT_INVALID', 'MCP stdio config args must be exactly the manifest entrypoint')
-  }
-  if (value['cwd'] !== '.') fail('CONTRACT_INVALID', 'MCP stdio config cwd must be "."')
-  const env = value['env']
-  if (!isRecord(env) || Object.keys(env).length !== 0) {
-    fail('UNSUPPORTED_RESOURCES', 'S4-A3 rejects raw env/secrets in MCP config; only host-derived HOME is added')
-  }
-  const toolCallTimeoutMs = positiveInteger(value['toolCallTimeoutMs'], 'MCP config toolCallTimeoutMs', manifest.limits.toolCallTimeoutMs)
-  const maxInstructionBytes = positiveInteger(value['maxInstructionBytes'], 'MCP config maxInstructionBytes', manifest.limits.maxInstructionBytes)
-  if (instructionBytes > maxInstructionBytes) {
-    fail('CONTRACT_INVALID', `MCP config maxInstructionBytes ${String(maxInstructionBytes)} cannot carry the ${String(instructionBytes)} byte instructions`)
-  }
-  if (value['failOnStartupError'] !== true) fail('CONTRACT_INVALID', 'MCP config must set failOnStartupError true')
-  const reconnect = value['reconnect']
-  if (!isRecord(reconnect)) fail('CONTRACT_INVALID', 'MCP config reconnect must be an object')
-  assertExactKeys(reconnect, ['enabled'], 'MCP config reconnect')
-  if (reconnect['enabled'] !== false) fail('CONTRACT_INVALID', 'MCP config must disable reconnect')
-  return {
-    v: 1,
-    serverName: manifest.serverName,
-    transport: 'stdio',
-    command: 'node',
-    args: [manifest.entrypoint],
-    cwd: '.',
-    env: {},
-    toolCallTimeoutMs,
-    maxInstructionBytes,
-    failOnStartupError: true,
-    reconnect: { enabled: false },
-  }
 }
 
 function deriveSchema(
@@ -473,25 +334,8 @@ function publicToolName(serverName: string, rawName: string): string {
   return name
 }
 
-async function readSealedObject(
-  reader: CasObjectReader,
-  ref: Ref,
-  label: string,
-): Promise<JsonObject> {
-  const value = await readJson(reader, ref, label)
-  if (value['digest'] !== ref.digest || computeDigest('object', value) !== ref.digest) {
-    fail('CONTRACT_INVALID', `${label} digest is not its structured object digest`)
-  }
-  return value
-}
-
 async function readJson(reader: CasObjectReader, ref: Ref, label: string): Promise<JsonObject> {
-  let bytes: Uint8Array
-  try {
-    ({ bytes } = await reader.readObject(ref, 'object'))
-  } catch (error) {
-    fail('CONTRACT_INVALID', `${label} CAS object is missing or unreadable`, error)
-  }
+  const { bytes } = await reader.readObject(ref, 'object')
   let text: string
   try {
     text = strictUtf8.decode(bytes)
@@ -522,40 +366,10 @@ async function readTree(
   }
 }
 
-function assertSourceSubset(
-  bundle: Awaited<ReturnType<typeof readTreeBundle>>,
-  sourceFiles: Awaited<ReturnType<typeof readTreeBundle>>,
-  serverName: string,
-): void {
-  const bundleFiles = new Map(bundle.manifest.files.map(file => [file.path, file]))
-  for (const source of sourceFiles.manifest.files) {
-    const bundled = bundleFiles.get(source.path)
-    if (bundled === undefined || bundled.bytes !== source.bytes
-      || bundled.object.digest !== source.object.digest) {
-      fail('CONTRACT_INVALID', `MCP server ${JSON.stringify(serverName)} sourceFiles must be a subset of its bundle`)
-    }
-  }
-}
-
-function assertExactKeys(value: JsonObject, keys: readonly string[], label: string): void {
-  const actual = Object.keys(value)
-  if (actual.length !== keys.length || actual.some(key => !keys.includes(key))) {
-    fail('CONTRACT_INVALID', `${label} must contain exactly ${keys.join(', ')}`)
-  }
-}
-
-function positiveInteger(value: JsonValue | undefined, label: string, max?: number): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || (max !== undefined && value > max)) {
-    fail('CONTRACT_INVALID', `${label} must be a positive safe integer${max === undefined ? '' : ` <= ${String(max)}`}`)
-  }
-  return value
-}
-
-function isSafeRelativePath(value: JsonValue | undefined): value is string {
-  if (typeof value !== 'string' || value.length === 0
-    || value.startsWith('/') || value.includes('\\')) return false
-  const segments = value.split('/')
-  return segments.every(segment => segment.length > 0 && segment !== '.' && segment !== '..')
+function parseAsset<Schema extends z.ZodType>(schema: Schema, value: unknown): z.output<Schema> {
+  const result = schema.safeParse(value)
+  if (!result.success) fail('CONTRACT_INVALID', result.error.message)
+  return result.data
 }
 
 function isRecord(value: JsonValue | undefined): value is JsonObject {

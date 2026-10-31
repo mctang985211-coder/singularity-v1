@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import type { RemainingBudgetPct,ToolError,ToolErrorCode } from '../src/errors.ts'
 import {
-  TOOL_ERROR_CODES,
-  remainingBudgetPctSchema,
-  toolErrorCodeSchema,
-  toolErrorSchema,
+TOOL_ERROR_CODES,
+remainingBudgetPctSchema,
+toolErrorCodeSchema,
+toolErrorSchema,
 } from '../src/errors.ts'
-import type { RemainingBudgetPct, ToolError, ToolErrorCode } from '../src/errors.ts'
 import * as protocol from '../src/index.ts'
 import { parseProtocolValue } from '../src/schema.ts'
 
@@ -23,7 +23,6 @@ const EXPECTED_TOOL_ERROR_CODES = [
   'INPUT_NOT_AUTHORIZED',
   'BINDING_FIXED',
   'LIMIT_EXCEEDED',
-  'ACTIVE_JOB',
   'ALREADY_SUBMITTED',
   'RUN_CLOSED',
   'COMPOSITION_MISMATCH',
@@ -44,9 +43,8 @@ const toolError: ToolError = {
   remainingBudgetPct: budget,
 }
 
-void test('the sixteen tool error codes are one exact frozen set', () => {
-  assert.equal(TOOL_ERROR_CODES.length, 16)
-  assert.equal(new Set(TOOL_ERROR_CODES).size, 16)
+void test('tool error codes match the declared set', () => {
+  assert.equal(new Set(TOOL_ERROR_CODES).size, EXPECTED_TOOL_ERROR_CODES.length)
   assert.deepEqual([...TOOL_ERROR_CODES].sort(), [...EXPECTED_TOOL_ERROR_CODES].sort())
 
   for (const code of EXPECTED_TOOL_ERROR_CODES) {
@@ -54,7 +52,7 @@ void test('the sixteen tool error codes are one exact frozen set', () => {
     assert.equal(parsed, code)
   }
 
-  for (const invalid of ['invalid_argument', 'INVALID-ARGUMENT', 'UNKNOWN', '']) {
+  for (const invalid of ['ACTIVE_JOB', 'invalid_argument', 'INVALID-ARGUMENT', 'UNKNOWN', '']) {
     assert.equal(toolErrorCodeSchema.safeParse(invalid).success, false, invalid)
   }
 })
@@ -129,7 +127,6 @@ void test('tool errors reject unknown codes, unknown fields, and missing fields'
 
 void test('index preserves the existing surface and exposes the tool error contract', () => {
   const existing = [
-    'CanonicalJsonError',
     'canonicalize',
     'parseJsonText',
     'jsonValueSchema',

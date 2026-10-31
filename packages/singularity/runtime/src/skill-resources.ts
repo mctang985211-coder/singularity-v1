@@ -15,15 +15,10 @@ import type { CasObjectReader } from './workspace.ts'
 /** Discovery name/description cap from docs/framework.md §14.3. */
 const SKILL_DISCOVERY_MAX_BYTES = 8 * 1024
 /** Single read/skill result cap from docs/framework.md §14.3. */
-const SKILL_RESULT_MAX_BYTES = 16 * 1024
+export const SKILL_RESULT_MAX_BYTES = 16 * 1024
 /** Deployment cap over one frozen skill bundle; not a protocol field. */
 const SKILL_BUNDLE_MAX_BYTES = 1024 * 1024
 const SKILL_INSTRUCTION_FILE = 'SKILL.md'
-
-const SKILL_RESOURCE_BASE: { readonly kind: 'opaque'; readonly description: string } = {
-  kind: 'opaque',
-  description: 'Referenced files are frozen in the skill bundle; this slice exposes only SKILL.md.',
-}
 
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
 const textEncoder = new TextEncoder()
@@ -35,7 +30,7 @@ export interface FrozenSkillResource {
   readonly description: string
   readonly bundle: Ref
   readonly content: string
-  readonly resourceBase: { readonly kind: 'opaque'; readonly description: string }
+  readonly bundleFiles: readonly { readonly path: string; readonly data: Uint8Array }[]
 }
 
 /**
@@ -45,7 +40,7 @@ export interface FrozenSkillResource {
  */
 export async function readSkills(
   reader: CasObjectReader,
-  method: MethodRevision,
+  method: Pick<MethodRevision, 'skills'>,
   template: TaskTemplate,
   contractRefs: readonly Ref[],
 ): Promise<readonly FrozenSkillResource[]> {
@@ -113,17 +108,10 @@ export async function readSkills(
         `skill ${JSON.stringify(skill.id)} ${SKILL_INSTRUCTION_FILE} must be non-empty`,
       )
     }
-    if (hasFrontmatter(content)) {
-      throw new MethodResourceError(
-        'method',
-        'UNSUPPORTED_RESOURCES',
-        `skill ${JSON.stringify(skill.id)} ${SKILL_INSTRUCTION_FILE} frontmatter is not parsed in this slice`,
-      )
-    }
     const rendered = renderSkillContent({
       name: skill.name,
       provider: 'runtime',
-      resourceBase: SKILL_RESOURCE_BASE,
+      resourceBase: { kind: 'directory', path: '.' },
       content,
     })
     const resultBytes = textEncoder.encode(rendered).byteLength
@@ -148,7 +136,7 @@ export async function readSkills(
       description: skill.description,
       bundle: skill.bundle,
       content,
-      resourceBase: SKILL_RESOURCE_BASE,
+      bundleFiles: [...bundle.contents].map(([path, data]) => ({ path, data })),
     })
   }
 
@@ -222,12 +210,6 @@ function validateSkillCatalog(skills: readonly SkillAsset[]): ReadonlyMap<string
     byId.set(skill.id, skill)
   }
   return byId
-}
-
-function hasFrontmatter(content: string): boolean {
-  const withoutBom = content.startsWith('\uFEFF') ? content.slice(1) : content
-  const firstLine = withoutBom.split(/\r?\n/, 1)[0] ?? ''
-  return /^---[ \t]*(?:#.*)?$/.test(firstLine)
 }
 
 export function sameRef(left: Ref, right: Ref): boolean {

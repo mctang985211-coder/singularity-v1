@@ -2,15 +2,14 @@ import { createHash } from 'node:crypto'
 
 // Load the public SessionEventMap augmentation owned by dsh-compaction.
 import type {} from '@deepseek-ai/dsh-compaction'
+import { deriveContextEpoch } from '@singularity/runtime'
+export { deriveContextEpoch } from '@singularity/runtime'
 import type { Session, SessionEvent, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 
 /**
  * Test-local deterministic context-epoch identity.
  *
- * The epoch is derived only from the session identity, raw
- * `session/end-seed` boundaries, and successful `compaction/end` events whose
- * matching `compaction/start` is present. Turn, step, message, inbox, and
- * failed-compaction events do not move it.
+ * The runtime uses native lifecycle offsets and surface replacement generations.
  */
 export type ContextEpoch = string
 
@@ -40,9 +39,8 @@ export interface ContextEpochReceiptStatus {
 }
 
 /**
- * Read the committed session log for test assertions. Alpha2 exposes no
- * replacement snapshot read API, so the deprecated reader remains the only
- * durable view.
+ * Read the committed session log for test assertions; production receipt and
+ * usage readers share the separately documented alpha2 compatibility boundary.
  */
 function readSessionEvents(session: Session): readonly SessionEvent[] {
   // eslint-disable-next-line @typescript-eslint/no-deprecated -- test-only durable log inspection
@@ -56,36 +54,6 @@ function findEvent(session: Session, seq: SessionSeq): SessionEvent | undefined 
 function digestEvent(event: SessionEvent): string {
   const serialized = JSON.stringify({ type: event.type, data: event.data })
   return `sha256:${createHash('sha256').update(serialized).digest('hex')}`
-}
-
-/**
- * Derive the current context epoch from the raw session log.
- *
- * Only resume boundaries (`session/end-seed`) and successful compaction
- * boundaries (`compaction/end` without `error`, matched to an earlier
- * `compaction/start`) contribute markers. The raw presence of any other event
- * leaves the epoch unchanged.
- */
-export function deriveContextEpoch(session: Session): ContextEpoch {
-  const markers: string[] = []
-  const startedCompactions = new Set<string>()
-  for (const event of readSessionEvents(session)) {
-    if (event.type === 'session/end-seed') {
-      markers.push(`seed:${String(event.seq)}`)
-      continue
-    }
-    if (event.type === 'compaction/start') {
-      startedCompactions.add(event.data.compactionId)
-      continue
-    }
-    if (event.type === 'compaction/end'
-      && event.data.error === undefined
-      && startedCompactions.has(event.data.compactionId)) {
-      markers.push(`compaction:${event.data.compactionId}:${String(event.seq)}`)
-    }
-  }
-  const material = ['singularity/test/context-epoch/v1', String(session.id), ...markers].join('\n')
-  return `sha256:${createHash('sha256').update(material).digest('hex')}`
 }
 
 /**

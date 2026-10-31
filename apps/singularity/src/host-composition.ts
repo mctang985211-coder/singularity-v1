@@ -1,28 +1,29 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { copyFile,mkdir,mkdtemp,readFile,rm,symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join,resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
+import type { Agent,AgentOptions } from '@deepseek-ai/dsh-agent'
 import { loadProfileDirectory } from '@deepseek-ai/dsh-app-boot'
-import { INSTALL_ANCHOR, runProfile } from '@deepseek-ai/dsh/profile-boot'
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
-import type { CompositionPayload, JsonValue, TaskContract } from '@singularity/protocol'
-import { canonicalize, computeDigest } from '@singularity/protocol'
+import { INSTALL_ANCHOR,runProfile } from '@deepseek-ai/dsh/profile-boot'
+import type { CompositionPayload,JsonValue,TaskContract } from '@singularity/protocol'
+import { canonicalize,computeDigest } from '@singularity/protocol'
+import type { CasObjectReader,CasObjectWriter } from '@singularity/runtime'
 import {
-  METHOD_GUIDANCE_ORDER,
-  METHOD_GUIDANCE_SECTION,
-  MethodResourceError,
-  PLATFORM_PROMPT_SERVICE,
-  assertCompositionResources,
-  loadMethodResources,
-  mcpCompositionEntry,
-  mcpPromptSections,
-  renderWorkerCard,
+METHOD_GUIDANCE_ORDER,
+METHOD_GUIDANCE_SECTION,
+MethodResourceError,
+PLATFORM_PROMPT_SERVICE,
+assertCompositionResources,
+loadMethodResources,
+mcpCompositionEntry,
+mcpPromptSections,
+renderWorkerCard,
+usesExploration,
 } from '@singularity/runtime'
-import type { CasObjectReader, CasObjectWriter } from '@singularity/runtime'
 
 const REQUIRED_DSH_VERSION = '0.2.2-alpha.2'
 const PROFILE_NAME = 'singularity'
@@ -31,6 +32,8 @@ const BASE_URL_ENV = 'SINGULARITY_SPIKE_BASE_URL'
 const API_KEY_ENV = 'SINGULARITY_SPIKE_API_KEY'
 
 export interface SpikeProfileOptions {
+  /** Additional native DSH profile patches, in application order. */
+  readonly patchFiles?: readonly string[]
   /** Harness home for this run; defaults to `DSH_HOME`, then a disposable temporary directory. */
   readonly home?: string
   /** OpenAI-compatible chat endpoint; `SINGULARITY_SPIKE_BASE_URL` overrides the local default. */
@@ -56,40 +59,19 @@ export interface SingleRunCompositionInput {
   readonly agentOptions: AgentOptions
 }
 
-function jsonBytes(value: JsonValue): Uint8Array {
-  return new TextEncoder().encode(canonicalize(value))
-}
-
-function publicConfig(value: unknown, path = 'config'): JsonValue {
-  if (value === undefined) return {}
-  if (typeof value === 'object' && value !== null && 'get' in value
-    && typeof (value as { readonly get?: unknown }).get === 'function') {
-    return publicConfig((value as { get(): unknown }).get(), path)
-  }
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new Error(`unsafe DSH ${path}`)
-    return value
-  }
-  if (Array.isArray(value)) return value.map((item, index) => publicConfig(item, `${path}[${String(index)}]`))
-  if (typeof value !== 'object') throw new Error(`unsafe DSH ${path}`)
-  const output: Record<string, JsonValue> = {}
-  for (const key of Object.keys(value)) {
-    if (/^(?:apiKey|headers|secret|token|password|credential|authorization)$/i.test(key)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)
-      if (descriptor?.value === undefined && descriptor?.get === undefined) continue
-      const field: unknown = descriptor.value
-      if (key === 'headers' && field !== null && typeof field === 'object' && Object.keys(field).length === 0) continue
-      throw new Error(`DSH ${path}.${key} is not public composition data`)
+function jsonBytes(value: unknown): Uint8Array {
+  // Launch configuration is public; credentials stay in native launchEnvironment.
+  // JSON owns serialization, with Cordis signal values read through their native get().
+  const text = JSON.stringify(value, (_key: string, item: unknown) => {
+    if (item !== null && typeof item === 'object' && 'get' in item && typeof item.get === 'function') {
+      return (item as { get(): unknown }).get()
     }
-    if (key === 'apiKeyEnv') continue
-    const item: unknown = (value as Record<string, unknown>)[key]
-    if (item !== undefined) output[key] = publicConfig(item, `${path}.${key}`)
-  }
-  return output
+    return item
+  })
+  return new TextEncoder().encode(canonicalize(JSON.parse(text)))
 }
 
-/** Build the narrow Composition consumed by run-recovery from the booted DSH view. */
+/** Build the narrow Composition consumed by the Run driver from the booted DSH view. */
 export async function buildSingleRunComposition(
   ctx: Context,
   input: SingleRunCompositionInput,
@@ -125,7 +107,7 @@ export async function buildSingleRunComposition(
     .map(entry => ({
       id: entry.id,
       name: entry.options.name,
-      config: publicConfig(entry.fiber?.effectiveConfig, `loader.${entry.id}`),
+      config: entry.fiber?.effectiveConfig,
     }))
   const mcpOrder = ctx.systemPrompt.getSectionOrder('MCP_SERVERS')
   const mcpSections = mcpPromptSections(methodResources.mcpServers, mcpOrder)
@@ -159,7 +141,8 @@ export async function buildSingleRunComposition(
     ...assembly,
     sections: assembly.sections.map(section => section.name === 'mcp-resource-servers'
       ? { ...section, text: resourceText }
-      : section),
+      : section.name === 'singularity:worker-card'
+        ? { ...section, text: renderWorkerCard(usesExploration(methodResources)) } : section),
   })
   const dshConfig = await input.store.putObject(
     `${input.id}:dsh-config`,
@@ -167,11 +150,11 @@ export async function buildSingleRunComposition(
   )
   const modelRoute = await input.store.putObject(
     `${input.id}:model-route`,
-    jsonBytes(publicConfig({ v: 1, call, resolved })),
+    jsonBytes({ v: 1, call, resolved }),
   )
   const resources = await input.store.putObject(
     `${input.id}:resources`,
-    jsonBytes(publicConfig({ v: 1, tools: ctx.tools.schemas() })),
+    jsonBytes({ v: 1, tools: ctx.tools.schemas() }),
   )
   return {
     ...composition,
@@ -198,11 +181,12 @@ async function assertDshVersion(): Promise<string> {
   return REQUIRED_DSH_VERSION
 }
 
-async function releaseHome(home: string, previousHome: string | undefined, ownedHome: string | undefined): Promise<void> {
+async function releaseHome(home: string, previousHome: string | undefined, ownedHome: string | undefined, ownedProfile: string | undefined): Promise<void> {
   if (process.env.DSH_HOME === home) {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
   }
+  if (ownedProfile !== undefined) await rm(ownedProfile, { recursive: true, force: true })
   if (ownedHome !== undefined) await rm(ownedHome, { recursive: true, force: true })
 }
 
@@ -226,10 +210,19 @@ export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promi
   // value for the host lifetime so late dshHomePath callers see the same root.
   const previousHome = process.env.DSH_HOME
   process.env.DSH_HOME = home
+  let ownedProfile: string | undefined
 
   try {
     const profileDirectory = fileURLToPath(new URL('..', import.meta.url))
-    const profile = loadProfileDirectory(PROFILE_NAME, profileDirectory, INSTALL_ANCHOR)
+    // runProfile writes cordis.yml. Give each boot its own directory rather than
+    // letting independent runners truncate and read one file in the source tree.
+    ownedProfile = await mkdtemp(join(home, 'profile-'))
+    await Promise.all([
+      copyFile(join(profileDirectory, 'package.json'), join(ownedProfile, 'package.json')),
+      copyFile(join(profileDirectory, 'cordis.patch.yml'), join(ownedProfile, 'cordis.patch.yml')),
+      symlink(join(profileDirectory, 'node_modules'), join(ownedProfile, 'node_modules'), 'dir'),
+    ])
+    const profile = loadProfileDirectory(PROFILE_NAME, ownedProfile, INSTALL_ANCHOR)
     if (profile.skippedBundles.length > 0) {
       const skipped = profile.skippedBundles
         .map(bundle => `${bundle.packageName}: ${bundle.reason}`)
@@ -249,7 +242,7 @@ export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promi
       environment,
       profile: PROFILE_NAME,
       resolvedProfile: { profile, installAnchor: INSTALL_ANCHOR },
-      patchFiles: [],
+      patchFiles: [...options.patchFiles ?? []],
       args: [],
     })
     // The runtime adds this same named section in each Agent scope. Keeping a
@@ -282,7 +275,7 @@ export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promi
           } finally {
             disposePlatformPrompt()
             disposeWorkerCard()
-            await releaseHome(home, previousHome, ownedHome)
+            await releaseHome(home, previousHome, ownedHome, ownedProfile)
           }
         })()
         return disposal
@@ -290,7 +283,7 @@ export async function bootSpikeProfile(options: SpikeProfileOptions = {}): Promi
     }
   } catch (error) {
     try {
-      await releaseHome(home, previousHome, ownedHome)
+      await releaseHome(home, previousHome, ownedHome, ownedProfile)
     } catch (cleanupError) {
       throw new AggregateError([error, cleanupError], 'S1 spike startup and cleanup failed')
     }

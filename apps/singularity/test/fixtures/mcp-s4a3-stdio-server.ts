@@ -1,8 +1,8 @@
-import { appendFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { appendFileSync,existsSync,mkdirSync,statSync } from 'node:fs'
+import { dirname,join } from 'node:path'
 
-import { fromJsonSchema, McpServer, ResourceTemplate } from '@modelcontextprotocol/server'
 import type { JsonSchemaType } from '@modelcontextprotocol/server'
+import { fromJsonSchema,McpServer,ResourceTemplate } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 
 /**
@@ -35,6 +35,8 @@ type LogRecord =
     readonly type: 'env'
     readonly pid: number
     readonly home: string | null
+    readonly apiKey: string | null
+    readonly dshValue: string | null
     readonly sshAuthSock: string | null
     readonly gpgAgentInfo: string | null
     readonly kubeconfig: string | null
@@ -102,6 +104,8 @@ writeLog({
   type: 'env',
   pid: process.pid,
   home: envValue('HOME'),
+  apiKey: envValue('FIXTURE_API_KEY'),
+  dshValue: envValue('DSH_FIXTURE'),
   sshAuthSock: envValue('SSH_AUTH_SOCK'),
   gpgAgentInfo: envValue('GPG_AGENT_INFO'),
   kubeconfig: envValue('KUBECONFIG'),

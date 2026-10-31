@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
-import { canonicalize, parseJsonText } from './json.ts'
-import type { JsonObject, JsonValue } from './json.ts'
+import type { JsonObject,JsonValue } from './json.ts'
+import { canonicalize } from './json.ts'
 
 export type ProtocolSchemaErrorCode =
   | 'SCHEMA_IO_MISMATCH'
@@ -18,29 +18,23 @@ export class ProtocolSchemaError extends Error {
   }
 }
 
+/** Lexical workspace/bundle path, checked once at the input schema boundary. */
+export const workspaceRelativePathSchema = z.string().min(1).refine(path =>
+  !path.startsWith('/') && !path.includes('\\') && !path.includes('\0')
+  && path.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..'),
+'relative POSIX path without empty or dot segments')
+
 /** Creates a strict object schema; protocol payloads reject unknown fields. */
 export function closedObject<Shape extends z.ZodRawShape>(shape: Shape) {
   return z.strictObject(shape)
 }
 
-/**
- * Parses a protocol value through canonical JSON and rejects schemas that
- * transform or default the input value.
- */
+/** Parse at the boundary; schema purity is checked by protocolJsonSchema tests. */
 export function parseProtocolValue<Schema extends z.ZodType>(
   schema: Schema,
   value: unknown,
 ): z.output<Schema> {
-  const canonicalInput = canonicalize(value)
-  const parsed = schema.parse(parseJsonText(canonicalInput))
-  const canonicalOutput = canonicalizeOutput(parsed)
-  if (canonicalOutput !== canonicalInput) {
-    throw new ProtocolSchemaError(
-      'TRANSFORM_OUTPUT',
-      'Protocol schemas must not transform or default values',
-    )
-  }
-  return parsed
+  return schema.parse(value)
 }
 
 /** Converts a protocol schema to JSON Schema only when input and output agree. */
@@ -64,18 +58,6 @@ export function protocolJsonSchema(schema: z.ZodType): JsonObject {
     )
   }
   return input
-}
-
-function canonicalizeOutput(value: unknown): string {
-  try {
-    return canonicalize(value)
-  } catch (error) {
-    throw new ProtocolSchemaError(
-      'TRANSFORM_OUTPUT',
-      'Protocol schema output must remain JSON',
-      { cause: error },
-    )
-  }
 }
 
 function toJsonObject(payload: object): JsonObject {

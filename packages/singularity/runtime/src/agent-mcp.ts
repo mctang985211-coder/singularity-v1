@@ -1,21 +1,21 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir,mkdtemp,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname,join } from 'node:path'
 
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { StdioConfig,StreamableHttpConfig } from '@deepseek-ai/dsh-mcp-client'
 import * as mcpClient from '@deepseek-ai/dsh-mcp-client'
-import type { StdioConfig, StreamableHttpConfig } from '@deepseek-ai/dsh-mcp-client'
-import { canonicalize } from '@singularity/protocol'
 import type { JsonValue } from '@singularity/protocol'
+import { canonicalize } from '@singularity/protocol'
 
 import { MethodResourceError } from './errors.ts'
-import { MCP_RESOURCE_TOOL_NAMES } from './mcp-resources.ts'
 import type { FrozenMcpServer } from './mcp-resources.ts'
+import { MCP_RESOURCE_TOOL_NAMES } from './mcp-resources.ts'
 
 /**
  * Creates the Run-owned root that holds materialized stdio server bundles and
- * their isolated HOMEs. HTTP-only Runs never call this.
+ * their entrypoints. HTTP-only Runs never call this.
  */
 export async function createMcpResourceRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'singularity-mcp-'))
@@ -25,31 +25,6 @@ export async function createMcpResourceRoot(): Promise<string> {
 export async function removeMcpResourceRoot(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true })
 }
-
-const CREDENTIAL_CHANNELS = [
-  'SSH_AUTH_SOCK',
-  'SSH_AGENT_PID',
-  'GPG_AGENT_INFO',
-  'KUBECONFIG',
-  'DOCKER_HOST',
-  'DOCKER_CONFIG',
-  'DOCKER_TLS_VERIFY',
-  'DOCKER_CERT_PATH',
-  'KRB5CCNAME',
-  'GOOGLE_APPLICATION_CREDENTIALS',
-  'AZURE_CONFIG_DIR',
-  'AWS_SHARED_CREDENTIALS_FILE',
-  'AWS_CONFIG_FILE',
-  'NPM_CONFIG_USERCONFIG',
-  'PIP_CONFIG_FILE',
-] as const
-
-const XDG_HOME_DIRS = {
-  XDG_CONFIG_HOME: '.config',
-  XDG_CACHE_HOME: '.cache',
-  XDG_DATA_HOME: '.local/share',
-  XDG_STATE_HOME: '.local/state',
-} as const
 
 /**
  * Materializes stdio server bundles under the Run root and mounts every frozen
@@ -64,7 +39,6 @@ export async function mountMcpServers(
   const prepared = servers.map((server, index) => ({
     server,
     serverRoot: join(root ?? '.', `${String(index)}-${server.serverName}`),
-    home: join(root ?? '.', 'home', `${String(index)}-${server.serverName}`),
   }))
   const stdio = prepared.filter(entry => entry.server.transport === 'stdio')
   if (stdio.length > 0 && root === undefined) {
@@ -74,21 +48,20 @@ export async function mountMcpServers(
       'host did not create the MCP resource root required by stdio Method server bindings',
     )
   }
-  // Materialize every stdio bundle before the first child starts so no server
-  // can observe or rewrite a later server's partially written root.
+  // Materialize the trusted bundles before mounting the native clients.
   for (const entry of stdio) {
     await materializeServer(entry.serverRoot, entry.server)
   }
   for (const entry of prepared) {
-    if (entry.server.transport === 'stdio') {
-      const env = await mcpChildEnv(entry.home)
+    const transport = entry.server.configValue
+    if (transport.transport === 'stdio') {
       const config: StdioConfig = {
         transport: 'stdio',
         serverName: entry.server.serverName,
-        command: process.execPath,
-        args: [join(entry.serverRoot, entry.server.entrypoint)],
+        command: transport.command === 'node' ? process.execPath : transport.command,
+        args: [...transport.args],
         cwd: entry.serverRoot,
-        env,
+        env: { ...transport.env },
         toolCallTimeoutMs: entry.server.configValue.toolCallTimeoutMs,
         maxInstructionBytes: entry.server.configValue.maxInstructionBytes,
         failOnStartupError: true,
@@ -97,10 +70,7 @@ export async function mountMcpServers(
       await agentCtx.plugin(mcpClient, config)
       continue
     }
-    const httpConfig = entry.server.configValue
-    if (httpConfig.transport !== 'streamable-http') {
-      throw new MethodResourceError('method', 'CONTRACT_INVALID', 'HTTP MCP server is missing its HTTP config')
-    }
+    const httpConfig = transport
     const config: StreamableHttpConfig = {
       transport: 'streamable-http',
       serverName: entry.server.serverName,
@@ -113,17 +83,6 @@ export async function mountMcpServers(
     }
     await agentCtx.plugin(mcpClient, config)
   }
-}
-
-async function mcpChildEnv(home: string): Promise<Record<string, string>> {
-  await mkdir(home, { recursive: true, mode: 0o700 })
-  const env: Record<string, string> = { HOME: home, TMPDIR: join(home, 'tmp') }
-  const dirs = ['tmp', 'run', '.config', '.cache', '.local/share', '.local/state']
-  for (const dir of dirs) await mkdir(join(home, dir), { recursive: true, mode: 0o700 })
-  for (const name of CREDENTIAL_CHANNELS) env[name] = ''
-  for (const [name, dir] of Object.entries(XDG_HOME_DIRS)) env[name] = join(home, dir)
-  env['XDG_RUNTIME_DIR'] = join(home, 'run')
-  return env
 }
 
 /**
@@ -175,16 +134,7 @@ async function materializeServer(serverRoot: string, server: FrozenMcpServer): P
     await mkdir(dirname(target), { recursive: true, mode: 0o700 })
     await writeFile(target, file.data, { flag: 'wx', mode: 0o600 })
   }
-  try {
-    await access(join(serverRoot, server.entrypoint))
-  } catch (error) {
-    throw new MethodResourceError(
-      'method',
-      'CONTRACT_INVALID',
-      `materialized MCP bundle is missing entrypoint ${JSON.stringify(server.entrypoint)}`,
-      { cause: error },
-    )
-  }
+
 }
 
 function failSurface(message: string): never {

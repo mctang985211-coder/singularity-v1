@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session,SessionEvent } from '@deepseek-ai/dsh-session'
 
 import {
-  findCurrentToolCall,
-  readSessionToolView,
+findCurrentToolCall,
+readSessionToolView,
 } from '../src/receipts.ts'
 
 interface FakeEvent {
@@ -20,9 +20,10 @@ interface FakeEvent {
 function fakeSession(events: readonly FakeEvent[], nodes: readonly number[]): Session {
   return {
     id: 'session-receipts',
-    seq: events.length,
-    snapshotEvents: () => events as unknown as readonly SessionEvent[],
-    surface: { nodes },
+    get seq() { return events.length },
+      snapshotEvents: () => events as unknown as readonly SessionEvent[],
+    firstLiveSeq: 0,
+    surface: { nodes, replaceGeneration: 0 },
   } as unknown as Session
 }
 
@@ -96,5 +97,5 @@ void test('S4-B1 receipt view keeps failed and shadowed results distinguishable'
   const view = readSessionToolView(fakeSession(events, []))
   assert.equal(view.results[0]?.isError, true)
   assert.equal(view.results[0]?.surfaceVisible, false)
-  assert.throws(() => findCurrentToolCall(view, 'missing'), /exactly one tool\/call|INVALID_ARGUMENT/)
+  assert.throws(() => findCurrentToolCall(view, 'missing'), /DSH tool call "missing" is missing/)
 })

@@ -1,37 +1,37 @@
-import { canonicalize, decideRetryPolicy } from '@singularity/protocol'
 import type {
-  CommandScope,
-  Evidence,
-  ExecutionRecord,
-  Fact,
-  FactActor,
-  FactPayloadMap,
-  FactType,
-  JsonValue,
-  NormalizedCommand,
-  PublicReceipt,
-  Ref,
-  RetryDecision,
-  RunClosedPayload,
-  SubmissionManifest,
-  TaskContract,
-  TaskRunState,
-  UsageRecord,
+CommandScope,
+Evidence,
+ExecutionRecord,
+Fact,
+FactActor,
+FactPayloadMap,
+FactType,
+JsonValue,
+NormalizedCommand,
+PublicReceipt,
+Ref,
+RetryDecision,
+RunClosedPayload,
+SubmissionManifest,
+TaskContract,
+TaskRunState,
+UsageRecord,
 } from '@singularity/protocol'
+import { canonicalize,decideTaskRetryPolicy } from '@singularity/protocol'
 
 import type { SessionSnapshot } from './agent.ts'
-import { initialContextEpoch } from './epoch.ts'
 import { SingleRunError } from './errors.ts'
-import type { ExecuteSingleRunRequest, ExecuteSingleRunResult, RuntimeContext } from './run.ts'
+import type { ExecuteSingleRunRequest,ExecuteSingleRunResult,RuntimeContext } from './run.ts'
 import type { CommandService } from './service.ts'
 import type { CasDigestDomain } from './store.ts'
+import { createSchedulerFeedback } from './task-feedback.ts'
 import type { RunToolSnapshot } from './tools.ts'
 import {
-  AGENT_ERROR_REASON,
-  NO_SUBMISSION_REASON,
-  buildEvidence,
-  buildExecutionRecord,
-  verifyRunSubmission,
+AGENT_ERROR_REASON,
+NO_SUBMISSION_REASON,
+buildEvidence,
+buildExecutionRecord,
+verifyRunSubmission,
 } from './verification.ts'
 
 const textEncoder = new TextEncoder()
@@ -56,18 +56,26 @@ export async function settleSubmitted(
   service: CommandService,
   snapshot: SessionSnapshot,
   tools: RunToolSnapshot,
-): Promise<Settlement> {
+): Promise<Settlement | undefined> {
   const frozen = tools.submission
   if (frozen === undefined) throw new SingleRunError('INVALID_ARGUMENT', 'submission snapshot is missing')
-  const verification = await verifyRunSubmission({
-    contract: runtime.contract,
-    runId: request.runId,
-    inputs: frozen.inputRefs,
-    outputs: frozen.outputRefs,
-    verifier: runtime.verifier,
-    reader: service,
-    writer: service,
-  }, runtime.clock)
+  let verification
+  try {
+    verification = await verifyRunSubmission({
+      contract: runtime.contract,
+      runId: request.runId,
+      inputs: frozen.inputRefs,
+      outputs: frozen.outputRefs,
+      verifier: runtime.verifier,
+      reader: service,
+      writer: service,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    }, runtime.clock)
+  } catch (error) {
+    if (request.signal?.aborted === true && error === request.signal.reason) return undefined
+    throw error
+  }
+  if (request.signal?.aborted === true) return undefined
 
   if (verification.verdict !== 'invalid') {
     const evidence = buildEvidence({
@@ -75,6 +83,7 @@ export async function settleSubmitted(
       runId: request.runId,
       composition: runtime.compositionRef,
       outputs: frozen.outputRefs,
+      inputs: frozen.inputRefs,
       receipt: verification.receipt,
       receiptRef: verification.receiptRef,
       usage: snapshot.usage,
@@ -89,6 +98,7 @@ export async function settleSubmitted(
       evidenceRef,
       usage: snapshot.usage,
       planningSketchRef: tools.planningSketchRef,
+      feedbackRefs: tools.feedbackRefs,
     })
     return {
       classification: verification.verdict,
@@ -117,7 +127,6 @@ export async function settleExecutionRecord(
   tools: RunToolSnapshot,
   agentErrorCode: string | undefined,
   agentErrorDetail: string | undefined,
-  drainPending: boolean,
 ): Promise<Settlement> {
   let classification: 'failed' | 'invalid'
   let reason: string
@@ -136,19 +145,7 @@ export async function settleExecutionRecord(
     reason = NO_SUBMISSION_REASON
     recordReason = NO_SUBMISSION_REASON
   }
-  return settleRecord(runtime, request, service, snapshot, classification, reason, recordReason, tools, drainPending)
-}
-
-export async function settleInvalidRecord(
-  runtime: RuntimeContext,
-  request: ExecuteSingleRunRequest,
-  service: CommandService,
-  snapshot: SessionSnapshot,
-  reason: string,
-): Promise<Settlement> {
-  return settleRecord(runtime, request, service, snapshot, 'invalid', reason, reason, {
-    contextEpoch: initialContextEpoch(request.sessionId),
-  })
+  return settleRecord(runtime, request, service, snapshot, classification, reason, recordReason, tools)
 }
 
 async function settleRecord(
@@ -160,7 +157,6 @@ async function settleRecord(
   reason: string,
   recordReason: string,
   tools: RunToolSnapshot,
-  drainPending = false,
 ): Promise<Settlement> {
   const executionRecord = buildExecutionRecord({
     contract: runtime.contract,
@@ -170,7 +166,6 @@ async function settleRecord(
     sessionCut: snapshot.sessionCut,
     reason: recordReason,
     ...(tools.submission === undefined ? {} : { outputs: tools.submission.outputRefs }),
-    ...(drainPending ? { drainPending: true } : {}),
   })
   const executionRecordRef = await putSealed(
     service,
@@ -185,6 +180,7 @@ async function settleRecord(
     executionRecordRef,
     usage: snapshot.usage,
     planningSketchRef: tools.planningSketchRef,
+    feedbackRefs: tools.feedbackRefs,
   })
   return {
     classification,
@@ -202,6 +198,7 @@ interface CommitClosedEvidence {
   readonly evidenceRef: Ref
   readonly usage: UsageRecord
   readonly planningSketchRef?: Ref
+  readonly feedbackRefs?: readonly Ref[]
 }
 
 interface CommitClosedRecord {
@@ -211,6 +208,7 @@ interface CommitClosedRecord {
   readonly executionRecordRef: Ref
   readonly usage: UsageRecord
   readonly planningSketchRef?: Ref
+  readonly feedbackRefs?: readonly Ref[]
 }
 
 async function commitRunClosed(
@@ -218,6 +216,31 @@ async function commitRunClosed(
   service: CommandService,
   closure: CommitClosedEvidence | CommitClosedRecord,
 ): Promise<Fact> {
+  const feedbackRefs = [...(closure.feedbackRefs ?? [])]
+  if (runtime.contract.origin.kind === 'child' && closure.classification !== 'verified') {
+    const state = await service.taskRunState(runtime.transientInvalidReasons)
+    const task = state.tasks.get(runtime.contract.taskId)
+    const runs = new Map(state.runs)
+    const run = runs.get(closure.runId)
+    if (run !== undefined) runs.set(closure.runId, {
+      ...run,
+      phase: 'closed',
+      closed: { ...closure, source: 'run/closed', factDigest: runtime.contract.digest },
+    })
+    const retry = decideTaskRetryPolicy({ ...state, runs }, runtime.contract.taskId,
+      closure.runId, runtime.transientInvalidReasons, runtime.clock())
+    if (closure.reason === NO_SUBMISSION_REASON || closure.classification === 'invalid'
+      || (task?.join === 'required' && !retry.allowed)) {
+      feedbackRefs.push(await createSchedulerFeedback({
+        contract: runtime.contract,
+        runId: closure.runId,
+        reason: closure.reason,
+        resultRef: 'evidenceRef' in closure ? closure.evidenceRef : closure.executionRecordRef,
+        createdAt: runtime.clock(),
+        writer: service,
+      }))
+    }
+  }
   const base = {
     runId: closure.runId,
     reason: closure.reason,
@@ -225,7 +248,7 @@ async function commitRunClosed(
     ...(closure.planningSketchRef === undefined
       ? {}
       : { planningSketchRef: closure.planningSketchRef }),
-    feedbackRefs: [],
+    feedbackRefs,
   }
   const payload: RunClosedPayload = 'evidenceRef' in closure
     ? { ...base, classification: closure.classification, evidenceRef: closure.evidenceRef }
@@ -315,6 +338,7 @@ export function buildExecutionResult(
   facts: readonly Fact[],
 ): ExecuteSingleRunResult {
   return {
+    kind: 'settled',
     taskId: runtime.contract.taskId,
     runId: request.runId,
     sessionId: request.sessionId,
@@ -340,7 +364,7 @@ export function buildExecutionResult(
 
 /**
  * Applies the fixed retry policy from docs/framework.md §9.2 to one closed Run.
- * Runtime recovery and the reducer share the same pure decision.
+ * Runtime retry and the reducer share the same pure decision.
  */
 export function retryDecisionForRun(
   state: TaskRunState,
@@ -349,26 +373,24 @@ export function retryDecisionForRun(
   transientInvalidReasons: readonly string[],
   now: number,
 ): RetryDecision {
-  const run = runFact.type === 'run/closed' ? state.runs.get(runFact.data.runId) : undefined
-  const task = state.tasks.get(contract.taskId)
-  if (run === undefined || task === undefined) return { allowed: false, reason: 'Run closure fact missing' }
-  const { tokens, unknown } = usageCost([...state.runs.values()]
-    .filter(attempt => state.tasks.get(attempt.taskId)?.rootTaskId === task.rootTaskId)
-    .flatMap(attempt => attempt.closed?.usage === undefined ? [] : [attempt.closed.usage]))
-  return decideRetryPolicy(
-    {
-      runPhase: run.phase,
-      ...(run.closed === undefined ? {} : { closure: run.closed }),
-      runCount: task.runIds.length,
-      maxRuns: contract.limits.maxRuns,
-      maxTokens: contract.limits.maxTokens,
-      deadlineAt: contract.limits.deadlineAt,
-      now,
-      usageTokens: tokens,
-      usageUnknown: unknown,
-    },
-    transientInvalidReasons,
-  )
+  if (runFact.type !== 'run/closed') return { allowed: false, reason: 'Run closure fact missing' }
+  return decideTaskRetryPolicy(state, contract.taskId, runFact.data.runId, transientInvalidReasons, now)
+}
+
+/** The same frozen Task subtree contributes to retry eligibility and reservation. */
+export function closedSubtreeUsage(state: TaskRunState, taskId: string): { readonly tokens: number; readonly unknown: boolean } {
+  const records: UsageRecord[] = []
+  const pending = [taskId]
+  for (const id of pending) {
+    const task = state.tasks.get(id)
+    if (task === undefined) continue
+    for (const runId of task.runIds) {
+      const usage = state.runs.get(runId)?.closed?.usage
+      if (usage !== undefined) records.push(usage)
+    }
+    pending.push(...task.childIds)
+  }
+  return usageCost(records)
 }
 
 export function usageCost(records: readonly UsageRecord[]): { readonly tokens: number; readonly unknown: boolean } {
@@ -408,6 +430,7 @@ export async function commitFact<Type extends FactType>(
   type: Type,
   data: FactPayloadMap[Type],
   transientInvalidReasons: readonly string[],
+  canOpenRun?: () => boolean,
 ): Promise<Fact> {
   const command: NormalizedCommand = {
     v: 1,
@@ -418,7 +441,7 @@ export async function commitFact<Type extends FactType>(
     scope,
     input,
   }
-  return service.commit({ command, type, data }, transientInvalidReasons)
+  return service.commit({ command, type, data }, transientInvalidReasons, canOpenRun)
 }
 
 function recordField(value: unknown, key: string): unknown {

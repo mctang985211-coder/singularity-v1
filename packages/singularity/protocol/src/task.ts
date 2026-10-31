@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { digestSchema, seal, verifyDigest } from './digest.ts'
 import { refSchema } from './refs.ts'
-import { closedObject, parseProtocolValue } from './schema.ts'
+import { closedObject, parseProtocolValue, workspaceRelativePathSchema } from './schema.ts'
 
 /** Model-supplied local guidance; never an acceptance obligation. */
 export const localCriterionSchema = closedObject({
@@ -15,7 +15,7 @@ export type LocalCriterion = z.infer<typeof localCriterionSchema>
 /** Model-supplied supporting output; this shape cannot express required deliverables. */
 export const localOutputSchema = closedObject({
   id: z.string(),
-  path: z.string(),
+  path: workspaceRelativePathSchema,
   kind: z.enum(['file', 'tree']),
   description: z.string(),
 })
@@ -41,7 +41,7 @@ export type TaskCriterion = z.infer<typeof taskCriterionSchema>
 export const inputRefSchema = closedObject({
   id: z.string(),
   object: refSchema,
-  path: z.string(),
+  path: workspaceRelativePathSchema,
   access: z.enum(['read', 'copy-to-work']),
 })
 
@@ -50,7 +50,7 @@ export type InputRef = z.infer<typeof inputRefSchema>
 /** Output obligation or supporting output; roles and requiredness are host-owned. */
 export const outputSpecSchema = closedObject({
   id: z.string(),
-  path: z.string(),
+  path: workspaceRelativePathSchema,
   kind: z.enum(['file', 'tree']),
   role: z.enum(['deliverable', 'supporting', 'skill-draft', 'mcp-draft']),
   required: z.boolean(),

@@ -217,7 +217,7 @@ async function expectCode(promise: Promise<unknown>, code: string): Promise<void
   })
 }
 
-void test('S4-A4 resolves a strict loopback streamable-http server', async () => {
+void test('S4-A4 resolves a frozen streamable-http server', async () => {
   await withStore(async store => {
     const state = await scenario(store)
     const servers = await readMcpServers(store, state.method, state.template, state.contract.resources.mcpServers)
@@ -238,9 +238,9 @@ void test('S4-A4 resolves a strict loopback streamable-http server', async () =>
   })
 })
 
-void test('S4-A4 accepts allowlisted localhost and IPv6 loopback URLs', async () => {
+void test('S4-A4 accepts deployment HTTP/HTTPS addresses and native URL paths', async () => {
   await withStore(async store => {
-    for (const url of ['http://localhost:43123/mcp', 'http://[::1]:43123/mcp']) {
+    for (const url of ['http://localhost:43123/mcp', 'http://[::1]:43123/mcp', 'https://example.com/mcp', 'http://example.com/mcp?version=1', 'http://127.0.0.1/mcp#fragment']) {
       const state = await scenario(store, { config: httpConfig({ url }) })
       const servers = await readMcpServers(store, state.method, state.template, state.contract.resources.mcpServers)
       const [server] = servers
@@ -252,38 +252,24 @@ void test('S4-A4 accepts allowlisted localhost and IPv6 loopback URLs', async ()
   })
 })
 
-void test('S4-A4 rejects credentialed or non-loopback HTTP config', async () => {
+void test('S4-A4 rejects public credentials and malformed HTTP config', async () => {
   await withStore(async store => {
-    const unsupported = [
-      httpConfig({ url: 'https://127.0.0.1:43123/mcp' }),
-      httpConfig({ url: 'http://example.com/mcp' }),
-      httpConfig({ url: 'http://user:pass@127.0.0.1:43123/mcp' }),
-      httpConfig({ url: 'http://127.0.0.1:43123/mcp?token=raw' }),
-      httpConfig({ url: 'http://127.0.0.1:43123/mcp#fragment' }),
-      httpConfig({ url: 'http://127.0.0.1:43123/mcp?' }),
-      httpConfig({ url: 'http://127.0.0.1:43123/mcp#' }),
-      httpConfig({ headers: { authorization: 'raw' } }),
-    ]
+    const unsupported = [httpConfig({ url: 'http://user:pass@127.0.0.1:43123/mcp' })]
     for (const config of unsupported) {
       const state = await scenario(store, { config })
       await expectCode(
         readMcpServers(store, state.method, state.template, state.contract.resources.mcpServers),
-        'UNSUPPORTED_RESOURCES',
+        'CONTRACT_INVALID',
       )
     }
 
     const malformed = [
+      httpConfig({ url: 'file:///tmp/mcp' }),
       httpConfig({ url: '' }),
       httpConfig({ url: 'not a url' }),
       httpConfig({ url: 'http://localhost:43123/mcp', headers: [] }),
-      httpConfig({ failOnStartupError: false }),
-      httpConfig({ reconnect: { enabled: true } }),
-      httpConfig({ maxInstructionBytes: 9000 }),
-      httpConfig({ toolCallTimeoutMs: 251 }),
       httpConfig({ toolCallTimeoutMs: 0 }),
       httpConfig({ toolCallTimeoutMs: 1.5 }),
-      httpConfig({ unexpected: true }),
-      httpConfig({ serverName: 'other' }),
       httpConfig({ transport: 'stdio' }),
     ]
     for (const config of malformed) {
