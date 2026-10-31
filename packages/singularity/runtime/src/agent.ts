@@ -106,7 +106,7 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
 
   try {
     if (!options.checkBudget()) throw new Error('Run budget unavailable')
-    if (prepared.methodResources.mcpServers.length > 0) {
+    if (prepared.methodResources.mcpServers.some(server => server.transport === 'stdio')) {
       mcpRoot = await createMcpResourceRoot()
     }
     const setupState = { started: false }
@@ -338,13 +338,6 @@ function buildAgentSetup(options: DriveAgentOptions, mcpRoot: string | undefined
     })
     await registerSkills(agentCtx, prepared.methodResources.skills)
     if (prepared.methodResources.mcpServers.length > 0) {
-      if (mcpRoot === undefined) {
-        throw new MethodResourceError(
-          'method',
-          'UNSUPPORTED_RESOURCES',
-          'host did not create the MCP resource root required by Method server bindings',
-        )
-      }
       await mountMcpServers(agentCtx, prepared.methodResources.mcpServers, mcpRoot)
     }
     agentCtx.systemPrompt.context({

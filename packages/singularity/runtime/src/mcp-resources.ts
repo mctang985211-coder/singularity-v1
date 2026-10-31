@@ -14,6 +14,8 @@ import type {
 } from '@singularity/protocol'
 
 import { MethodResourceError } from './errors.ts'
+import { validateHttpConfig } from './mcp-http-config.ts'
+import type { McpHttpConfig } from './mcp-http-config.ts'
 import { TreeBundleError, readTreeBundle } from './resource-bundle.ts'
 import type { CasObjectReader } from './workspace.ts'
 
@@ -69,20 +71,22 @@ interface McpStdioConfig {
   readonly reconnect: { readonly enabled: false }
 }
 
+type McpTransportConfig = McpStdioConfig | McpHttpConfig
+
 interface CatalogTool {
   readonly asset: ToolAsset
   readonly manifest: McpManifest
   readonly manifestRef: Ref
   readonly bundle: Awaited<ReturnType<typeof readTreeBundle>>
   readonly sourceFiles: Awaited<ReturnType<typeof readTreeBundle>>
-  readonly configValue: McpStdioConfig | undefined
+  readonly configValue: McpTransportConfig | undefined
 }
 
 /** One frozen MCP server consumed by host composition and Agent setup. */
 export interface FrozenMcpServer {
   readonly id: string
   readonly serverName: string
-  readonly transport: 'stdio'
+  readonly transport: McpManifest['transport']
   readonly capabilities: readonly string[]
   readonly exposedTools: ToolAsset['server']['exposedTools']
   readonly publicToolNames: readonly string[]
@@ -94,7 +98,7 @@ export interface FrozenMcpServer {
   readonly schemaPayload: JsonObject
   readonly instructions: string
   readonly entrypoint: string
-  readonly configValue: McpStdioConfig
+  readonly configValue: McpTransportConfig
   readonly bundleFiles: readonly { readonly path: string; readonly data: Uint8Array }[]
 }
 
@@ -108,7 +112,8 @@ export interface McpDispatchPlan {
 /**
  * Resolves the template's ordered tool ids against the pinned Method, validates
  * the complete Method tool catalog, and verifies the contract authorizes
- * exactly the bound server bundle refs. A3 accepts stdio only.
+ * exactly the bound server bundle refs. Both stdio and strict loopback
+ * streamable-http transports use the same identity and deployment shape.
  */
 export async function readMcpServers(
   reader: CasObjectReader,
@@ -134,13 +139,10 @@ export async function readMcpServers(
   const servers: FrozenMcpServer[] = []
   const publicNames = new Set<string>()
   for (const tool of selected) {
-    if (tool.manifest.transport !== 'stdio') {
-      fail('UNSUPPORTED_RESOURCES', `MCP server ${JSON.stringify(tool.manifest.serverName)} uses streamable-http, which S4-A3 does not mount`)
-    }
     const bundle = tool.bundle
     const configValue = tool.configValue
     if (configValue === undefined) {
-      fail('CONTRACT_INVALID', `MCP server ${JSON.stringify(tool.manifest.serverName)} is missing its stdio config`)
+      fail('CONTRACT_INVALID', `MCP server ${JSON.stringify(tool.manifest.serverName)} is missing its transport config`)
     }
     const schemaPayload = deriveSchema(tool.manifest.serverName, tool.asset.server.exposedTools)
     const schema: Ref = {
@@ -157,7 +159,7 @@ export async function readMcpServers(
     servers.push({
       id: tool.asset.id,
       serverName: tool.manifest.serverName,
-      transport: 'stdio',
+      transport: tool.manifest.transport,
       capabilities: [...tool.asset.server.capabilities],
       exposedTools: tool.asset.server.exposedTools,
       publicToolNames: expectedNames,
@@ -239,7 +241,7 @@ export function mcpCompositionEntry(server: FrozenMcpServer): {
   readonly bundle: Ref
   readonly schema: Ref
   readonly config: Ref
-  readonly transport: 'stdio'
+  readonly transport: 'stdio' | 'streamable-http'
   readonly capabilities: string[]
 } {
   return {
@@ -310,13 +312,17 @@ async function readToolCatalog(
     if (!bundle.contents.has(manifest.entrypoint)) {
       fail('CONTRACT_INVALID', `MCP server ${JSON.stringify(manifest.serverName)} bundle must contain entrypoint ${JSON.stringify(manifest.entrypoint)}`)
     }
+    const configObject = await readSealedObject(
+      reader,
+      asset.server.config,
+      `MCP server ${JSON.stringify(manifest.serverName)} config`,
+    )
+    const instructionBytes = textEncoder.encode(
+      instructionSectionText(manifest.serverName, manifest.instructions),
+    ).byteLength
     const configValue = manifest.transport === 'stdio'
-      ? validateConfig(
-        await readSealedObject(reader, asset.server.config, `MCP server ${JSON.stringify(manifest.serverName)} config`),
-        manifest,
-        textEncoder.encode(instructionSectionText(manifest.serverName, manifest.instructions)).byteLength,
-      )
-      : undefined
+      ? validateConfig(configObject, manifest, instructionBytes)
+      : validateHttpConfig(configObject, manifest.serverName, manifest.limits, instructionBytes)
     catalog.set(asset.id, { asset, manifest, manifestRef, bundle, sourceFiles, configValue })
   }
   return catalog
