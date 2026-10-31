@@ -106,6 +106,34 @@ async function putSealed(
   return store.putObject(id, encoder.encode(canonicalize(value)), domain)
 }
 
+async function putTree(
+  store: DomainStore,
+  id: string,
+  files: readonly { readonly path: string; readonly content: string }[],
+): Promise<Ref> {
+  const entries = []
+  for (const file of files) {
+    const bytes = encoder.encode(file.content)
+    entries.push({
+      path: file.path,
+      bytes: bytes.byteLength,
+      object: await store.putObject(`${id}:file:${file.path}`, bytes, 'object'),
+    })
+  }
+  entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
+  return putSealed(store, id, 'object', seal('object', { v: 1, kind: 'tree', files: entries }))
+}
+
+async function firstTreeLeaf(store: DomainStore, treeRef: Ref): Promise<Ref> {
+  const bytes = (await store.readObject(treeRef, 'object')).bytes
+  const value = JSON.parse(new TextDecoder().decode(bytes)) as {
+    readonly files?: readonly { readonly object?: Ref }[]
+  }
+  const leaf = value.files?.[0]?.object
+  assert.ok(leaf)
+  return leaf
+}
+
 interface Graph {
   readonly facts: readonly Fact[]
   readonly methodRef: Ref
@@ -122,6 +150,13 @@ interface Graph {
   readonly privateReceiptRef: Ref
   readonly manifestOutputRef: Ref
   readonly evidenceOutputRef: Ref
+  readonly methodSkillBundleRef: Ref
+  readonly methodToolBundleRef: Ref
+  readonly methodToolSourceRef: Ref
+  readonly contractSkillBundleRef: Ref
+  readonly contractMcpBundleRef: Ref
+  readonly compositionSkillBundleRef: Ref
+  readonly compositionMcpBundleRef: Ref
 }
 
 /**
@@ -134,18 +169,18 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
   const requestRef = await objectRef('request-root')
   const inputObjectRef = await objectRef('input-object')
   const toolRef = await objectRef('resource-tool')
-  const resourceSkillRef = await objectRef('resource-skill')
-  const resourceMcpRef = await objectRef('resource-mcp')
+  const resourceSkillRef = await putTree(store, 'resource-skill', [{ path: 'SKILL.md', content: '# resource skill\n' }])
+  const resourceMcpRef = await putTree(store, 'resource-mcp', [{ path: 'server.js', content: '// resource mcp\n' }])
   const explorationRef = await objectRef('resource-exploration')
   const seedRef = await objectRef('environment-seed')
   const profileRef = await objectRef('environment-profile')
   const guidanceRef = await objectRef('method-guidance')
   const exampleRef = await objectRef('method-example')
   const acceptancePolicyRef = await objectRef('template-acceptance-policy')
-  const skillBundleRef = await objectRef('method-skill-bundle')
-  const toolBundleRef = await objectRef('method-tool-bundle')
+  const skillBundleRef = await putTree(store, 'method-skill-bundle', [{ path: 'SKILL.md', content: '# method skill\n' }])
+  const toolBundleRef = await putTree(store, 'method-tool-bundle', [{ path: 'server.js', content: '// method mcp\n' }])
   const toolManifestRef = await objectRef('method-tool-manifest')
-  const toolSourceRef = await objectRef('method-tool-source')
+  const toolSourceRef = await putTree(store, 'method-tool-source', [{ path: 'server.js', content: '// method mcp\n' }])
   const toolConfigRef = await objectRef('method-tool-config')
 
   const parentMethod = sealMethodRevision({
@@ -245,9 +280,9 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
   const compositionConfigRef = await objectRef('composition-dsh-config')
   const compositionTemplateRef = await objectRef('composition-template-object')
   const compositionGuidanceRef = await objectRef('composition-guidance')
-  const compositionSkillRef = await objectRef('composition-skill')
+  const compositionSkillRef = await putTree(store, 'composition-skill', [{ path: 'SKILL.md', content: '# composition skill\n' }])
   const compositionMcpManifestRef = await objectRef('composition-mcp-manifest')
-  const compositionMcpBundleRef = await objectRef('composition-mcp-bundle')
+  const compositionMcpBundleRef = await putTree(store, 'composition-mcp-bundle', [{ path: 'server.js', content: '// composition mcp\n' }])
   const compositionMcpSchemaRef = await objectRef('composition-mcp-schema')
   const compositionMcpConfigRef = await objectRef('composition-mcp-config')
   const compositionModelRouteRef = await objectRef('composition-model-route')
@@ -474,6 +509,13 @@ async function buildGraph(store: DomainStore): Promise<Graph> {
     privateReceiptRef,
     manifestOutputRef,
     evidenceOutputRef,
+    methodSkillBundleRef: skillBundleRef,
+    methodToolBundleRef: toolBundleRef,
+    methodToolSourceRef: toolSourceRef,
+    contractSkillBundleRef: resourceSkillRef,
+    contractMcpBundleRef: resourceMcpRef,
+    compositionSkillBundleRef: compositionSkillRef,
+    compositionMcpBundleRef: compositionMcpBundleRef,
   }
 }
 
@@ -591,6 +633,32 @@ void test('nested method, contract, composition, and execution refs reject missi
       const target = scenario.select(graph)
       await store.close()
       await unlink(store.objectPath(target.digest))
+      await assert.rejects(DomainStore.open({ root }), (error: unknown) => {
+        assert.equal(errorCode(error), 'OBJECT_MISSING', `${scenario.name} must reject`)
+        return true
+      })
+    })
+  }
+})
+
+void test('nested Method/Composition tree file refs reject missing leaves at startup', async () => {
+  const scenarios = [
+    { name: 'method skill leaf', select: (graph: Graph) => graph.methodSkillBundleRef },
+    { name: 'method MCP bundle leaf', select: (graph: Graph) => graph.methodToolBundleRef },
+    { name: 'method MCP sourceFiles leaf', select: (graph: Graph) => graph.methodToolSourceRef },
+    { name: 'contract skill leaf', select: (graph: Graph) => graph.contractSkillBundleRef },
+    { name: 'contract MCP leaf', select: (graph: Graph) => graph.contractMcpBundleRef },
+    { name: 'composition skill leaf', select: (graph: Graph) => graph.compositionSkillBundleRef },
+    { name: 'composition MCP leaf', select: (graph: Graph) => graph.compositionMcpBundleRef },
+  ] as const
+
+  for (const scenario of scenarios) {
+    await withRoot(async (root) => {
+      const store = await DomainStore.open({ root })
+      const graph = await buildGraph(store)
+      const leaf = await firstTreeLeaf(store, scenario.select(graph))
+      await store.close()
+      await unlink(store.objectPath(leaf.digest))
       await assert.rejects(DomainStore.open({ root }), (error: unknown) => {
         assert.equal(errorCode(error), 'OBJECT_MISSING', `${scenario.name} must reject`)
         return true

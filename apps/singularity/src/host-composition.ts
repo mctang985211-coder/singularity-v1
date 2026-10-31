@@ -14,9 +14,12 @@ import { canonicalize, computeDigest } from '@singularity/protocol'
 import {
   METHOD_GUIDANCE_ORDER,
   METHOD_GUIDANCE_SECTION,
+  MethodResourceError,
   PLATFORM_PROMPT_SERVICE,
   assertCompositionResources,
   loadMethodResources,
+  mcpCompositionEntry,
+  mcpPromptSections,
   renderWorkerCard,
 } from '@singularity/runtime'
 import type { CasObjectReader, CasObjectWriter } from '@singularity/runtime'
@@ -48,7 +51,7 @@ export interface SingleRunCompositionInput {
   readonly contract: TaskContract
   readonly base: Omit<
     CompositionPayload,
-    'contract' | 'dsh' | 'guidance' | 'modelRoute' | 'platformPrompt' | 'resources' | 'skills' | 'template'
+    'contract' | 'dsh' | 'guidance' | 'modelRoute' | 'platformPrompt' | 'resources' | 'skills' | 'template' | 'mcpServers'
   >
   readonly agentOptions: AgentOptions
 }
@@ -95,6 +98,12 @@ export async function buildSingleRunComposition(
   const model = input.agentOptions.model
   if (provider === undefined || model === undefined) throw new Error('composition requires provider and model')
   const methodResources = await loadMethodResources(input.store, input.contract)
+  for (const server of methodResources.mcpServers) {
+    const schema = await input.store.putObject(server.schema.id, jsonBytes(server.schemaPayload), 'object')
+    if (schema.digest !== server.schema.digest) {
+      throw new MethodResourceError('method', 'CONTRACT_INVALID', `derived MCP schema for ${JSON.stringify(server.serverName)} changed while storing`)
+    }
+  }
   const template = await input.store.putObject(
     `${input.id}:template`,
     jsonBytes(methodResources.template as unknown as JsonValue),
@@ -106,6 +115,7 @@ export async function buildSingleRunComposition(
     template,
     guidance: methodResources.guidance,
     skills: methodResources.skills.map(skill => skill.bundle),
+    mcpServers: methodResources.mcpServers.map(mcpCompositionEntry),
   }
   await assertCompositionResources(input.store, methodResources, composition)
   const resolved = await ctx.llm.resolveModelInfo(provider, model)
@@ -117,14 +127,40 @@ export async function buildSingleRunComposition(
       name: entry.options.name,
       config: publicConfig(entry.fiber?.effectiveConfig, `loader.${entry.id}`),
     }))
-  const disposeGuidance = ctx.systemPrompt.section({
-    name: METHOD_GUIDANCE_SECTION,
-    order: METHOD_GUIDANCE_ORDER,
-    text: methodResources.guidanceText,
-    interpolate: false,
+  const mcpOrder = ctx.systemPrompt.getSectionOrder('MCP_SERVERS')
+  const mcpSections = mcpPromptSections(methodResources.mcpServers, mcpOrder)
+  const resourceText = mcpSections.find(section => section.name === 'mcp-resource-servers')?.text ?? ''
+  const disposers: (() => void)[] = []
+  let assembly
+  try {
+    disposers.push(ctx.systemPrompt.section({
+      name: METHOD_GUIDANCE_SECTION,
+      order: METHOD_GUIDANCE_ORDER,
+      text: methodResources.guidanceText,
+      interpolate: false,
+    }))
+    for (const section of mcpSections) {
+      if (!section.name.startsWith('mcp:')) continue
+      disposers.push(ctx.systemPrompt.section(section))
+    }
+    assembly = await ctx.systemPrompt.assemble()
+  } finally {
+    for (const dispose of disposers.reverse()) dispose()
+  }
+  if (methodResources.mcpServers.length > 0
+    && !assembly.sections.some(section => section.name === 'mcp-resource-servers')) {
+    throw new MethodResourceError(
+      'method',
+      'UNSUPPORTED_RESOURCES',
+      'profile does not mount the DSH MCP resource section required by Method server bindings',
+    )
+  }
+  const prompt = renderPrompt({
+    ...assembly,
+    sections: assembly.sections.map(section => section.name === 'mcp-resource-servers'
+      ? { ...section, text: resourceText }
+      : section),
   })
-  const assembly = await ctx.systemPrompt.assemble().finally(disposeGuidance)
-  const prompt = renderPrompt(assembly)
   const dshConfig = await input.store.putObject(
     `${input.id}:dsh-config`,
     jsonBytes({ v: 1, dshVersion: REQUIRED_DSH_VERSION, profile: PROFILE_NAME, entries: config }),

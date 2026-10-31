@@ -21,6 +21,8 @@ import type {
 } from '@singularity/protocol'
 
 import { MethodResourceError } from './errors.ts'
+import { readMcpServers } from './mcp-resources.ts'
+import type { FrozenMcpServer } from './mcp-resources.ts'
 import { readSkills, sameRef } from './skill-resources.ts'
 import type { FrozenSkillResource } from './skill-resources.ts'
 import type { CasObjectReader } from './workspace.ts'
@@ -44,13 +46,14 @@ const METHOD_GUIDANCE_MAX_BYTES = 8 * 1024
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
 const textEncoder = new TextEncoder()
 
-/** Frozen Method/template/guidance/skill view consumed by one Run. */
+/** Frozen Method/template/guidance/skill/MCP view consumed by one Run. */
 export interface FrozenMethodResources {
   readonly method: MethodRevision
   readonly template: TaskTemplate
   readonly guidance: Ref
   readonly guidanceText: string
   readonly skills: readonly FrozenSkillResource[]
+  readonly mcpServers: readonly FrozenMcpServer[]
 }
 
 /**
@@ -80,14 +83,13 @@ export async function loadMethodResources(
     )
   }
   const template = matches[0]
-  if (template.tools.length > 0) {
-    throw new MethodResourceError(
-      'method',
-      'UNSUPPORTED_RESOURCES',
-      'template MCP tool bindings are not mounted in this slice',
-    )
-  }
   const skills = await readSkills(reader, method, template, contract.resources.skills)
+  const mcpServers = await readMcpServers(
+    reader,
+    method,
+    template,
+    contract.resources.mcpServers,
+  )
   const guidanceText = await readGuidance(reader, template.guidance)
   return {
     method,
@@ -95,18 +97,20 @@ export async function loadMethodResources(
     guidance: template.guidance,
     guidanceText,
     skills,
+    mcpServers,
   }
 }
 
 /**
- * Re-verifies that the frozen Composition carries the same template body and
- * guidance ref that the pinned Method revision defines. This is a semantic
- * check on top of CAS ref validation, used by host assembly and recovery.
+ * Re-verifies that the frozen Composition carries the same template body,
+ * guidance, skill bundles, and MCP server identities that the pinned Method
+ * revision defines. This is a semantic check on top of CAS ref validation,
+ * used by host assembly and recovery.
  */
 export async function assertCompositionResources(
   reader: CasObjectReader,
   resources: FrozenMethodResources,
-  composition: Pick<CompositionPayload, 'guidance' | 'template' | 'skills'>,
+  composition: Pick<CompositionPayload, 'guidance' | 'template' | 'skills' | 'mcpServers'>,
 ): Promise<void> {
   const value = await readJson(
     reader,
@@ -169,6 +173,33 @@ export async function assertCompositionResources(
       )
     }
   }
+  if (composition.mcpServers.length !== resources.mcpServers.length) {
+    throw new MethodResourceError(
+      'composition',
+      'COMPOSITION_MISMATCH',
+      'Composition MCP servers must equal the current template server bundles in the pinned Method revision',
+    )
+  }
+  for (let index = 0; index < resources.mcpServers.length; index += 1) {
+    const expected = resources.mcpServers[index]
+    const actual = composition.mcpServers[index]
+    if (!sameRef(expected.manifest, actual.manifest)
+      || !sameRef(expected.bundle, actual.bundle)
+      || !sameRef(expected.schema, actual.schema)
+      || !sameRef(expected.config, actual.config)
+      || expected.transport !== actual.transport
+      || !sameStrings(expected.capabilities, actual.capabilities)) {
+      throw new MethodResourceError(
+        'composition',
+        'COMPOSITION_MISMATCH',
+        'Composition MCP servers must equal the current template server bundles in the pinned Method revision',
+      )
+    }
+  }
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 /** Re-verifies the actual scoped assembly against the frozen platform prompt digest. */

@@ -99,6 +99,22 @@ async function putBytes(
   return service.putObject(id, value, 'object')
 }
 
+async function putTreeValue(
+  service: CommandService,
+  id: string,
+  path: string,
+  content: string,
+): Promise<Ref> {
+  const bytes = textEncoder.encode(content)
+  const file = await putBytes(service, bytes, `${id}:file:${path}`)
+  const manifest = seal('object', {
+    v: 1,
+    kind: 'tree',
+    files: [{ path, bytes: bytes.byteLength, object: file }],
+  })
+  return putValue(service, manifest, id)
+}
+
 async function commitFact<Type extends FactType>(
   service: CommandService,
   type: Type,
@@ -2483,8 +2499,8 @@ const s4a1InvalidCases: readonly S4A1InvalidCase[] = [
   },
   {
     key: 'template-tools',
-    name: 'template MCP tool bindings in this slice',
-    code: 'UNSUPPORTED_RESOURCES',
+    name: 'a dangling template MCP tool id',
+    code: 'CONTRACT_INVALID',
     async prepare(service, scenario) {
       const method = await s4a1PutMethod(service, s4a1ResealMethod(scenario, [{
         ...s4a1FirstTemplate(scenario),
@@ -2510,8 +2526,8 @@ const s4a1InvalidCases: readonly S4A1InvalidCase[] = [
   },
   {
     key: 'contract-mcp',
-    name: 'contract MCP resources in this slice',
-    code: 'UNSUPPORTED_RESOURCES',
+    name: 'contract MCP refs that do not match the pinned Method',
+    code: 'CONTRACT_INVALID',
     async prepare(service, scenario) {
       const resource = await putValue(service, { v: 1, mcp: 's4a1' }, nextId('s4a1-resource'))
       return s4a1Variant(service, scenario, {
@@ -2550,8 +2566,8 @@ const s4a1InvalidCases: readonly S4A1InvalidCase[] = [
   },
   {
     key: 'composition-mcp',
-    name: 'Composition MCP server refs in this slice',
-    code: 'UNSUPPORTED_RESOURCES',
+    name: 'Composition MCP server refs that do not match the pinned Method',
+    code: 'COMPOSITION_MISMATCH',
     async prepare(service, scenario) {
       const resource = await putValue(service, { v: 1, mcp: 's4a1' }, nextId('s4a1-resource'))
       return s4a1Variant(service, scenario, {
@@ -2752,7 +2768,7 @@ const s4a1ResumeCases: readonly S4A1ResumeCase[] = [
     name: 'Composition skill refs that do not match the pinned Method',
     code: 'COMPOSITION_MISMATCH',
     async prepare(service, scenario) {
-      const resource = await putValue(service, { v: 1, skill: 's4a1' }, nextId('s4a1-resource'))
+      const resource = await putTreeValue(service, nextId('s4a1-resource'), 'SKILL.md', '# mismatched composition skill\n')
       return s4a1Variant(service, scenario, { compositionSkills: [resource] })
     },
   },

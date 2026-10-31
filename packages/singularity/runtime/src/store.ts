@@ -519,6 +519,7 @@ class ReferenceValidator {
   private readonly objectsPath: string
   private readonly verifiedBytes = new Map<string, Promise<Uint8Array>>()
   private readonly validatedStructures = new Set<string>()
+  private readonly validatedTrees = new Set<string>()
 
   constructor(objectsPath: string) {
     this.objectsPath = objectsPath
@@ -658,6 +659,8 @@ class ReferenceValidator {
   }
 
   private async validateTree(ref: Ref): Promise<void> {
+    const key = ref.digest
+    if (this.validatedTrees.has(key)) return
     const value = parseStructuredJson((await this.read(ref, 'object')), 'tree manifest') as Partial<SealedTreeManifest>
     if (value.v !== 1 || value.kind !== 'tree' || !Array.isArray(value.files) || !verifyDigest('object', value as JsonValue)) {
       throw referenceInvalid('Tree manifest is not a valid object-domain seal')
@@ -670,6 +673,7 @@ class ReferenceValidator {
       const parsed = parseProtocolValue(refSchema, object)
       await this.validateRef(parsed, 'object')
     }
+    this.validatedTrees.add(key)
   }
 
   private async validateStructured(
@@ -747,10 +751,10 @@ class ReferenceValidator {
       await this.validateRef(ref, 'object')
     }
     for (const ref of contract.resources.skills) {
-      await this.validateRef(ref, 'object')
+      await this.validateTree(ref)
     }
     for (const ref of contract.resources.mcpServers) {
-      await this.validateRef(ref, 'object')
+      await this.validateTree(ref)
     }
     if (contract.resources.exploration !== undefined) {
       await this.validateRef(contract.resources.exploration, 'object')
@@ -776,12 +780,12 @@ class ReferenceValidator {
       await this.validateRef(template.acceptancePolicy, 'object')
     }
     for (const skill of method.skills) {
-      await this.validateRef(skill.bundle, 'object')
+      await this.validateTree(skill.bundle)
     }
     for (const tool of method.tools) {
-      await this.validateRef(tool.server.bundle, 'object')
+      await this.validateTree(tool.server.bundle)
       await this.validateRef(tool.server.manifest, 'object')
-      await this.validateRef(tool.server.sourceFiles, 'object')
+      await this.validateTree(tool.server.sourceFiles)
       await this.validateRef(tool.server.config, 'object')
     }
   }
@@ -798,11 +802,11 @@ class ReferenceValidator {
       await this.validateRef(composition.guidance, 'object')
     }
     for (const skill of composition.skills) {
-      await this.validateRef(skill, 'object')
+      await this.validateTree(skill)
     }
     for (const server of composition.mcpServers) {
       await this.validateRef(server.manifest, 'object')
-      await this.validateRef(server.bundle, 'object')
+      await this.validateTree(server.bundle)
       await this.validateRef(server.schema, 'object')
       await this.validateRef(server.config, 'object')
     }

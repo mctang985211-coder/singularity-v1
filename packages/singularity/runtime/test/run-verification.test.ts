@@ -372,6 +372,7 @@ void test('skill dispatch is denied after stop and after submission', async () =
           sessionId: 'skill-guard-session',
           workspace,
           skillNames: ['allowed-skill'],
+          mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
           writer: store,
           maxOutputBytes: 1024,
           clock: () => 1000,
@@ -449,6 +450,157 @@ void test('skill dispatch is denied after stop and after submission', async () =
   }
 })
 
+void test('MCP dispatch guard admits only frozen public tools/resources and keeps lifecycle gates', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'singularity-mcp-guard-work-'))
+  const contract = makeContract()
+  try {
+    await withStore(async store => {
+      const contextEpoch = initialContextEpoch('mcp-guard-session')
+      const agent = { session: { id: 'mcp-guard-session', snapshotEvents: () => [] } } as unknown as Agent
+      const otherAgent = { session: { id: 'mcp-guard-other', snapshotEvents: () => [] } } as unknown as Agent
+      const callId = 'mcp-guard-call' as ToolRunContext['callId']
+      const execution = (name: string, args: unknown = {}, target: Agent = agent): ToolRunContext => ({
+        name, agent: target, arguments: args, callId, rootCallId: callId,
+        token: Symbol() as ToolRunContext['token'], signal: new AbortController().signal,
+        deferContext() {}, concludeTurn() {},
+      })
+      const definitions = new Map<string, ToolDefinition>()
+      const controller = new RunToolController({
+        contract,
+        runId: 'mcp-guard-run',
+        sessionId: 'mcp-guard-session',
+        workspace,
+        skillNames: [],
+        mcpPlan: {
+          serverNames: ['calc'],
+          publicToolNames: ['mcp__calc__echo'],
+          resourceToolNames: ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'],
+        },
+        writer: store,
+        maxOutputBytes: 1024,
+        clock: () => 1000,
+        budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+        checkBudget: () => true,
+        epoch: () => contextEpoch,
+        commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+      })
+      controller.register({ get: () => ({ list: () => [] }), tools: {
+        register: (definition: ToolDefinition) => {
+          definitions.set(definition.name, definition)
+          return () => undefined
+        },
+        guard() {},
+      } } as unknown as Context, agent)
+
+      const codeOf = (value: string | undefined): string | undefined => value === undefined
+        ? undefined
+        : (JSON.parse(value) as { readonly code: string }).code
+
+      assert.equal(codeOf(controller.checkGuard(execution('mcp__calc__echo', { message: 'hi' }))), 'READ_SELF_FIRST')
+      assert.equal(codeOf(controller.checkGuard(execution('mcp__calc__other', {}))), 'INPUT_NOT_AUTHORIZED')
+      assert.equal(codeOf(controller.checkGuard(execution('mcp__other__echo', {}))), 'INPUT_NOT_AUTHORIZED')
+      assert.equal(codeOf(controller.checkGuard(execution('list_mcp_resources', { server: 'calc' }))), undefined)
+      assert.equal(codeOf(controller.checkGuard(execution('read_mcp_resource', { server: 'other', uri: 'x' }))), 'INPUT_NOT_AUTHORIZED')
+      assert.equal(codeOf(controller.checkGuard(execution('mcp__calc__echo', { message: 'hi' }, otherAgent))), 'INVALID_ARGUMENT')
+
+      const readTool = definitions.get('singularity_read')
+      const planTool = definitions.get('singularity_plan')
+      assert.ok(readTool && planTool)
+      let cursor: string | undefined
+      do {
+        const page = await readTool.execute(
+          { kind: 'self', ...(cursor === undefined ? {} : { cursor }) },
+          execution('singularity_read'),
+        ) as { readonly nextCursor?: string }
+        cursor = page.nextCursor
+      } while (cursor !== undefined)
+      assert.equal(codeOf(controller.checkGuard(execution('mcp__calc__echo', { message: 'hi' }))), 'PLAN_FIRST')
+      await planTool.execute({ sketch: {
+        v: 1,
+        taskId: contract.taskId,
+        runId: 'mcp-guard-run',
+        contextEpoch,
+        objective: 'exercise MCP guard states',
+        sourceContract: contract.digest,
+        levels: [0, 1].map(level => ({
+          level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
+        })),
+        directPlan: [],
+        assumptions: [],
+      } }, execution('singularity_plan'))
+      assert.equal(codeOf(controller.checkGuard(execution('mcp__calc__echo', { message: 'hi' }))), undefined)
+
+      const stopTool = definitions.get('singularity_stop')
+      assert.ok(stopTool)
+      await stopTool.execute({ reason: 'blocked', message: 'stop MCP guard' }, execution('singularity_stop'))
+      assert.equal(codeOf(controller.checkGuard(execution('mcp__calc__echo', { message: 'hi' }))), 'RUN_CLOSED')
+      assert.equal(codeOf(controller.checkGuard(execution('list_mcp_resources', { server: 'calc' }))), 'RUN_CLOSED')
+
+      await writeFile(join(workspace, 'out.txt'), 'x', 'utf8')
+      const submittedDefinitions = new Map<string, ToolDefinition>()
+      const submittedController = new RunToolController({
+        contract,
+        runId: 'mcp-guard-run',
+        sessionId: 'mcp-guard-session',
+        workspace,
+        skillNames: [],
+        mcpPlan: {
+          serverNames: ['calc'],
+          publicToolNames: ['mcp__calc__echo'],
+          resourceToolNames: ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'],
+        },
+        writer: store,
+        maxOutputBytes: 1024,
+        clock: () => 1000,
+        budget: () => ({ tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 }),
+        checkBudget: () => true,
+        epoch: () => contextEpoch,
+        commitSubmission: frozen => Promise.resolve(frozen.manifestRef),
+      })
+      submittedController.register({ get: () => ({ list: () => [] }), tools: {
+        register: (definition: ToolDefinition) => {
+          submittedDefinitions.set(definition.name, definition)
+          return () => undefined
+        },
+        guard() {},
+      } } as unknown as Context, agent)
+      const submittedRead = submittedDefinitions.get('singularity_read')
+      const submittedPlan = submittedDefinitions.get('singularity_plan')
+      assert.ok(submittedRead && submittedPlan)
+      let submittedCursor: string | undefined
+      do {
+        const page = await submittedRead.execute(
+          { kind: 'self', ...(submittedCursor === undefined ? {} : { cursor: submittedCursor }) },
+          execution('singularity_read'),
+        ) as { readonly nextCursor?: string }
+        submittedCursor = page.nextCursor
+      } while (submittedCursor !== undefined)
+      await submittedPlan.execute({ sketch: {
+        v: 1,
+        taskId: contract.taskId,
+        runId: 'mcp-guard-run',
+        contextEpoch,
+        objective: 'exercise MCP submitted guard',
+        sourceContract: contract.digest,
+        levels: [0, 1].map(level => ({
+          level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
+        })),
+        directPlan: [],
+        assumptions: [],
+      } }, execution('singularity_plan'))
+      const submitTool = submittedDefinitions.get('singularity_submit')
+      assert.ok(submitTool)
+      await submitTool.execute(
+        { outputIds: ['out'], includeLearningDrafts: false },
+        execution('singularity_submit'),
+      )
+      assert.equal(codeOf(submittedController.checkGuard(execution('mcp__calc__echo', { message: 'hi' }))), 'ALREADY_SUBMITTED')
+    })
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
 void test('tool dispatch uses the exact host budget check while preserving read and stop', async () => {
   await withStore(async store => {
     const contract = makeContract(['领域约束'.repeat(4096)])
@@ -462,6 +614,7 @@ void test('tool dispatch uses the exact host budget check while preserving read 
       sessionId: 'session-guard',
       workspace: '/workspace',
       skillNames: [],
+      mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
       writer: store,
       maxOutputBytes: 1024,
       clock: () => contract.limits.deadlineAt + 1,

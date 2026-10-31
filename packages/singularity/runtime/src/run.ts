@@ -33,6 +33,8 @@ import { driveAgent, snapshotSession } from './agent.ts'
 import type { OpenedRunMode } from './agent.ts'
 import { initialContextEpoch } from './epoch.ts'
 import { SingleRunError } from './errors.ts'
+import { mcpDispatchPlan } from './mcp-resources.ts'
+import type { FrozenMcpServer } from './mcp-resources.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
 import { clampPercent, renderNodeView } from './prompt.ts'
 import type { NodeView } from './prompt.ts'
@@ -380,6 +382,7 @@ export async function drivePreparedRun(
       runtime,
       prepared.methodResources.template,
       prepared.methodResources.skills,
+      prepared.methodResources.mcpServers,
       request,
       controller,
       budget(),
@@ -507,13 +510,11 @@ function validateComposition(
       `DSH version must be 0.2.2-alpha.2, received ${JSON.stringify(composition.dsh.version)}`,
     )
   }
-  if (composition.mcpServers.length > 0
-    || contract.resources.mcpServers.length > 0
-    || contract.resources.exploration !== undefined) {
+  if (contract.resources.exploration !== undefined) {
     throw new MethodResourceError(
       'composition',
       'UNSUPPORTED_RESOURCES',
-      'this single-Run slice does not mount MCP servers or exploration resources',
+      'this single-Run slice does not mount exploration resources',
     )
   }
 }
@@ -601,6 +602,7 @@ async function createToolController(
     sessionId: request.sessionId,
     workspace: runtime.workspace,
     skillNames: prepared.methodResources.skills.map(skill => skill.name),
+    mcpPlan: mcpDispatchPlan(prepared.methodResources.mcpServers),
     writer: service,
     maxOutputBytes: runtime.maxOutputBytes,
     clock: runtime.clock,
@@ -662,6 +664,7 @@ function buildNodeView(
   runtime: RuntimeContext,
   template: TaskTemplate,
   skills: readonly FrozenSkillResource[],
+  mcpServers: readonly FrozenMcpServer[],
   request: ExecuteSingleRunRequest,
   controller: RunToolController,
   budget: RemainingBudgetPct,
@@ -671,6 +674,10 @@ function buildNodeView(
   const obligations = controller.obligations()
   const toolNames = [...runtime.baseToolNames]
   if (skills.length > 0 && !toolNames.includes('skill')) toolNames.push('skill')
+  const mcpPlan = mcpDispatchPlan(mcpServers)
+  for (const name of [...mcpPlan.publicToolNames, ...mcpPlan.resourceToolNames]) {
+    if (!toolNames.includes(name)) toolNames.push(name)
+  }
   return {
     v: 1,
     asOf,
