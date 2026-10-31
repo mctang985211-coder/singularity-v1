@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import type { Session } from '@deepseek-ai/dsh-session'
 
 import type { Ref } from '@singularity/protocol'
 
 import {
-  deriveContextEpochFromEvents,
+  deriveContextEpoch,
   initialContextEpoch,
 } from '../src/epoch.ts'
 import {
@@ -71,17 +72,20 @@ function makeView(): NodeView {
 void test('worker card and NodeView stay inside the fixed prompt budgets', () => {
   const plain = renderWorkerCard(false)
   assert.ok(new TextEncoder().encode(plain).byteLength <= WORKER_CARD_MAX_BYTES)
+  assert.ok(new TextEncoder().encode(renderWorkerCard(true)).byteLength <= WORKER_CARD_MAX_BYTES)
   assert.ok(new TextEncoder().encode(`${WORKER_CARD}\n\n${EXPLORATION_CARD}`).byteLength <= WORKER_CARD_MAX_BYTES)
   assert.deepEqual([...new Set(plain.match(/singularity_\w+/g))].sort(), [
     'singularity_decompose',
+    'singularity_feedback',
     'singularity_plan',
     'singularity_read',
     'singularity_stop',
     'singularity_submit',
   ])
-  assert.ok(plain.includes('When childOptions is empty'))
-  assert.ok(plain.includes('BINDING_FIXED'))
-  assert.throws(() => renderWorkerCard(true), /requires S4/)
+  assert.ok(plain.includes('ackPreview'), 'the current card must explain the commit acknowledgement')
+  assert.ok(plain.includes('children'), 'the current card must explain the commit batch')
+  assert.ok(!plain.includes('Child commit is not available yet'), 'the card must match the implemented commit tool')
+  assert.ok(renderWorkerCard(true).includes('Local exploration is enabled'))
 
   const rendered = renderNodeView(makeView())
   assert.ok(new TextEncoder().encode(rendered).byteLength <= NODE_VIEW_MAX_BYTES)
@@ -95,29 +99,16 @@ void test('worker card and NodeView stay inside the fixed prompt budgets', () =>
   assert.equal(rendered.includes('deadlineAt'), false)
 })
 
-void test('context epochs are deterministic and change only on resume or successful compaction', () => {
+void test('context epochs follow native lifecycle and replacement generations', () => {
+  const session = (firstLiveSeq: number, replaceGeneration: number) => ({
+    id: 'session-epoch', firstLiveSeq, surface: { replaceGeneration },
+  }) as unknown as Session
   const initial = initialContextEpoch('session-epoch')
-  assert.equal(initial, initialContextEpoch('session-epoch'))
+  assert.equal(deriveContextEpoch(session(0, 0)), initial)
   assert.notEqual(initial, initialContextEpoch('other-session'))
-  assert.equal(deriveContextEpochFromEvents('session-epoch', []), initial)
-
-  const resumed = deriveContextEpochFromEvents('session-epoch', [
-    { type: 'turn/start', seq: 0, data: { turn: 1 } },
-    { type: 'session/end-seed', seq: 1, data: {} },
-  ])
-  assert.notEqual(resumed, initial)
-
-  const compacted = deriveContextEpochFromEvents('session-epoch', [
-    { type: 'compaction/start', seq: 0, data: { compactionId: 'c1' } },
-    { type: 'compaction/end', seq: 1, data: { compactionId: 'c1' } },
-  ])
-  assert.notEqual(compacted, initial)
-
-  const failedCompaction = deriveContextEpochFromEvents('session-epoch', [
-    { type: 'compaction/start', seq: 0, data: { compactionId: 'c2' } },
-    { type: 'compaction/end', seq: 1, data: { compactionId: 'c2', error: 'boom' } },
-  ])
-  assert.equal(failedCompaction, initial)
+  assert.notEqual(deriveContextEpoch(session(20, 0)), initial)
+  assert.notEqual(deriveContextEpoch(session(20, 1)), deriveContextEpoch(session(20, 0)))
+  assert.equal(deriveContextEpoch(session(20, 1)), deriveContextEpoch(session(20, 1)))
 })
 
 void test('clampPercent floors, clamps, and handles unknown totals', () => {

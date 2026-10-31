@@ -2,12 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  CommandProjectionError,
   computeCommandDigest,
-  decideCommandIdempotency,
   normalizedCommandSchema,
   parseNormalizedCommand,
-  projectCommandFacts,
 } from '../src/command.ts'
 import type { NormalizedCommand } from '../src/command.ts'
 import { computeDigest } from '../src/digest.ts'
@@ -223,99 +220,10 @@ void test('different command input produces a different digest, including actor 
   }
 })
 
-void test('projection indexes one journal fact per commandId with replay fields', () => {
-  const firstCommand = makeCommand({ commandId: 'command-a' })
-  const secondCommand = makeCommand({ commandId: 'command-b' })
-  const first = makeFact(firstCommand, 0)
-  const second = makeFact(secondCommand, 1, first.digest)
-
-  assert.equal(projectCommandFacts([]).size, 0)
-
-  const projection = projectCommandFacts([first, second])
-  assert.equal(projection.size, 2)
-
-  const entry = projection.get(firstCommand.commandId)
-  assert.ok(entry !== undefined)
-  assert.deepEqual(Object.keys(entry).sort(), ['commandDigest', 'fact', 'factDigest', 'seq'])
-  assert.equal(entry.commandDigest, computeCommandDigest(firstCommand))
-  assert.equal(entry.seq, 0)
-  assert.equal(entry.factDigest, first.digest)
-  assert.strictEqual(entry.fact, first)
-
-  const secondEntry = projection.get(secondCommand.commandId)
-  assert.ok(secondEntry !== undefined)
-  assert.equal(secondEntry.seq, 1)
-  assert.strictEqual(secondEntry.fact, second)
-})
-
-void test('projection rejects any second fact for the same commandId', () => {
-  const command = makeCommand()
-  const first = makeFact(command, 0)
-  const duplicate = makeFact(command, 1, first.digest)
-
-  assert.throws(
-    () => projectCommandFacts([first, duplicate]),
-    (error: unknown) => {
-      assert.ok(error instanceof CommandProjectionError)
-      assert.equal(error.name, 'CommandProjectionError')
-      assert.equal(error.code, 'DUPLICATE_COMMAND_FACT')
-      assert.equal(error.commandId, command.commandId)
-      assert.equal(error.previousSeq, 0)
-      assert.equal(error.seq, 1)
-      return true
-    },
-  )
-
-  assert.throws(
-    () => projectCommandFacts([first, first]),
-    (error: unknown) => error instanceof CommandProjectionError,
-  )
-})
-
-void test('idempotency decides new, replay, or conflict without journal side effects', () => {
-  const command = makeCommand()
-  const fact = makeFact(command, 0)
-  const projection = projectCommandFacts([fact])
-  const entriesBefore = [...projection.entries()]
-
-  const unknown = decideCommandIdempotency(projection, makeCommand({ commandId: 'command-unknown' }))
-  assert.deepEqual(unknown, { kind: 'new' })
-
-  const replay = decideCommandIdempotency(projection, makeCommand())
-  assert.deepEqual(replay, { kind: 'replay', fact })
-  assert.equal(replay.kind, 'replay')
-  assert.strictEqual(replay.fact, fact)
-  assert.equal(replay.fact.type, 'task/admitted')
-  assert.deepEqual(replay.fact.data, fact.data)
-
-  for (const conflicting of [
-    makeCommand({ input: { goal: 'different' } }),
-    makeCommand({ actor: { kind: 'runtime', id: baseCommand.actor.id } }),
-    makeCommand({ scope: { ...baseCommand.scope, runId: 'run-2' } }),
-  ]) {
-    const conflict = decideCommandIdempotency(projection, conflicting)
-    assert.deepEqual(conflict, { kind: 'conflict', code: 'IDEMPOTENCY_CONFLICT' })
-    assert.equal(conflict.kind, 'conflict')
-    assert.equal(conflict.code, 'IDEMPOTENCY_CONFLICT')
-    assert.equal('fact' in conflict, false)
-    assert.equal('append' in conflict, false)
-    assert.equal('reservation' in conflict, false)
-  }
-
-  // The pure decision never appends, reserves, dispatches, or rewrites the
-  // in-memory projection; replay returns the original Fact by reference.
-  assert.equal(projection.size, 1)
-  assert.deepEqual([...projection.entries()], entriesBefore)
-  assert.equal(computeCommandDigest(makeCommand()), computeCommandDigest(command))
-})
-
 void test('index exports the command surface alongside the existing protocol surface', () => {
   assert.strictEqual(protocol.normalizedCommandSchema, normalizedCommandSchema)
   assert.strictEqual(protocol.parseNormalizedCommand, parseNormalizedCommand)
   assert.strictEqual(protocol.computeCommandDigest, computeCommandDigest)
-  assert.strictEqual(protocol.projectCommandFacts, projectCommandFacts)
-  assert.strictEqual(protocol.decideCommandIdempotency, decideCommandIdempotency)
-  assert.strictEqual(protocol.CommandProjectionError, CommandProjectionError)
   assert.equal(typeof protocol.sealFact, 'function')
 })
 

@@ -1,6 +1,9 @@
 import { AdmissionError, assertChildLimitsWithinParent } from './admission.ts'
 import { verifyDigest } from './digest.ts'
 import type { Digest } from './digest.ts'
+import { computeDigest } from './digest.ts'
+import { resolveTemplateView } from './exploration.ts'
+import type { GlobalResourceSnapshot } from './exploration.ts'
 import { compositionSchema, verifyFact } from './fact.ts'
 import type {
   AdmittedChild,
@@ -16,6 +19,9 @@ import type {
 } from './fact.ts'
 import { verifyMethodRevision } from './method.ts'
 import type { ChildBinding, MethodRevision, TaskTemplate } from './method.ts'
+import { projectMethodRounds } from './method-round.ts'
+import type { MethodRoundState } from './method-round.ts'
+import type { RoundPlan } from './round-plan.ts'
 import type { Ref } from './refs.ts'
 import { parseProtocolValue } from './schema.ts'
 import { verifyTaskContract } from './task.ts'
@@ -97,6 +103,7 @@ export class ReducerError extends Error {
  * caller's immutable authority snapshot.
  */
 export interface ReplayContext {
+  readonly explorations?: ReadonlyMap<Digest, GlobalResourceSnapshot>
   /** CAS object id -> complete frozen contract. */
   readonly contracts: ReadonlyMap<string, TaskContract>
   /** Method revision id -> complete frozen revision. */
@@ -130,6 +137,7 @@ export interface RunCloseState {
   readonly evidenceRef?: Ref
   readonly executionRecordRef?: Ref
   readonly usage?: UsageRecord
+  readonly feedbackRefs?: readonly Ref[]
 }
 
 /** Read-only Task projection. */
@@ -179,6 +187,20 @@ export interface TaskRunState {
   readonly runs: ReadonlyMap<string, RunState>
   /** Keyed by `childBatchKey(parentRunId, batchId)`, not by batchId alone. */
   readonly batches: ReadonlyMap<string, ChildBatchState>
+}
+
+export interface DomainReplayContext extends ReplayContext {
+  readonly plans: ReadonlyMap<string, RoundPlan>
+}
+
+export interface DomainState extends TaskRunState, MethodRoundState {}
+
+/** One journal fold; consumers read Task/Run and Method/Round facets. */
+export function reduceDomainFacts(facts: readonly Fact[], context: DomainReplayContext): DomainState {
+  return {
+    ...reduceTaskRunFacts(facts.filter(fact => fact.type.startsWith('task/') || fact.type.startsWith('run/')), context),
+    ...projectMethodRounds(facts, context.plans, context.methods),
+  }
 }
 
 interface MutableTaskRecord {
@@ -375,7 +397,7 @@ function applyTaskAdmitted(runtime: ReducerRuntime, fact: FactOf<'task/admitted'
   }
 
   const method = resolveMethod(contract.method, runtime, fact)
-  resolveTemplate(method, contract.template, fact)
+  resolveTemplate(method, contract, runtime, fact)
 
   runtime.tasks.set(contract.taskId, {
     taskId: contract.taskId,
@@ -498,7 +520,7 @@ function applyChildrenAdmitted(
   }
 
   const method = resolveMethod(parent.contract.method, runtime, fact)
-  const parentTemplate = resolveTemplate(method, parent.contract.template, fact)
+  const parentTemplate = resolveTemplate(method, parent.contract, runtime, fact)
   const root = requireTask(runtime, parent.rootTaskId, fact)
   const subtreeTaskCount = [...runtime.tasks.values()].filter(
     task => task.rootTaskId === parent.rootTaskId,
@@ -557,7 +579,7 @@ function applyChildrenAdmitted(
         `Child template ${JSON.stringify(child.template.id)} does not match binding ${JSON.stringify(binding.templateId)}`,
       )
     }
-    resolveTemplate(method, child.template, fact, 'CHILD_TEMPLATE_MISMATCH')
+    resolveTemplate(method, child, runtime, fact, 'CHILD_TEMPLATE_MISMATCH')
     if (admitted.join !== binding.join) {
       fail('CHILD_JOIN_MISMATCH', fact, 'Child join must equal the frozen binding join')
     }
@@ -676,7 +698,7 @@ function applyRunSubmitted(runtime: ReducerRuntime, fact: FactOf<'run/submitted'
     }
   }
   const method = resolveMethod(task.contract.method, runtime, fact)
-  const template = resolveTemplate(method, task.contract.template, fact)
+  const template = resolveTemplate(method, task.contract, runtime, fact)
   for (const binding of template.children) {
     if (binding.join !== 'required') continue
     if (!hasBindingWinner(runtime, task, run.runId, binding.bindingId)) {
@@ -748,20 +770,16 @@ function applyTaskClosed(runtime: ReducerRuntime, fact: FactOf<'task/closed'>): 
     )
   }
 
-  switch (payload.outcome) {
-    case 'verified':
-      closeVerified(runtime, task, payload, fact)
-      break
-    case 'failed':
-      closeFailed(runtime, task, payload, fact)
-      break
-    case 'invalid':
-      closeInvalid(runtime, task, payload, fact)
-      break
-    case 'cancelled':
-      closeCancelled(runtime, task, payload, fact)
-      break
+  const closers = {
+    verified: closeVerified,
+    failed: closeUnverified,
+    invalid: closeUnverified,
+    cancelled: closeCancelled,
   }
+  closers[payload.outcome](runtime, task, payload, fact)
+  task.phase = 'closed'
+  task.activeRunId = undefined
+  task.closed = taskCloseState(payload, fact.digest)
 }
 
 function closeVerified(
@@ -812,7 +830,7 @@ function closeVerified(
   }
 
   const method = resolveMethod(task.contract.method, runtime, fact)
-  const template = resolveTemplate(method, task.contract.template, fact)
+  const template = resolveTemplate(method, task.contract, runtime, fact)
   for (const binding of template.children) {
     if (binding.join !== 'required') continue
     if (!hasBindingWinner(runtime, task, decisiveRun.runId, binding.bindingId)) {
@@ -824,69 +842,28 @@ function closeVerified(
     }
   }
 
-  task.phase = 'closed'
-  task.activeRunId = undefined
-  task.closed = taskCloseState(payload, fact.digest)
 }
 
-function closeFailed(
+function closeUnverified(
   runtime: ReducerRuntime,
   task: MutableTaskRecord,
   payload: TaskClosedPayload,
   fact: FactOf<'task/closed'>,
 ): void {
   if (task.activeRunId !== undefined) {
-    fail('TASK_ACTIVE_RUN', fact, 'Failed Task closure requires no active Run')
+    fail('TASK_ACTIVE_RUN', fact, 'Task closure requires no active Run')
   }
+  if (task.runIds.length === 0 && payload.outcome === 'invalid') return
   const lastRun = latestRun(runtime, task, fact)
-  if (lastRun.phase !== 'closed' || lastRun.closed?.classification !== 'failed') {
-    fail('TASK_OUTCOME_INVALID', fact, 'Failed Task closure requires the latest Run to be failed')
+  if (lastRun.phase !== 'closed' || lastRun.closed?.classification !== payload.outcome) {
+    fail('TASK_OUTCOME_INVALID', fact, 'Task outcome must match the latest Run closure')
   }
-  if (
-    payload.decisiveRunId !== undefined &&
-    payload.decisiveRunId !== lastRun.runId
-  ) {
-    fail('TASK_OUTCOME_INVALID', fact, 'decisiveRunId must be the latest Run for failed closure')
+  if (payload.decisiveRunId !== undefined && payload.decisiveRunId !== lastRun.runId) {
+    fail('TASK_OUTCOME_INVALID', fact, 'decisiveRunId must be the latest Run')
   }
   if (retryDecision(runtime, task, lastRun, fact.at).allowed) {
-    fail('RETRY_AVAILABLE', fact, 'Task cannot close failed while retry policy still permits a Run')
+    fail('RETRY_AVAILABLE', fact, 'Task cannot close while its fixed retry policy still permits a Run')
   }
-  task.phase = 'closed'
-  task.activeRunId = undefined
-  task.closed = taskCloseState(payload, fact.digest)
-}
-
-function closeInvalid(
-  runtime: ReducerRuntime,
-  task: MutableTaskRecord,
-  payload: TaskClosedPayload,
-  fact: FactOf<'task/closed'>,
-): void {
-  if (task.activeRunId !== undefined) {
-    fail('TASK_ACTIVE_RUN', fact, 'Invalid Task closure requires no active Run')
-  }
-  const lastRunId = task.runIds.at(-1)
-  if (lastRunId !== undefined) {
-    const lastRun = requireRun(runtime, lastRunId, fact)
-    if (lastRun.phase !== 'closed' || lastRun.closed?.classification !== 'invalid') {
-      fail('TASK_OUTCOME_INVALID', fact, 'Invalid Task closure requires the latest Run to be invalid')
-    }
-    if (payload.decisiveRunId !== undefined && payload.decisiveRunId !== lastRun.runId) {
-      fail('TASK_OUTCOME_INVALID', fact, 'decisiveRunId must be the latest Run for invalid closure')
-    }
-    const reason = lastRun.closed.reason
-    const decision = retryDecision(runtime, task, lastRun, fact.at)
-    if (runtime.context.transientInvalidReasons.includes(reason) && decision.allowed) {
-      fail(
-        'RETRY_AVAILABLE',
-        fact,
-        'Transient invalid Run can still be retried under the fixed policy',
-      )
-    }
-  }
-  task.phase = 'closed'
-  task.activeRunId = undefined
-  task.closed = taskCloseState(payload, fact.digest)
 }
 
 function closeCancelled(
@@ -896,9 +873,6 @@ function closeCancelled(
   fact: FactOf<'task/closed'>,
 ): void {
   closeTaskRuns(runtime, task, payload.reason, fact.digest)
-  task.phase = 'closed'
-  task.activeRunId = undefined
-  task.closed = taskCloseState(payload, fact.digest)
 }
 
 function closeSubtree(
@@ -976,6 +950,7 @@ function runCloseState(payload: RunClosedPayload, factDigest: Digest): RunCloseS
     source: 'run/closed' as const,
     factDigest,
     usage: payload.usage,
+    feedbackRefs: payload.feedbackRefs,
   }
   if ('evidenceRef' in payload) {
     return { ...base, evidenceRef: payload.evidenceRef }
@@ -989,24 +964,44 @@ function retryDecision(
   run: MutableRunRecord,
   now: number,
 ): RetryDecision {
-  const totals = subtreeUsage(runtime, task.taskId)
-  return decideRetryPolicy(
-    {
+  return decideTaskRetryPolicy(runtime, task.taskId, run.runId, runtime.context.transientInvalidReasons, now)
+}
+
+/** One retry policy over the Task's attempts and every owning ancestor's budget. */
+export function decideTaskRetryPolicy(
+  state: Pick<TaskRunState, 'tasks' | 'runs'>,
+  taskId: string,
+  runId: string,
+  transientInvalidReasons: readonly string[],
+  now: number,
+): RetryDecision {
+  const task = state.tasks.get(taskId)
+  const run = state.runs.get(runId)
+  if (task === undefined || run === undefined) return { allowed: false, reason: 'Run closure fact missing' }
+  let owner: TaskState | undefined = task
+  while (owner !== undefined) {
+    const totals = subtreeUsage(state, owner.taskId)
+    const decision = decideRetryPolicy({
       runPhase: run.phase,
       closure: run.closed,
       runCount: task.runIds.length,
       maxRuns: task.contract.limits.maxRuns,
-      maxTokens: task.contract.limits.maxTokens,
-      deadlineAt: task.contract.limits.deadlineAt,
+      maxTokens: owner.contract.limits.maxTokens,
+      deadlineAt: owner.contract.limits.deadlineAt,
       now,
       usageTokens: totals.tokens,
       usageUnknown: totals.unknown,
-    },
-    runtime.context.transientInvalidReasons,
-  )
+    }, transientInvalidReasons)
+    if (!decision.allowed) {
+      return owner.taskId === task.taskId ? decision
+        : { allowed: false, reason: `ancestor Task ${JSON.stringify(owner.taskId)}: ${decision.reason}` }
+    }
+    owner = owner.parentTaskId === undefined ? undefined : state.tasks.get(owner.parentTaskId)
+  }
+  return { allowed: true, reason: 'retry is permitted' }
 }
 
-function subtreeUsage(runtime: ReducerRuntime, taskId: string): UsageTotals {
+function subtreeUsage(runtime: Pick<TaskRunState, 'tasks' | 'runs'>, taskId: string): UsageTotals {
   const totals: UsageTotals = { tokens: 0, unknown: false }
   const visit = (currentTaskId: string): void => {
     const task = runtime.tasks.get(currentTaskId)
@@ -1262,19 +1257,26 @@ function resolveMethod(
 
 function resolveTemplate(
   method: MethodRevision,
-  ref: Ref,
+  contract: TaskContract,
+  runtime: ReducerRuntime,
   fact: Fact,
   code: ReducerErrorCode = 'METHOD_TEMPLATE_MISMATCH',
 ): TaskTemplate {
-  const matches = method.templates.filter(template => template.id === ref.id)
-  if (matches.length !== 1 || ref.digest !== method.digest) {
+  const ref = contract.template
+  const explorationRef = contract.resources.exploration
+  const exploration = explorationRef === undefined ? undefined : runtime.context.explorations?.get(explorationRef.digest)
+  if (exploration !== undefined && computeDigest('object', exploration) !== explorationRef?.digest) {
+    fail(code, fact, 'Exploration snapshot must equal its frozen object digest')
+  }
+  const template = resolveTemplateView(method, ref.id, exploration)
+  if (template === undefined || ref.digest !== method.digest) {
     fail(
       code,
       fact,
       `Template ${JSON.stringify(ref.id)} must exist once and reuse the Method digest`,
     )
   }
-  return matches[0]
+  return template
 }
 
 function requireTask(

@@ -1,38 +1,38 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import {
-  AdmissionError,
-  MCP_DRAFTS_OUTPUT,
-  SKILL_DRAFTS_OUTPUT,
-  admitChildBatch,
-  admitRootTask,
-} from '../src/admission.ts'
 import type {
-  AdmittedChildBatch,
-  ChildAdmissionRequest,
-  ChildBatchAdmissionInput,
-  RootAdmissionInput,
+AdmittedChildBatch,
+ChildAdmissionRequest,
+ChildBatchAdmissionInput,
+RootAdmissionInput,
 } from '../src/admission.ts'
-import * as protocol from '../src/index.ts'
-import { computeDigest } from '../src/digest.ts'
+import {
+AdmissionError,
+MCP_DRAFTS_OUTPUT,
+SKILL_DRAFTS_OUTPUT,
+admitChildBatch,
+admitRootTask,
+} from '../src/admission.ts'
 import type { Digest } from '../src/digest.ts'
+import { computeDigest } from '../src/digest.ts'
+import * as protocol from '../src/index.ts'
+import type { MethodRevision,TaskTemplate } from '../src/method.ts'
 import {
-  sealMethodRevision,
+sealMethodRevision,
 } from '../src/method.ts'
-import type { MethodRevision, TaskTemplate } from '../src/method.ts'
-import {
-  sealTaskContract,
-  verifyTaskContract,
-} from '../src/task.ts'
 import type {
-  InputRef,
-  LocalOutput,
-  OutputSpec,
-  TaskContract,
-  TaskContractPayload,
-  TaskLimits,
-  TaskProposal,
+InputRef,
+LocalOutput,
+OutputSpec,
+TaskContract,
+TaskContractPayload,
+TaskLimits,
+TaskProposal,
+} from '../src/task.ts'
+import {
+sealTaskContract,
+verifyTaskContract,
 } from '../src/task.ts'
 
 const digestA = `sha256:${'a'.repeat(64)}`
@@ -108,7 +108,7 @@ const childTemplate: TaskTemplate = {
   brief: 'Execute one bounded part and produce its evidence.',
   guidance: ref('guidance-child', digestA),
   example: ref('example-child', digestB),
-  instanceSchema: { type: 'object', additionalProperties: false },
+  instanceSchema: {},
   requiredCriteria: [
     { id: 'required-a', statement: 'The required result is complete', required: true },
     { id: 'required-b', statement: 'The log is traceable', required: false },
@@ -206,6 +206,7 @@ function childBatchInput(): ChildBatchAdmissionInput {
         resources: childResources,
         environment: childEnvironment,
         limits: childLimits,
+        budgetReservation: { tokens: 1_000, steps: 5, deadlineAt: childLimits.deadlineAt },
       },
     ],
   }
@@ -245,7 +246,6 @@ void test('protocol index exports the admission surface alongside existing modul
   assert.equal(protocol.AdmissionError, AdmissionError)
   assert.equal(protocol.SKILL_DRAFTS_OUTPUT, SKILL_DRAFTS_OUTPUT)
   assert.equal(protocol.MCP_DRAFTS_OUTPUT, MCP_DRAFTS_OUTPUT)
-  assert.equal(typeof protocol.replayJournal, 'function')
 })
 
 void test('root admission appends fixed drafts last and seals a verifiable contract', () => {
@@ -472,13 +472,14 @@ void test('child admission accepts limits at the parent boundary and leaves maxR
   const minimalRequest = childRequest(minimal)
   minimalRequest.limits = {
     maxRuns: 99,
-    maxStepsPerRun: 0,
-    maxTokens: 0,
-    deadlineAt: 0,
+    maxStepsPerRun: 1,
+    maxTokens: 1,
+    deadlineAt: 1,
     maxDepth: 0,
     maxTasks: 1,
     maxBatchChildren: 0,
   }
+  minimalRequest.budgetReservation = { tokens: 1, steps: 1, deadlineAt: 1 }
   const minimalChild = firstChild(admitChildBatch(minimal))
   assert.deepEqual(minimalChild.contract.limits, minimalRequest.limits)
 })
@@ -848,4 +849,207 @@ void test('child admission rejects template draft roles/paths and duplicate or r
     request.proposal = { ...request.proposal, localOutputs }
     assert.throws(() => admitChildBatch(input), admissionError('INVALID_ARGUMENT'), label)
   }
+})
+
+function admissionWithChildTemplate(
+  overrides: Partial<TaskTemplate>,
+): { readonly parent: TaskContract; readonly method: MethodRevision } {
+  const template: TaskTemplate = { ...childTemplate, ...overrides }
+  const sealed = sealMethodRevision({
+    v: 1,
+    id: `method-child-template-${String(Math.random())}`,
+    entryTemplateId: rootTemplate.id,
+    templates: [rootTemplate, template],
+    skills: [],
+    tools: [],
+  })
+  const parent = admitRootTask({
+    ...rootInput,
+    method: { id: sealed.id, digest: sealed.digest },
+    template: { id: rootTemplate.id, digest: sealed.digest },
+  })
+  return { parent, method: sealed }
+}
+
+void test('child admission requires a positive budgetReservation within the child limits', () => {
+  const missing = childBatchInputRecord(clone(childBatchInput()))
+  const missingChildren = missing['children'] as Record<string, unknown>[]
+  const missingFirst = missingChildren.at(0)
+  assert.ok(missingFirst)
+  delete missingFirst['budgetReservation']
+  assert.throws(
+    () => admitChildBatch(missing as unknown as ChildBatchAdmissionInput),
+    admissionError('INVALID_ARGUMENT'),
+  )
+
+  const invalidReservations: readonly { readonly tokens: number; readonly steps: number; readonly deadlineAt: number }[] = [
+    { tokens: 0, steps: 1, deadlineAt: 1 },
+    { tokens: -1, steps: 1, deadlineAt: 1 },
+    { tokens: 1.5, steps: 1, deadlineAt: 1 },
+    { tokens: 1, steps: 0, deadlineAt: 1 },
+    { tokens: 1, steps: -1, deadlineAt: 1 },
+    { tokens: 1, steps: 1.5, deadlineAt: 1 },
+    { tokens: 1, steps: 1, deadlineAt: 0 },
+    { tokens: 1, steps: 1, deadlineAt: 1.5 },
+  ]
+  for (const reservation of invalidReservations) {
+    const input = childBatchInput()
+    childRequest(input).budgetReservation = reservation
+    assert.throws(() => admitChildBatch(input), admissionError('INVALID_ARGUMENT'), JSON.stringify(reservation))
+  }
+
+  const exceeded: readonly { readonly label: string; readonly reservation: { readonly tokens: number; readonly steps: number; readonly deadlineAt: number } }[] = [
+    {
+      label: 'tokens above child limit',
+      reservation: { tokens: childLimits.maxTokens + 1, steps: 1, deadlineAt: childLimits.deadlineAt },
+    },
+    {
+      label: 'steps above child limit',
+      reservation: { tokens: 1, steps: childLimits.maxStepsPerRun + 1, deadlineAt: childLimits.deadlineAt },
+    },
+    {
+      label: 'deadline above child limit',
+      reservation: { tokens: 1, steps: 1, deadlineAt: childLimits.deadlineAt + 1 },
+    },
+  ]
+  for (const { label, reservation } of exceeded) {
+    const input = childBatchInput()
+    childRequest(input).budgetReservation = reservation
+    assert.throws(() => admitChildBatch(input), admissionError('LIMIT_EXCEEDED'), label)
+  }
+})
+
+void test('child admission copies the reservation onto the admitted child', () => {
+  const batch = admitChildBatch(childBatchInput())
+  assert.deepEqual(firstChild(batch).budgetReservation, {
+    tokens: 1_000,
+    steps: 5,
+    deadlineAt: childLimits.deadlineAt,
+  })
+})
+
+void test('child admission rejects a batch whose reservations exceed the parent budget', () => {
+  const tokens = childBatchInput()
+  const tokenFirst = childRequest(tokens)
+  tokenFirst.limits = { ...childLimits, maxTokens: parentLimits.maxTokens }
+  tokenFirst.budgetReservation = { tokens: 60_000, steps: 5, deadlineAt: childLimits.deadlineAt }
+  tokens.children = [
+    { ...tokenFirst, bindingId: 'build-part', taskId: 'task-token-1' },
+    { ...tokenFirst, bindingId: 'probe-part', taskId: 'task-token-2' },
+  ]
+  assert.throws(() => admitChildBatch(tokens), admissionError('LIMIT_EXCEEDED'))
+
+  const steps = childBatchInput()
+  const stepFirst = childRequest(steps)
+  stepFirst.limits = { ...childLimits, maxStepsPerRun: parentLimits.maxStepsPerRun }
+  stepFirst.budgetReservation = { tokens: 1_000, steps: 11, deadlineAt: childLimits.deadlineAt }
+  steps.children = [
+    { ...stepFirst, bindingId: 'build-part', taskId: 'task-step-1' },
+    { ...stepFirst, bindingId: 'probe-part', taskId: 'task-step-2' },
+  ]
+  assert.throws(() => admitChildBatch(steps), admissionError('LIMIT_EXCEEDED'))
+})
+
+void test('child admission validates proposal, local output, and template output paths', () => {
+  const badPaths = [
+    '',
+    '/absolute/path',
+    '../escape',
+    'a/../b',
+    'a/./b',
+    'a//b',
+    'a/',
+    'a\\b',
+    'a\u0000b',
+  ]
+
+  for (const badPath of badPaths) {
+    const input = childBatchInput()
+    const request = childRequest(input)
+    const badInput: InputRef = { ...inputA, path: badPath }
+    request.authorizedInputs = [badInput, inputB]
+    request.proposal = { ...request.proposal, inputs: [badInput, inputB] }
+    assert.throws(() => admitChildBatch(input), admissionError('INVALID_ARGUMENT'), `input ${JSON.stringify(badPath)}`)
+
+    const local = childBatchInput()
+    childRequest(local).proposal = {
+      ...childRequest(local).proposal,
+      localOutputs: [{ id: 'local-bad', path: badPath, kind: 'file', description: 'bad path' }],
+    }
+    assert.throws(() => admitChildBatch(local), admissionError('INVALID_ARGUMENT'), `local ${JSON.stringify(badPath)}`)
+
+    assert.throws(() => admissionWithChildTemplate({
+      requiredOutputs: [{ id: 'template-bad', path: badPath, kind: 'file', role: 'supporting', required: false }],
+    }), `template schema ${JSON.stringify(badPath)}`)
+
+  }
+})
+
+void test('child admission validates the template instanceSchema over the proposal', () => {
+  const accepted = admissionWithChildTemplate({
+    instanceSchema: {
+      type: 'object',
+      required: ['goal', 'localCriteria', 'inputs', 'localOutputs'],
+      additionalProperties: false,
+      properties: {
+        goal: {
+          type: 'object',
+          required: ['summary', 'deliverable', 'scope', 'constraints'],
+          additionalProperties: false,
+          properties: {
+            summary: { type: 'string', minLength: 1 },
+            deliverable: { const: 'A frozen result and supporting log' },
+            scope: { type: 'array', items: { type: 'string' }, minItems: 1 },
+            constraints: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        localCriteria: { type: 'array', items: { type: 'object' } },
+        inputs: { type: 'array' },
+        localOutputs: { type: 'array' },
+      },
+    },
+  })
+  const acceptedChild = firstChild(admitChildBatch({
+    ...childBatchInput(),
+    parent: accepted.parent,
+    method: accepted.method,
+  }))
+  assert.equal(acceptedChild.contract.taskId, 'task-child-1')
+
+  const rejected = admissionWithChildTemplate({
+    instanceSchema: {
+      type: 'object',
+      properties: {
+        goal: {
+          type: 'object',
+          properties: { summary: { type: 'string', minLength: 10_000 } },
+        },
+      },
+    },
+  })
+  assert.throws(
+    () => admitChildBatch({ ...childBatchInput(), parent: rejected.parent, method: rejected.method }),
+    admissionError('INVALID_ARGUMENT'),
+  )
+
+  const unsupported = admissionWithChildTemplate({
+    instanceSchema: { $ref: '#/$defs/goal' },
+  })
+  assert.throws(
+    () => admitChildBatch({ ...childBatchInput(), parent: unsupported.parent, method: unsupported.method }),
+    admissionError('INVALID_ARGUMENT'),
+  )
+
+  const unusedMalformed = admissionWithChildTemplate({
+    instanceSchema: {
+      type: 'object',
+      properties: {
+        unused: { type: 'string', pattern: '[' },
+      },
+    },
+  })
+  assert.throws(
+    () => admitChildBatch({ ...childBatchInput(), parent: unusedMalformed.parent, method: unusedMalformed.method }),
+    admissionError('INVALID_ARGUMENT'),
+  )
 })

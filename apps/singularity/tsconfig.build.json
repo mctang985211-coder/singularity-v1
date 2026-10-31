@@ -10,10 +10,21 @@
     "sourceMap": true,
     "tsBuildInfoFile": "dist/tsconfig.build.tsbuildinfo"
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["test"],
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "test"
+  ],
   "references": [
-    { "path": "../../packages/singularity/protocol/tsconfig.build.json" },
-    { "path": "../../packages/singularity/runtime/tsconfig.build.json" }
+    {
+      "path": "../../packages/singularity/protocol/tsconfig.build.json"
+    },
+    {
+      "path": "../../packages/singularity/runtime/tsconfig.build.json"
+    },
+    {
+      "path": "../../packages/domains/inventory/tsconfig.build.json"
+    }
   ]
 }

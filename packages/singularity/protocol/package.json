@@ -19,6 +19,8 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "ajv": "8.17.1",
+    "json-canonicalize": "2.0.0",
     "zod": "4.4.3"
   }
 }

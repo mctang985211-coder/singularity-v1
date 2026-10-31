@@ -9,7 +9,7 @@
 - id: llm-deepseek
   disabled: true
 
-# S3 meters conversation requests; automatic summary purchases need their own reservation.
+# Native compaction requests are not yet included in request/usage accounting.
 - id: compaction-basic
   config:
     auto: false
@@ -37,7 +37,7 @@
               - id: deepseek-v4.1-flash
                 name: DeepSeek V4.1 Flash
                 contextWindow: 256000
-                maxTokens: 8192
+                maxTokens: 30000
                 input: [text]
                 reasoningEfforts:
                   max: max

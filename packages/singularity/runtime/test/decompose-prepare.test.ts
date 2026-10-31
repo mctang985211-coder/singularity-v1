@@ -1,23 +1,24 @@
 import assert from 'node:assert/strict'
-import { readdir, rm, mkdtemp } from 'node:fs/promises'
+import { mkdtemp,readdir,rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { canonicalize, sealMethodRevision } from '@singularity/protocol'
+import type { Session,SessionEvent } from '@deepseek-ai/dsh-session'
 import type {
-  Digest,
-  Ref,
-  TaskContract,
-  TaskTemplate,
+Digest,
+Ref,
+TaskContract,
+TaskTemplate,
 } from '@singularity/protocol'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { canonicalize,sealMethodRevision } from '@singularity/protocol'
 
-import { DomainStore } from '../src/store.ts'
-import { DecomposeError } from '../src/errors.ts'
-import { prepareDecompose, readPrepareDeliveries } from '../src/decompose.ts'
-import type { FrozenMethodResources } from '../src/resources.ts'
+import { readPrepareDeliveries } from '../src/decompose-deliveries.ts'
+import { prepareDecompose } from '../src/decompose.ts'
 import { initialContextEpoch } from '../src/epoch.ts'
+import { DecomposeError } from '../src/errors.ts'
+import type { FrozenMethodResources } from '../src/resources.ts'
+import { DomainStore,DomainStoreError } from '../src/store.ts'
 
 const textEncoder = new TextEncoder()
 const digestA: Digest = `sha256:${'a'.repeat(64)}`
@@ -35,12 +36,13 @@ function bytes(value: unknown): Uint8Array {
   return textEncoder.encode(canonicalize(value))
 }
 
-function fakeSession(events: readonly FakeEvent[], nodes: readonly number[]): Session {
+function fakeSession(events: readonly FakeEvent[], nodes: readonly number[], firstLiveSeq = 0): Session {
   return {
     id: 'session-s4b1',
-    seq: events.length,
-    snapshotEvents: () => events as unknown as readonly SessionEvent[],
-    surface: { nodes },
+    get seq() { return events.length },
+      snapshotEvents: () => events as unknown as readonly SessionEvent[],
+    firstLiveSeq,
+    surface: { nodes, replaceGeneration: 0 },
   } as unknown as Session
 }
 
@@ -369,8 +371,7 @@ void test('S4-B1 status reader distinguishes current, same-step, stale, and iden
       prepareCall(0, 1, 1, 'prepare-1'),
       resultEvent,
       statusCall(2, 1, 2, 'status-1'),
-      { type: 'session/end-seed', seq: 3, time: 1, data: {} },
-    ], [1])
+    ], [1], 3)
     const staleEpoch = await readPrepareDeliveries({
       contract,
       runId: 'run-1',
@@ -390,15 +391,9 @@ void test('S4-B1 status reader distinguishes current, same-step, stale, and iden
       prepareResult(1, 1, 1, 'prepare-1', badOutput),
       statusCall(2, 1, 2, 'status-1'),
     ], [1])
-    const invalid = await readPrepareDeliveries({
-      contract,
-      runId: 'run-1',
-      resources,
-      reader: store,
-      session: bad,
-      currentCallId: 'status-1',
-    })
-    assert.equal(invalid[0]?.state, 'stale')
+    await assert.rejects(readPrepareDeliveries({
+      contract, runId: 'run-1', resources, reader: store, session: bad, currentCallId: 'status-1',
+    }), (error: unknown) => error instanceof DomainStoreError && error.code === 'OBJECT_MISSING')
   })
 })
 
@@ -678,7 +673,7 @@ void test('S4-B1 missing, non-UTF8, unknown-field, and malformed examples fail c
       planningSketchRef: { id: 'sketch', digest: digestA },
       remainingBudgetPct: { tokensPct: 90, stepsPct: 90, wallClockPct: 90, depthPct: 100, taskSlotsPct: 100 },
       asOf: 10,
-    }, 'b1'), (error: unknown) => error instanceof DecomposeError && error.code === 'INVALID_ARGUMENT')
+    }, 'b1'), (error: unknown) => error instanceof Error && !(error instanceof DecomposeError))
   } finally {
     await unknownFixture.store.close()
     await rm(unknownRoot, { recursive: true, force: true })
@@ -711,7 +706,7 @@ void test('S4-B1 missing, non-UTF8, unknown-field, and malformed examples fail c
         planningSketchRef: { id: 'sketch', digest: digestA },
         remainingBudgetPct: { tokensPct: 90, stepsPct: 90, wallClockPct: 90, depthPct: 100, taskSlotsPct: 100 },
         asOf: 10,
-      }, 'b1'), (error: unknown) => error instanceof DecomposeError && error.code === 'INVALID_ARGUMENT')
+      }, 'b1'), (error: unknown) => error instanceof Error && !(error instanceof DecomposeError))
     }
   } finally {
     await rawFixture.store.close()
@@ -719,7 +714,7 @@ void test('S4-B1 missing, non-UTF8, unknown-field, and malformed examples fail c
   }
 })
 
-void test('S4-B1 result refs, order, source, duplicates, and payload tampering are rejected', async () => {
+void test('S4-B1 result identity, duplicates, and payload tampering are rejected', async () => {
   await withFixture(async ({ store, contract, resources }) => {
     const prepared = await prepareDecompose({
       contract,
@@ -765,10 +760,6 @@ void test('S4-B1 result refs, order, source, duplicates, and payload tampering a
       ...prepared.response,
       previewRef: { ...prepared.response.previewRef, id: 'wrong-preview' },
     })
-    const wrongReceiptId = prepareResult(1, 1, 1, 'prepare-1', {
-      ...prepared.response,
-      deliveryReceiptRef: { ...prepared.response.deliveryReceiptRef, id: 'wrong-receipt' },
-    })
     const tamperedInterface = prepareResult(1, 1, 1, 'prepare-1', {
       ...prepared.response,
       interface: {
@@ -776,26 +767,16 @@ void test('S4-B1 result refs, order, source, duplicates, and payload tampering a
         instanceSchema: { type: 'object' },
       },
     })
-    const wrongSource = {
-      ...valid,
-      sourceEventSeqs: [99],
-    }
 
     for (const [label, event] of [
       ['tampered example', tamperedExample],
       ['missing example', missingExample],
       ['tampered instanceSchema', tamperedInterface],
       ['wrong preview id', wrongPreviewId],
-      ['wrong receipt id', wrongReceiptId],
-      ['wrong source event', wrongSource],
     ] as const) {
       const deliveries = await read(event)
       assert.equal(deliveries[0]?.state, 'stale', label)
     }
-
-    const sameSeq = { ...prepareResult(0, 1, 1, 'prepare-1', prepared.response) }
-    const sameSeqDeliveries = await read(sameSeq)
-    assert.equal(sameSeqDeliveries[0]?.state, 'stale')
 
     const duplicate = await readPrepareDeliveries({
       contract,
@@ -837,6 +818,7 @@ void test('S4-B1 method admission rejects duplicate child binding ids and dangli
       await store.putObject(next.id, bytes(next), 'method')
       return {
         ...contract,
+        resources: { baseTools: [], skills: [], mcpServers: [] },
         method: { id: next.id, digest: next.digest },
         template: { id: root.id, digest: next.digest },
       } as TaskContract

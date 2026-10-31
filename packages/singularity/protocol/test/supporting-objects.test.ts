@@ -80,7 +80,6 @@ const executionRecordPayload: ExecutionRecordPayload = {
   usage,
   sessionCut,
   reason: 'The Run stopped after its agent session drained',
-  drainPending: true,
 }
 
 const mcpServer: CompositionMcpServer = {
@@ -193,7 +192,7 @@ void test('ExecutionRecord rejects unknown fields and invalid nested values', ()
     { ...executionRecordPayload, outputs: 'not-an-array' },
     { ...executionRecordPayload, usage: { ...usage, extra: true } },
     { ...executionRecordPayload, sessionCut: { ...sessionCut, extra: true } },
-    { ...executionRecordPayload, drainPending: 'yes' },
+    { ...executionRecordPayload, drainPending: true },
     { ...executionRecordPayload, digest: 'not-a-digest' },
   ]) {
     assert.throws(() => parseProtocolValue(executionRecordPayloadSchema, invalid))

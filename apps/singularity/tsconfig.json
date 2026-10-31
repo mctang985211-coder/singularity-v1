@@ -9,12 +9,26 @@
     "checkJs": false,
     "verbatimModuleSyntax": true,
     "rewriteRelativeImportExtensions": true,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "skipLibCheck": false
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "eslint.config.js"],
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "eslint.config.js",
+    "examples/**/*.ts"
+  ],
   "references": [
-    { "path": "../../packages/singularity/protocol/tsconfig.build.json" },
-    { "path": "../../packages/singularity/runtime/tsconfig.build.json" }
+    {
+      "path": "../../packages/singularity/protocol/tsconfig.build.json"
+    },
+    {
+      "path": "../../packages/singularity/runtime/tsconfig.build.json"
+    },
+    {
+      "path": "../../packages/domains/inventory/tsconfig.build.json"
+    }
   ]
 }

@@ -364,8 +364,6 @@ export const submissionManifestPayloadSchema = closedObject(
     })
   }
   let previousDraftRank = -1
-  const draftIds = new Set<string>()
-  const draftPaths = new Set<string>()
   for (const [index, draft] of manifest.learningDrafts.entries()) {
     const rank = draft.id === '__skill-drafts' ? 0 : 1
     if (rank <= previousDraftRank) {
@@ -376,22 +374,6 @@ export const submissionManifestPayloadSchema = closedObject(
       })
     }
     previousDraftRank = rank
-    if (draftIds.has(draft.id)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['learningDrafts', index, 'id'],
-        message: 'learning draft ids must be unique',
-      })
-    }
-    draftIds.add(draft.id)
-    if (draftPaths.has(draft.path)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['learningDrafts', index, 'path'],
-        message: 'learning draft paths must be unique',
-      })
-    }
-    draftPaths.add(draft.path)
     if (outputIds.has(draft.id)) {
       ctx.addIssue({
         code: 'custom',

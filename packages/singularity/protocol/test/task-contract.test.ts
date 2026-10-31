@@ -1,23 +1,23 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { computeDigest, seal, verifyDigest } from '../src/digest.ts'
+import { computeDigest,seal,verifyDigest } from '../src/digest.ts'
 import { parseProtocolValue } from '../src/schema.ts'
-import {
-  contractSummaryRefSchema,
-  contractSummarySchema,
-  sealTaskContract,
-  taskContractPayloadSchema,
-  taskContractSchema,
-  verifyTaskContract,
-} from '../src/task.ts'
 import type {
-  ContractSummary,
-  ContractSummaryRef,
-  TaskChildOrigin,
-  TaskContract,
-  TaskContractPayload,
-  TaskRootOrigin,
+ContractSummary,
+ContractSummaryRef,
+TaskChildOrigin,
+TaskContract,
+TaskContractPayload,
+TaskRootOrigin,
+} from '../src/task.ts'
+import {
+contractSummaryRefSchema,
+contractSummarySchema,
+sealTaskContract,
+taskContractPayloadSchema,
+taskContractSchema,
+verifyTaskContract,
 } from '../src/task.ts'
 
 const digestA = `sha256:${'a'.repeat(64)}`
@@ -352,13 +352,6 @@ void test('wrong versions, wrong domains, and malformed contracts are rejected',
   assert.equal(verifyTaskContract({}), false)
   assert.equal(verifyTaskContract([]), false)
 
-  const withAccessor = {
-    ...sealed,
-    get taskId(): string {
-      return sealed.taskId
-    },
-  }
-  assert.equal(verifyTaskContract(withAccessor), false)
   assert.equal(
     verifyTaskContract({ ...sealed, spec: { ...sealed.spec, goal: { ...sealed.spec.goal, summary: undefined } } }),
     false,

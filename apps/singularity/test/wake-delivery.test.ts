@@ -16,8 +16,8 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
-import { createWakeMessage, deliverWakeOnceOrFail, WakeDeliveryRefusedError } from '@singularity/runtime'
-import type { WakeRequest, WakeRefusalState } from '@singularity/runtime'
+import { createWakeMessage, deliverWakeOnceOrFail } from '@singularity/runtime'
+import type { WakeRequest } from '@singularity/runtime'
 
 import { bootSpikeProfile } from '../src/host-composition.ts'
 import { startChatCompletionsFixture } from './fixtures/chat-completions.ts'
@@ -58,10 +58,6 @@ function userMessagesWithId(session: Session, wakeId: string): EventOf<'user/mes
 function inboxInsertedIds(session: Session): string[] {
   return eventsOf(session, 'agent/inbox/spliced')
     .flatMap(event => event.data.inserted.map(message => String(message.id)))
-}
-
-function isWakeRefusal(state: WakeRefusalState): (error: unknown) => boolean {
-  return error => error instanceof WakeDeliveryRefusedError && error.state === state
 }
 
 async function createAgent(
@@ -196,7 +192,7 @@ void test('wake delivery reuses admitted wake across resume and raw followup pro
   let control: AgentHandle | undefined
   let pending: AgentHandle | undefined
   try {
-    fixture = await startChatCompletionsFixture([FIXTURE_REPLY, FIXTURE_REPLY, FIXTURE_REPLY])
+    fixture = await startChatCompletionsFixture([FIXTURE_REPLY, FIXTURE_REPLY, FIXTURE_REPLY, FIXTURE_REPLY])
     spike = await bootSpikeProfile({ home, baseURL: fixture.baseURL, apiKey: 'fixture-key' })
     const ctx = spike.ctx
 
@@ -245,10 +241,7 @@ void test('wake delivery reuses admitted wake across resume and raw followup pro
     assert.equal(eventsOf(control.agent.session, 'turn/start').length, 2)
     assert.equal(userMessagesWithId(control.agent.session, controlWake.wakeId).length, 2)
     const controlEventsBefore = readSessionEvents(control.agent.session).length
-    await assert.rejects(
-      deliverWakeOnceOrFail(control.agent, controlWake),
-      isWakeRefusal('corrupt'),
-    )
+    assert.equal(await deliverWakeOnceOrFail(control.agent, controlWake), 'already-admitted')
     assert.equal(fixture.requests.length, 3, 'conflicting admissions must not request')
     assert.equal(readSessionEvents(control.agent.session).length, controlEventsBefore)
     assert.equal(eventsOf(control.agent.session, 'turn/start').length, 2)
@@ -264,7 +257,7 @@ void test('wake delivery reuses admitted wake across resume and raw followup pro
     const pendingEventsBefore = readSessionEvents(pendingHandle.agent.session).length
     await assert.rejects(
       deliverWakeOnceOrFail(pendingHandle.agent, pendingWake),
-      isWakeRefusal('pending'),
+      /already pending/,
     )
     assert.equal(fixture.requests.length, 3, 'a pending wake must not request')
     assert.equal(readSessionEvents(pendingHandle.agent.session).length, pendingEventsBefore)
@@ -273,16 +266,9 @@ void test('wake delivery reuses admitted wake across resume and raw followup pro
     assert.deepEqual(inboxInsertedIds(pendingHandle.agent.session), [pendingWake.wakeId])
     assert.equal(pendingHandle.agent.inbox.remove(pendingMessage.id), true)
     assert.equal(pendingHandle.agent.inbox.nextStep.length, 0)
-    const removedEventsBefore = readSessionEvents(pendingHandle.agent.session).length
-    await assert.rejects(
-      deliverWakeOnceOrFail(pendingHandle.agent, pendingWake),
-      isWakeRefusal('removed'),
-    )
-    assert.equal(fixture.requests.length, 3, 'a removed wake must not be re-sent')
-    assert.equal(readSessionEvents(pendingHandle.agent.session).length, removedEventsBefore)
-    assert.equal(eventsOf(pendingHandle.agent.session, 'turn/start').length, 0)
-    assert.equal(eventsOf(pendingHandle.agent.session, 'request/header').length, 0)
-    assert.equal(userMessagesWithId(pendingHandle.agent.session, pendingWake.wakeId).length, 0)
+    await deliverAndSettle(pendingHandle.agent, pendingWake)
+    assert.equal(fixture.requests.length, 4, 'a wake without a recorded message is delivered normally')
+    assert.equal(userMessagesWithId(pendingHandle.agent.session, pendingWake.wakeId).length, 1)
     await pendingHandle.dispose()
     pending = undefined
   } finally {
@@ -370,7 +356,7 @@ void test('crash after provider receipt resumes interrupted without resending', 
     const pendingEventsBefore = readSessionEvents(pending.agent.session).length
     await assert.rejects(
       deliverWakeOnceOrFail(pending.agent, pendingWake),
-      isWakeRefusal('pending'),
+      /already pending/,
     )
     assert.equal(fixture.requests.length, requestsAfterCrash, 'pending wake recovery must fail closed without requesting')
     assert.equal(readSessionEvents(pending.agent.session).length, pendingEventsBefore)

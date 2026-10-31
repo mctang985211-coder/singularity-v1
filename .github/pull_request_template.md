@@ -1,33 +1,15 @@
 ## Goal
 
+Describe the concrete problem and resulting behaviour.
+
 ## Specification references
 
-- `docs/framework.md` sections:
-- Conformance scenarios:
-
-## Scope and non-goals
+Reference the affected framework sections and any authorized amendment.
 
 ## Done when
 
-## Structure done when
-
-- Final module ownership and current consumers:
-- Public exports and runtime dependency changes:
-- Large production files touched (before/after lines), responsibility split or justified exception:
-- Removed duplicate paths, projections, helpers, and stale documentation:
+State the observable completion criteria.
 
 ## Verification evidence
 
-List the commands actually run and their results. Include real DSH/model evidence only when it was actually executed.
-
-```text
-pnpm verify
-```
-
-## Unverified behavior and remaining work
-
-## Architecture amendment
-
-- [ ] This change preserves the frozen protocol, or the linked amendment was approved before implementation.
-- [ ] `spec-lock.json` was updated only for an intentional specification change.
-- [ ] The final diff introduces no second writer, registry, model loop, transcript, TS tool adapter, or domain-specific core branch.
+Record commands and results. Distinguish protocol tests, native DSH fixtures, real model runs and deployment evidence.

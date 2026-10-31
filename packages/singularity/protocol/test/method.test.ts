@@ -1,29 +1,29 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { computeDigest, digestSchema, verifyDigest } from '../src/digest.ts'
+import { computeDigest,digestSchema,verifyDigest } from '../src/digest.ts'
 import * as protocol from '../src/index.ts'
+import type {
+ChildBinding,
+MethodRevision,
+MethodRevisionPayload,
+SkillAsset,
+TaskTemplate,
+ToolAsset,
+} from '../src/method.ts'
 import * as methodModule from '../src/method.ts'
 import {
-  childBindingSchema,
-  methodRevisionPayloadSchema,
-  methodRevisionSchema,
-  sealMethodRevision,
-  skillAssetSchema,
-  taskTemplateSchema,
-  toolAssetSchema,
-  verifyMethodRevision,
+childBindingSchema,
+methodRevisionPayloadSchema,
+methodRevisionSchema,
+sealMethodRevision,
+skillAssetSchema,
+taskTemplateSchema,
+toolAssetSchema,
+verifyMethodRevision,
 } from '../src/method.ts'
-import type {
-  ChildBinding,
-  MethodRevision,
-  MethodRevisionPayload,
-  SkillAsset,
-  TaskTemplate,
-  ToolAsset,
-} from '../src/method.ts'
-import { outputSpecSchema, taskCriterionSchema, taskSpecSchema } from '../src/task.ts'
-import type { OutputSpec, TaskCriterion } from '../src/task.ts'
+import type { OutputSpec,TaskCriterion } from '../src/task.ts'
+import { outputSpecSchema,taskCriterionSchema,taskSpecSchema } from '../src/task.ts'
 
 const REF_DIGEST = `sha256:${'a'.repeat(64)}`
 
@@ -403,7 +403,6 @@ void test('Method uses the task-owned criterion and output schema objects direct
 
 void test('index exports existing protocol surface plus Method schemas and helpers', () => {
   const exported = [
-    'CanonicalJsonError',
     'canonicalize',
     'parseJsonText',
     'jsonValueSchema',

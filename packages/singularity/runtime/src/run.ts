@@ -1,81 +1,74 @@
 import { resolve } from 'node:path'
 
-import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Session } from '@deepseek-ai/dsh-session'
+import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 
-import {
-  compositionPayloadSchema,
-  parseJsonText,
-  parseProtocolValue,
-  refSchema,
-  seal,
-  verifyTaskContract,
-} from '@singularity/protocol'
 import type {
-  BudgetReservation,
-  CompositionPayload,
-  Evidence,
-  ExecutionRecord,
-  Fact,
-  FactActor,
-  JsonValue,
-  PublicReceipt,
-  Ref,
-  RunClosedPayload,
-  SessionCut,
-  SubmissionManifest,
-  TaskContract,
-  TaskRunState,
-  UsageRecord,
+BudgetReservation,
+CompositionPayload,
+Evidence,
+ExecutionRecord,
+Fact,
+FactActor,
+JsonValue,
+PublicReceipt,
+Ref,
+RunClosedPayload,
+SessionCut,
+SubmissionManifest,
+TaskContract,
+TaskRunState,
+UsageRecord,
+} from '@singularity/protocol'
+import {
+compositionPayloadSchema,
+parseJsonText,
+parseProtocolValue,
+refSchema,
+seal,
+verifyTaskContract,
 } from '@singularity/protocol'
 
-import { driveAgent, snapshotSession } from './agent.ts'
 import type { OpenedRunMode } from './agent.ts'
+import { driveAgent } from './agent.ts'
+import type { ContractSummaryService } from './contract-summary.ts'
 import { initialContextEpoch } from './epoch.ts'
 import { SingleRunError } from './errors.ts'
-import { mcpDispatchPlan } from './mcp-resources.ts'
-import { preflightNodeView, renderLiveNodeView } from './node-view.ts'
-import type { RemainingBudgetPct } from './prompt.ts'
-import { clampPercent } from './prompt.ts'
+import { renderLiveNodeView } from './node-view.ts'
 import type { NodeView } from './prompt.ts'
-import {
-  MethodResourceError,
-  assertCompositionResources,
-  loadMethodResources,
-} from './resources.ts'
 import type { FrozenMethodResources } from './resources.ts'
 import {
-  buildExecutionResult,
-  commitFact,
-  finalizeSettlement,
-  putSealed,
-  settleExecutionRecord,
-  settleSubmitted,
-  usageCost,
+MethodResourceError,
+assertCompositionResources,
+loadMethodResources,
+usesExploration,
+} from './resources.ts'
+import { createToolController } from './run-controller.ts'
+import type { Settlement } from './run-settlement.ts'
+import {
+buildExecutionResult,
+commitFact,
+finalizeSettlement,
+putSealed,
+settleExecutionRecord,
+settleSubmitted,
 } from './run-settlement.ts'
+import type { RunSessionAction,YieldedRunResult } from './run-yield.ts'
+import { yieldedActiveChildBatch } from './run-yield.ts'
 import { CommandService } from './service.ts'
-import { RunToolController } from './tools.ts'
 import type { RunVerifier } from './verification.ts'
-import type { WakeDeliveryOutcome } from './wake.ts'
+import { buildExecutionRecord } from './verification.ts'
 import type { CasObjectReader } from './workspace.ts'
 import { prepareWorkspace } from './workspace.ts'
-import type { FrozenSubmission } from './workspace.ts'
 
 export { SingleRunError } from './errors.ts'
 export type { SingleRunErrorCode } from './errors.ts'
 
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
-const zeroUsage: UsageRecord = {
-  inputTokens: 0,
-  outputTokens: 0,
-  steps: 0,
-  unknownRequests: 0,
-}
 
-/** One sealed root contract plus host-resolved Run intent. */
+/** One sealed Task contract plus host-resolved Run intent. */
 export interface SingleRunAdmission {
-  /** Frozen root contract, normally produced by protocol `admitRootTask`. */
+  /** Frozen root contract or a child contract from `task/children-admitted`. */
   readonly contract: TaskContract
   /** 1-based attempt for this Task. */
   readonly attempt: number
@@ -104,10 +97,19 @@ export interface ExecuteSingleRunRequest {
   readonly transientInvalidReasons?: readonly string[]
   readonly actor?: FactActor
   readonly clock?: () => number
+  /** Domain-owned derived summaries and their source Task usage. */
+  readonly summaries?: ContractSummaryService
+  /** Domain pool request-boundary check over reported ancestor/subtree usage. */
+  readonly checkReportedBudget?: (reported?: { readonly tokens: number; readonly unknown: boolean }) => boolean
+  readonly canOpenRun?: () => boolean
+  /** The tree owner drains native lifecycle before its single subtree closure. */
+  readonly signal?: AbortSignal
+  readonly onBudgetExhausted?: () => void
 }
 
 /** Settlement result; exactly one of Evidence or ExecutionRecord is present. */
 export interface ExecuteSingleRunResult {
+  readonly kind: 'settled'
   readonly taskId: string
   readonly runId: string
   readonly sessionId: string
@@ -128,13 +130,29 @@ export interface ExecuteSingleRunResult {
   readonly facts: readonly Fact[]
 }
 
-/** Shared continuation result; recovery adds composition/session flags. */
-export interface ContinueOpenedRunResult extends ExecuteSingleRunResult {
-  /** `created` uses the same session intent when persistence is absent; `none` closed invalid. */
-  readonly sessionAction: 'created' | 'none' | 'resumed'
-  /** Stable wake outcome; `already-admitted` never buys another request. */
-  readonly wakeOutcome?: WakeDeliveryOutcome
+export type { YieldedRunResult } from './run-yield.ts'
+
+/** Native lifecycle has drained; the tree owner commits the final subtree closure. */
+export interface InterruptedRunResult {
+  readonly kind: 'interrupted'
+  readonly taskId: string
+  readonly runId: string
+  readonly sessionId: string
+  readonly executionRecord: ExecutionRecord
+  readonly executionRecordRef: Ref
+  readonly usage: UsageRecord
+  readonly sessionCut: SessionCut
 }
+
+export type RunAttemptResult = ExecuteSingleRunResult | YieldedRunResult | InterruptedRunResult
+
+/** Narrows one attempt result before reading settled-only facts. */
+export function isSettledRunResult(result: RunAttemptResult): result is ExecuteSingleRunResult {
+  return result.kind === 'settled'
+}
+
+/** Normal and live yielded-parent execution share one driver result. */
+type DrivenRunResult = RunAttemptResult & RunSessionAction
 
 export interface RuntimeContext {
   readonly actor: FactActor
@@ -157,27 +175,30 @@ export interface PreparedRun {
   readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
   readonly workspace: string
   readonly methodResources: FrozenMethodResources
+  readonly mountedChildOutputs: Set<string>
   readonly runtime: RuntimeContext
 }
 
 /**
- * Executes exactly one Run: root admission, `run/opened`, DSH create/setup,
+ * Executes exactly one Run: Task admission, `run/opened`, DSH create/setup,
  * one stable wake, one `whenIdle`, then either independent verification of the
  * frozen submission or an ExecutionRecord settlement. The function owns one
- * CommandService writer for the duration and never starts a second model loop.
+ * CommandService writer when one is not supplied by the domain owner.
  */
 export async function executeSingleRun(
   request: ExecuteSingleRunRequest,
-): Promise<ExecuteSingleRunResult> {
+  sharedWriter?: CommandService,
+): Promise<RunAttemptResult> {
+  request = { ...request, transientInvalidReasons: sharedWriter?.retryPolicy(request.transientInvalidReasons) ?? request.transientInvalidReasons ?? [] }
   const actor = request.actor ?? { kind: 'runtime', id: 'singularity-runtime' }
   const clock = request.clock ?? Date.now
   validateRequest(request, actor, clock)
-  const service = await CommandService.open({ root: request.journalRoot, actor, clock })
+  const service = sharedWriter ?? await CommandService.open({ root: request.journalRoot, actor, clock, transientInvalidReasons: request.transientInvalidReasons })
   try {
     const prepared = await openSingleRun(request, actor, clock, service)
-    return await drivePreparedRun(prepared, request, service, 'create')
+    return await driveLiveRun(prepared, request, service, 'create')
   } finally {
-    await service.close()
+    if (sharedWriter === undefined) await service.close()
   }
 }
 
@@ -189,10 +210,10 @@ async function openSingleRun(
 ): Promise<PreparedRun> {
   const contract = request.admission.contract
   if (!verifyTaskContract(contract)) {
-    throw new SingleRunError('CONTRACT_INVALID', 'admission.contract is not a sealed root TaskContract')
+    throw new SingleRunError('CONTRACT_INVALID', 'admission.contract is not a sealed TaskContract')
   }
-  if (contract.origin.kind !== 'root') {
-    throw new SingleRunError('CONTRACT_INVALID', 'single-Run execution requires a root TaskContract')
+  if (request.verifier.provider.id !== contract.acceptance.id || request.verifier.provider.digest !== contract.acceptance.digest) {
+    throw new SingleRunError('COMPOSITION_MISMATCH', 'verifier provider does not match the frozen acceptance')
   }
   const compositionPayload = parseProtocolValue(compositionPayloadSchema, request.composition)
   const methodResources = await loadMethodResources(service, contract)
@@ -211,27 +232,15 @@ async function openSingleRun(
     )
   }
   const lastAttempt = lastAttemptFromState(state, contract.taskId, request.runId)
-  preflightNodeView({
-    contract,
-    runId: request.runId,
-    workspace: resolve(request.workspace),
-    baseToolNames,
-    template: methodResources.template,
-    skills: methodResources.skills,
-    mcpServers: methodResources.mcpServers,
-    budget: { tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 },
-    lastAttempt,
-    asOf: clock(),
-    contextEpoch: initialContextEpoch(request.sessionId),
-  })
+
+  await prepareWorkspace(request.workspace, contract.spec.inputs, service)
+  const workspace = resolve(request.workspace)
 
   const contractRef = await putSealed(service, contract.taskId, contract, 'contract')
   await ensureObject(service, contract.acceptance, request.admission.acceptanceBytes)
   await ensureObject(service, contract.environment.seed, request.admission.workspaceSeedBytes)
 
-  const facts = service.facts()
-  const admitted = facts.find((fact): fact is Extract<Fact, { type: 'task/admitted' }> =>
-    fact.type === 'task/admitted' && fact.data.taskId === contract.taskId)
+  const admitted = state.tasks.get(contract.taskId)
   if (admitted === undefined) {
     await commitFact(
       service,
@@ -244,7 +253,7 @@ async function openSingleRun(
       { taskId: contract.taskId, contract: contractRef },
       request.transientInvalidReasons ?? [],
     )
-  } else if (admitted.data.contract.digest !== contract.digest) {
+  } else if (admitted.contract.digest !== contract.digest) {
     throw new SingleRunError(
       'TASK_CONTRACT_MISMATCH',
       `Task ${JSON.stringify(contract.taskId)} was admitted with a different contract digest`,
@@ -279,10 +288,8 @@ async function openSingleRun(
       budgetReservation: request.admission.budgetReservation,
     },
     request.transientInvalidReasons ?? [],
+    request.canOpenRun,
   ) as Extract<Fact, { readonly type: 'run/opened' }>
-
-  await prepareWorkspace(request.workspace, contract.spec.inputs, service)
-  const workspace = resolve(request.workspace)
 
   return buildPreparedRun({
     actor,
@@ -296,6 +303,41 @@ async function openSingleRun(
     lastAttempt,
     request,
   })
+}
+
+/** Only yielded parents in this live writer can continue; archives cannot resume. */
+const yieldedRuns = new WeakMap<CommandService, Map<string, { prepared: PreparedRun; request: ExecuteSingleRunRequest }>>()
+
+async function driveLiveRun(prepared: PreparedRun, request: ExecuteSingleRunRequest,
+  service: CommandService, mode: OpenedRunMode): Promise<DrivenRunResult> {
+  let result: DrivenRunResult
+  try {
+    result = await drivePreparedRun(prepared, request, service, mode)
+  } catch (error) {
+    try { await request.summaries?.cancelRun(request.runId) } catch (summaryError) {
+      if (summaryError !== error) throw new AggregateError([error, summaryError], 'Run and owned Summary failed')
+    }
+    throw error
+  }
+  let waiting = yieldedRuns.get(service)
+  if (waiting === undefined) { waiting = new Map(); yieldedRuns.set(service, waiting) }
+  if (result.kind === 'yielded') waiting.set(request.runId, { prepared, request })
+  else waiting.delete(request.runId)
+  return result
+}
+
+/** Pool-only continuation of an observed yield in the current process. */
+export async function continueYieldedRun(service: CommandService, runId: string): Promise<DrivenRunResult> {
+  const waiting = yieldedRuns.get(service)
+  const live = waiting?.get(runId)
+  if (live === undefined) throw new SingleRunError('RUN_NOT_FOUND', 'Only a live yielded Run can continue')
+  const state = await service.taskRunState()
+  const batch = [...state.batches.values()].filter(batch => batch.parentRunId === runId).at(-1)
+  if (batch === undefined || batch.childIds.some(id => state.tasks.get(id)?.phase !== 'closed')) {
+    throw new SingleRunError('INVALID_ARGUMENT', 'The child batch must be terminal before continuing its parent')
+  }
+  waiting?.delete(runId)
+  return driveLiveRun(live.prepared, live.request, service, 'resume')
 }
 
 /**
@@ -335,6 +377,7 @@ function buildPreparedRun(options: {
     runOpened: options.runOpened,
     workspace: options.workspace,
     methodResources: options.methodResources,
+    mountedChildOutputs: new Set(),
     runtime: buildRuntimeContext(
       options.request,
       options.actor,
@@ -375,24 +418,24 @@ function buildRuntimeContext(
   }
 }
 
-export async function drivePreparedRun(
+async function drivePreparedRun(
   prepared: PreparedRun,
   request: ExecuteSingleRunRequest,
   service: CommandService,
   mode: OpenedRunMode,
-): Promise<ContinueOpenedRunResult> {
+): Promise<DrivenRunResult> {
   const { runtime } = prepared
-  const { controller, budget, checkBudget, stopBudget, startBudget } = await createToolController(prepared, request, service)
+  const { controller, children, feedback, budget, checkBudget, stopBudget, startBudget } = await createToolController(prepared, request, service)
   const observation = await driveAgent({
     prepared,
     request,
-    service,
     mode,
     controller,
     budget,
     checkBudget,
     stopBudget,
     startBudget,
+    controllerState: () => service.taskRunState(runtime.transientInvalidReasons),
     renderView: () => renderLiveNodeView({
       contract: runtime.contract,
       runId: request.runId,
@@ -400,30 +443,54 @@ export async function drivePreparedRun(
       baseToolNames: runtime.baseToolNames,
       template: prepared.methodResources.template,
       skills: prepared.methodResources.skills,
+      ...(usesExploration(prepared.methodResources) ? { exploration: prepared.methodResources.exploration } : {}),
       mcpServers: prepared.methodResources.mcpServers,
       budget: budget(),
       lastAttempt: runtime.lastAttempt,
       asOf: runtime.clock(),
       contextEpoch: initialContextEpoch(request.sessionId),
       controller,
+      children: children().view,
+      feedback,
     }),
   })
-  const { snapshot } = observation
+  let { snapshot } = observation
   const tools = controller.snapshot()
-  const settlement = observation.agentErrorCode === undefined && snapshot.failure === undefined
-    && !observation.drainPending && tools.submission !== undefined
-    ? await settleSubmitted(runtime, request, service, snapshot, tools)
-    : await settleExecutionRecord(
-      runtime,
-      request,
-      service,
-      snapshot,
-      tools,
-      observation.agentErrorCode,
-      observation.agentErrorDetail,
-      observation.drainPending,
-    )
-
+  const state = await service.taskRunState(runtime.transientInvalidReasons)
+  const yielded = yieldedActiveChildBatch({
+    state,
+    taskId: runtime.contract.taskId,
+    runId: request.runId,
+    sessionId: request.sessionId,
+    tools,
+    observation,
+    facts: service.facts(),
+  })
+  if (yielded !== undefined && request.signal?.aborted !== true) return yielded
+  const summary = await request.summaries?.finishRun(request.runId)
+  if (summary !== undefined) snapshot = { ...snapshot, usage: { ...snapshot.usage, summary } }
+  let settlement: Settlement | undefined
+  if (request.signal?.aborted !== true) {
+    settlement = observation.agentErrorCode === undefined && snapshot.failure === undefined
+        && tools.submission !== undefined
+      ? await settleSubmitted(runtime, request, service, snapshot, tools)
+      : await settleExecutionRecord(
+        runtime, request, service, snapshot, tools,
+        observation.agentErrorCode, observation.agentErrorDetail,
+      )
+  }
+  if (settlement === undefined) {
+    const executionRecord = buildExecutionRecord({
+      contract: runtime.contract, runId: request.runId, composition: runtime.compositionRef,
+      usage: snapshot.usage, sessionCut: snapshot.sessionCut,
+      reason: String(request.signal?.reason),
+      ...(tools.submission === undefined ? {} : { outputs: tools.submission.outputRefs }),
+    })
+    const executionRecordRef = await putSealed(service, `${request.runId}:execution-record`, executionRecord, 'object')
+    return { kind: 'interrupted', taskId: runtime.contract.taskId, runId: request.runId,
+      sessionId: request.sessionId, executionRecord, executionRecordRef, usage: snapshot.usage,
+      sessionCut: snapshot.sessionCut, sessionAction: observation.sessionAction }
+  }
   const { taskFact, retry } = await finalizeSettlement(runtime, request, service, settlement)
   const result = buildExecutionResult(
     request,
@@ -530,13 +597,6 @@ function validateComposition(
       `DSH version must be 0.2.2-alpha.2, received ${JSON.stringify(composition.dsh.version)}`,
     )
   }
-  if (contract.resources.exploration !== undefined) {
-    throw new MethodResourceError(
-      'composition',
-      'UNSUPPORTED_RESOURCES',
-      'this single-Run slice does not mount exploration resources',
-    )
-  }
 }
 
 async function resolveBaseToolNames(
@@ -582,127 +642,6 @@ function assertToolsAvailable(names: readonly string[], ctx: Context): void {
   }
 }
 
-async function createToolController(
-  prepared: PreparedRun,
-  request: ExecuteSingleRunRequest,
-  service: CommandService,
-) {
-  const { runtime, runOpened } = prepared
-  const state = await service.taskRunState(runtime.transientInvalidReasons)
-  const prior = usageCost([...state.runs.values()]
-    .flatMap(run => run.taskId === runtime.contract.taskId && run.closed?.usage !== undefined ? [run.closed.usage] : []))
-  const reservation = runOpened.data.budgetReservation
-  const limits = {
-    ...runtime.contract.limits,
-    maxTokens: Math.min(reservation.tokens, runtime.contract.limits.maxTokens - prior.tokens),
-    maxStepsPerRun: Math.min(reservation.steps, runtime.contract.limits.maxStepsPerRun),
-    deadlineAt: Math.min(reservation.deadlineAt, runtime.contract.limits.deadlineAt),
-  }
-  let liveAgent: { readonly session: Session } | undefined
-  let lastNow = runtime.startedAt
-  let clockValid = true
-  let active = true
-  const currentUsage = () => liveAgent === undefined ? zeroUsage : snapshotSession(liveAgent.session).usage
-  const checkBudget = (tokens = 0, steps = 0): boolean => {
-    if (!active) return false
-    const now = runtime.clock()
-    clockValid &&= Number.isSafeInteger(now) && now >= lastNow
-    lastNow = now
-    if (!clockValid || now >= limits.deadlineAt) return false
-    const usage = currentUsage()
-    const cost = usageCost([usage])
-    return !prior.unknown && !cost.unknown
-      && cost.tokens + tokens <= limits.maxTokens
-      && usage.steps + steps <= limits.maxStepsPerRun
-  }
-  const budget = () => computeBudget(limits, currentUsage(), runtime.startedAt, runtime.clock(), prior.unknown)
-  const controller = new RunToolController({
-    contract: runtime.contract,
-    runId: request.runId,
-    sessionId: request.sessionId,
-    workspace: runtime.workspace,
-    skillNames: prepared.methodResources.skills.map(skill => skill.name),
-    mcpPlan: mcpDispatchPlan(prepared.methodResources.mcpServers),
-    childBindingIds: prepared.methodResources.template.children.map(binding => binding.bindingId),
-    decompose: {
-      methodResources: prepared.methodResources,
-      reader: service,
-    },
-    writer: service,
-    maxOutputBytes: runtime.maxOutputBytes,
-    clock: runtime.clock,
-    budget,
-    checkBudget,
-    epoch: () => initialContextEpoch(request.sessionId),
-    onAgent: agent => {
-      liveAgent = agent
-    },
-    commitSubmission: async (frozen, sessionId, transcriptSeq) => {
-      if (!checkBudget()) throw new Error('Run budget unavailable')
-      const current = controller.snapshot()
-      if (current.planningSketchRef === undefined) {
-        throw new Error('planning sketch is missing at submit commit')
-      }
-      await commitRunSubmitted(service, runtime, request, frozen, sessionId, transcriptSeq, current.planningSketchRef)
-      return frozen.manifestRef
-    },
-  })
-  return { controller, budget, checkBudget, stopBudget: () => { active = false },
-    startBudget: computeBudget(limits, zeroUsage, runtime.startedAt, runtime.startedAt, prior.unknown) }
-}
-
-async function commitRunSubmitted(
-  service: CommandService,
-  runtime: RuntimeContext,
-  request: ExecuteSingleRunRequest,
-  frozen: FrozenSubmission,
-  sessionId: string,
-  transcriptSeq: number,
-  planningSketchRef: Ref,
-): Promise<Fact> {
-  return commitFact(
-    service,
-    runtime.actor,
-    `run:${request.runId}:submitted`,
-    'run.submitted',
-    { runId: request.runId, taskId: runtime.contract.taskId },
-    {
-      runId: request.runId,
-      outputs: frozen.manifestRef,
-      planningSketchRef,
-    } as unknown as JsonValue,
-    'run/submitted',
-    {
-      runId: request.runId,
-      outputs: frozen.manifestRef,
-      transcriptOffset: { sessionId, seq: transcriptSeq },
-      previewReceipts: [],
-      readReceipts: [],
-      planningSketchRef,
-      feedbackRefs: [],
-    },
-    runtime.transientInvalidReasons,
-  )
-}
-
-function computeBudget(
-  limits: TaskContract['limits'],
-  usage: UsageRecord,
-  startedAt: number,
-  now: number,
-  priorUnknown = false,
-): RemainingBudgetPct {
-  const cost = usageCost([usage])
-  const tokensPct = priorUnknown || cost.unknown ? null : clampPercent(limits.maxTokens - cost.tokens, limits.maxTokens)
-  const stepsPct = clampPercent(limits.maxStepsPerRun - usage.steps, limits.maxStepsPerRun)
-  const wallClockPct = limits.deadlineAt <= startedAt
-    ? 0
-    : clampPercent(limits.deadlineAt - now, limits.deadlineAt - startedAt)
-  const depthPct = limits.maxDepth <= 0 ? 100 : clampPercent(limits.maxDepth, limits.maxDepth)
-  const taskSlotsPct = limits.maxTasks <= 0 ? 0 : clampPercent(limits.maxTasks - 1, limits.maxTasks)
-  return { tokensPct, stepsPct, wallClockPct, depthPct, taskSlotsPct }
-}
-
 async function ensureObject(
   service: CommandService,
   ref: Ref,
@@ -719,14 +658,4 @@ async function ensureObject(
     return
   }
   await service.readObject(ref, 'object')
-}
-
-export {
-  assertToolsAvailable,
-  buildPreparedRun,
-  buildRuntimeContext,
-  lastAttemptFromState,
-  resolveBaseToolNames,
-  validateComposition,
-  validateRequest,
 }

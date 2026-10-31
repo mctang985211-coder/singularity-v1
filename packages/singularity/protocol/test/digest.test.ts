@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import {
-  DIGEST_DOMAINS,
-  computeDigest,
-  computeDigestBytes,
-  digestDomainSchema,
-  digestSchema,
-  seal,
-  verifyDigest,
-} from '../src/digest.ts'
 import type { DigestDomain } from '../src/digest.ts'
+import {
+DIGEST_DOMAINS,
+computeDigest,
+computeDigestBytes,
+digestDomainSchema,
+digestSchema,
+seal,
+verifyDigest,
+} from '../src/digest.ts'
 import * as protocol from '../src/index.ts'
 
 const FACT_UNICODE_VECTOR = 'sha256:7f0c429ff97bae40c7df0bb88064b1956602dd7810d26a5c0343b2a83d921243'
@@ -140,17 +140,10 @@ void test('verifyDigest rejects tampering, extra fields, malformed digests, and 
 
 void test('verifyDigest returns false when the sealed value cannot be canonicalized', () => {
   const sealed = seal('fact', { goal: 'ship' })
-  const withAccessor = {
-    ...sealed,
-    get goal(): string {
-      return 'ship'
-    },
-  }
-  assert.equal(verifyDigest('fact', withAccessor), false)
+  assert.equal(verifyDigest('fact', { ...sealed, goal: Number.NaN }), false)
 })
 
 void test('index exports errors, json, digest, schema, and refs', () => {
-  assert.equal(typeof protocol.CanonicalJsonError, 'function')
   assert.equal(typeof protocol.canonicalize, 'function')
   assert.equal(typeof protocol.parseJsonText, 'function')
   assert.equal(typeof protocol.computeDigest, 'function')

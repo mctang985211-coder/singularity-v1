@@ -1126,6 +1126,82 @@ void test('deadline, token exhaustion, and unknown usage stop retry but permit t
   )
 })
 
+for (const exhaustedOwner of ['root', 'parent'] as const) {
+  void test(`a failed grandchild becomes terminal when its ${exhaustedOwner} token budget is exhausted`, () => {
+    const method = sealMethodRevision({
+      v: 1,
+      id: 'method-ancestor-retry',
+      templates: [templates[0], template('child-template', [
+        binding('grandchild-probe', 'grand-template', 'probe'),
+        binding('grandchild-other', 'grand-template', 'probe'),
+      ]), templates[2]],
+      skills: [],
+      tools: [],
+    })
+    const methodRef = { id: method.id, digest: method.digest }
+    const root = makeRootContract({ method: methodRef })
+    const parent = makeChildContract({ taskId: 'task-parent', method: methodRef, limits: { maxTokens: 400 } })
+    const other = makeChildContract(exhaustedOwner === 'root'
+      ? { taskId: 'task-other', bindingId: 'child-probe', method: methodRef, limits: { maxTokens: 600 } }
+      : { taskId: 'task-other', parentId: parent.taskId, parentRunId: 'run-parent-2', batchId: 'batch-grand',
+        bindingId: 'grandchild-other', templateId: 'grand-template', method: methodRef, limits: { maxTokens: 299 } })
+    const grandchild = makeChildContract({
+      taskId: 'task-grandchild', parentId: parent.taskId, parentRunId: 'run-parent-2', batchId: 'batch-grand',
+      bindingId: 'grandchild-probe', templateId: 'grand-template', method: methodRef, limits: { maxTokens: 100 },
+    })
+    const context = makeContext([root], [method])
+    const journal = new Journal()
+    const reservation = (tokens: number) => ({ ...defaultReservation, tokens })
+    journal.add('task/admitted', { taskId: root.taskId, contract: contractRef(root) })
+    journal.add('run/opened', runOpened(root.taskId, 'run-root-1', 1, { budgetReservation: reservation(1_000) }))
+    journal.add('task/children-admitted', admission('run-root-1', 'batch-1', [
+      { ...admittedChild(parent, 'required'), budgetReservation: reservation(400) },
+      ...(exhaustedOwner === 'root' ? [{ ...admittedChild(other, 'probe'), budgetReservation: reservation(600) }] : []),
+    ]))
+    journal.add('run/opened', runOpened(parent.taskId, 'run-parent-1', 1, { budgetReservation: reservation(400) }))
+    journal.add('run/closed', { ...failedExecutionClosed('run-parent-1'), usage: usage({ inputTokens: 1, outputTokens: 0 }) })
+    journal.add('run/opened', runOpened(parent.taskId, 'run-parent-2', 2, { budgetReservation: reservation(399) }))
+    journal.add('task/children-admitted', admission('run-parent-2', 'batch-grand', [
+      admittedChild(grandchild, 'probe'),
+      ...(exhaustedOwner === 'parent' ? [{ ...admittedChild(other, 'probe'), budgetReservation: reservation(299) }] : []),
+    ]))
+    journal.add('run/opened', runOpened(other.taskId, 'run-other-1', 1, { budgetReservation: reservation(other.limits.maxTokens) }))
+    journal.add('run/opened', runOpened(grandchild.taskId, 'run-grandchild-1', 1))
+    journal.add('run/closed', { ...failedExecutionClosed('run-grandchild-1'), usage: usage({ inputTokens: 20, outputTokens: 0 }) })
+    const beforeExhaustion = reduceTaskRunFacts(journal.facts, context)
+    assert.equal(beforeExhaustion.tasks.get(parent.taskId)?.runIds.length, parent.limits.maxRuns)
+    assert.equal(protocol.decideTaskRetryPolicy(beforeExhaustion, grandchild.taskId, 'run-grandchild-1', [], 100).allowed,
+      true, 'ancestor maxRuns does not limit the grandchild attempt count')
+    journal.add('run/submitted', submitted('run-other-1'))
+    // A single in-flight request can cross a local cap; its final usage is fully recorded.
+    journal.add('run/closed', { ...verifiedClosed('run-other-1'), usage: usage({
+      inputTokens: exhaustedOwner === 'root' ? 979 : 379, outputTokens: 0,
+    }) })
+    journal.add('task/closed', verifiedTask(other.taskId, 'run-other-1'))
+    const failedState = reduceTaskRunFacts(journal.facts, context)
+    assert.equal(failedState.tasks.get(grandchild.taskId)?.phase, 'open')
+    assert.equal(grandchild.limits.maxRuns, 2)
+    assert.equal(grandchild.limits.maxTokens, 100)
+    assert.deepEqual(protocol.decideTaskRetryPolicy(failedState, grandchild.taskId, 'run-grandchild-1', [], 100), {
+      allowed: false,
+      reason: `ancestor Task ${JSON.stringify(exhaustedOwner === 'root' ? root.taskId : parent.taskId)}: known token budget is exhausted`,
+    })
+    const knownPrefix = journal.facts.slice(0, -2)
+    const unknownClosure = appendFact(knownPrefix, 'run/closed', { ...verifiedClosed('run-other-1'),
+      usage: usage({ inputTokens: 10, outputTokens: 0, unknownRequests: 1 }) })
+    const unknownState = reduceTaskRunFacts([...knownPrefix, unknownClosure], context)
+    assert.deepEqual(protocol.decideTaskRetryPolicy(unknownState, grandchild.taskId, 'run-grandchild-1', [], 100), {
+      allowed: false,
+      reason: `ancestor Task ${JSON.stringify(exhaustedOwner === 'root' ? root.taskId : parent.taskId)}: usage is unknown, so budget cannot be proven`,
+    })
+    const terminal = appendFact(journal.facts, 'task/closed', failedTask(grandchild.taskId, 'run-grandchild-1'))
+    const closedState = reduceTaskRunFacts([...journal.facts, terminal], context)
+    assert.equal(closedState.tasks.get(grandchild.taskId)?.closed?.outcome, 'failed')
+    const retry = appendFact(journal.facts, 'run/opened', runOpened(grandchild.taskId, 'run-grandchild-2', 2))
+    expectReducerError(() => reduceTaskRunFacts([...journal.facts, retry], context), 'RETRY_NOT_ALLOWED')
+  })
+}
+
 void test('invalid retry requires a pre-listed transient reason', () => {
   const root = makeRootContract()
   const transientContext = makeContext([root], [baseMethod], ['transient-db-lock'])

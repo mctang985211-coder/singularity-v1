@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { digestSchema } from './digest.ts'
+import { refSchema } from './refs.ts'
 import { closedObject } from './schema.ts'
 
 const levelFields = {
@@ -32,8 +33,10 @@ const levelTwoSchema = closedObject({
  * sequences are rejected.
  */
 const planningSketchLevelsSchema = z.union([
-  z.tuple([levelZeroSchema, levelOneSchema]),
-  z.tuple([levelZeroSchema, levelOneSchema, levelTwoSchema]),
+  // This Zod version emits prefixItems without tuple length bounds by default.
+  // Explicit checks preserve the same accepted values in the model's JSON Schema.
+  z.tuple([levelZeroSchema, levelOneSchema]).check(z.minLength(2), z.maxLength(2)),
+  z.tuple([levelZeroSchema, levelOneSchema, levelTwoSchema]).check(z.minLength(3), z.maxLength(3)),
 ])
 
 const planningSketchDirectPlanSchema = closedObject({
@@ -60,3 +63,30 @@ export const planningSketchSchema = closedObject({
 })
 
 export type PlanningSketch = z.infer<typeof planningSketchSchema>
+
+/** The model supplies suggestions only; caller identity belongs to the host. */
+export const taskFeedbackInputSchema = closedObject({
+  kind: z.enum(['needs-replan', 'input-invalid', 'acceptance-concern', 'blocked']),
+  summary: z.string(),
+  proposedChanges: z.array(closedObject({
+    field: z.enum(['goal', 'inputs', 'outputs', 'child-purpose', 'order']),
+    suggestion: z.string(),
+  })),
+  refs: z.array(refSchema),
+})
+
+export type TaskFeedbackInput = z.infer<typeof taskFeedbackInputSchema>
+
+/** Read-only direct-parent feedback from framework §7.2; never a domain fact. */
+export const taskFeedbackSchema = taskFeedbackInputSchema.extend({
+  v: z.literal(1),
+  id: z.string(),
+  source: z.enum(['scheduler', 'child-worker']),
+  sourceTaskId: z.string(),
+  sourceRunId: z.string(),
+  directParentTaskId: z.string(),
+  sourceContract: digestSchema,
+  createdAt: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+}).strict()
+
+export type TaskFeedback = z.infer<typeof taskFeedbackSchema>

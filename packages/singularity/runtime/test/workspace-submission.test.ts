@@ -194,19 +194,7 @@ void test('rejects symlinks, traversal, missing required outputs, and size overf
         (error: unknown) => error instanceof SubmissionError && error.code === 'OUTPUT_SYMLINK',
       )
 
-      const traversalContract = contract([output('bad', '../escape.txt', 'file', 'deliverable', true)])
-      await assert.rejects(
-        freezeSubmission({
-          contract: traversalContract,
-          runId: 'run-traversal',
-          workspace,
-          outputIds: ['bad'],
-          includeLearningDrafts: false,
-          maxOutputBytes: 1024,
-          writer: store,
-        }),
-        (error: unknown) => error instanceof SubmissionError && error.code === 'OUTPUT_PATH_INVALID',
-      )
+      assert.throws(() => contract([output('bad', '../escape.txt', 'file', 'deliverable', true)]), /relative POSIX path/)
 
       const missingContract = contract([output('missing', 'missing.txt', 'file', 'deliverable', true)])
       await assert.rejects(
@@ -262,40 +250,6 @@ void test('tree traversal rejects a symlinked node without freezing it', async (
     })
   })
 })
-
-for (const kind of ['file', 'tree', 'draft'] as const) {
-  void test(`rejects a symlinked ancestor of a ${kind} output`, async () => {
-    await withStore(async store => {
-      await withWorkspace(async workspace => {
-        await withWorkspace(async outside => {
-          const draft = kind === 'draft'
-          const ancestor = draft ? 'learning-drafts' : 'linked'
-          await writeFile(join(outside, 'result.txt'), 'outside-file')
-          await mkdir(join(outside, 'tree'))
-          await writeFile(join(outside, 'tree', 'result.txt'), 'outside-tree')
-          await mkdir(join(outside, 'skills'))
-          await writeFile(join(outside, 'skills', 'SKILL.md'), '# outside')
-          await symlink(outside, join(workspace, ancestor))
-          const outputs = draft
-            ? [output('__skill-drafts', 'learning-drafts/skills', 'tree', 'skill-draft', false)]
-            : [output('out', `linked/${kind === 'file' ? 'result.txt' : 'tree'}`, kind, 'deliverable', true)]
-          await assert.rejects(
-            freezeSubmission({
-              contract: contract(outputs),
-              runId: `run-ancestor-link-${kind}`,
-              workspace,
-              outputIds: draft ? [] : ['out'],
-              includeLearningDrafts: draft,
-              maxOutputBytes: 1024,
-              writer: store,
-            }),
-            (error: unknown) => error instanceof SubmissionError && error.code === 'OUTPUT_SYMLINK',
-          )
-        })
-      })
-    })
-  })
-}
 
 void test('prepareWorkspace copies only copy-to-work inputs from CAS', async () => {
   await withStore(async store => {

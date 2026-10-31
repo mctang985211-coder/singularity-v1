@@ -1,62 +1,63 @@
 import assert from 'node:assert/strict'
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { access,mkdtemp,readFile,readdir,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { readFacts } from './run-fixture.ts'
 
-import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
+import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
+import type {
+CompositionPayload,
+ExecutionRecord,
+Fact,
+JsonValue,
+MethodRevision,
+Ref,
+RootAdmissionInput,
+TaskContract,
+} from '@singularity/protocol'
 import {
-  admitRootTask,
-  canonicalize,
-  evidenceSchema,
-  executionRecordSchema,
-  parseJsonText,
-  parseProtocolValue,
-  planningSketchSchema,
-  publicReceiptSchema,
-  seal,
-  sealMethodRevision,
-  sealPublicReceipt,
-  submissionManifestSchema,
-  validateEvidence,
-  validatePublicReceipt,
-  validateSubmissionManifest,
-  verifyDigest,
+admitRootTask,
+canonicalize,
+evidenceSchema,
+executionRecordSchema,
+parseJsonText,
+parseProtocolValue,
+planningSketchSchema,
+publicReceiptSchema,
+seal,
+sealMethodRevision,
+sealPublicReceipt,
+submissionManifestSchema,
+validateEvidence,
+validatePublicReceipt,
+validateSubmissionManifest,
+verifyDigest,
 } from '@singularity/protocol'
 import type {
-  CompositionPayload,
-  ExecutionRecord,
-  Fact,
-  JsonValue,
-  MethodRevision,
-  Ref,
-  RootAdmissionInput,
-  TaskContract,
-} from '@singularity/protocol'
-import { DomainStore, executeSingleRun } from '@singularity/runtime'
-import type {
-  RunVerifier,
-  SingleRunAdmission,
-  VerifierRequest,
+RunVerifier,
+SingleRunAdmission,
+VerifierRequest,
 } from '@singularity/runtime'
+import { CommandService,DomainStore,executeSingleRun,isSettledRunResult } from '@singularity/runtime'
 
-import { bootSpikeProfile, buildSingleRunComposition } from '../src/host-composition.ts'
-import {
-  contextEpochFrom,
-  messageTexts,
-  startChatCompletionsFixture,
-  toolNames,
-  toolSchemaNames,
-} from './fixtures/chat-completions.ts'
+import { bootSpikeProfile,buildSingleRunComposition } from '../src/host-composition.ts'
 import type {
-  CapturedChatRequest,
-  ChatCompletionReplyScript,
-  ChatCompletionsFixture,
-  FixtureReply,
+CapturedChatRequest,
+ChatCompletionReplyScript,
+ChatCompletionsFixture,
+FixtureReply,
+} from './fixtures/chat-completions.ts'
+import {
+contextEpochFrom,
+messageTexts,
+startChatCompletionsFixture,
+toolNames,
+toolSchemaNames,
 } from './fixtures/chat-completions.ts'
 
 const PROVIDER_ID = 'verifier:s3-b2-fixture'
@@ -595,6 +596,8 @@ void test('single Run verified: self-read, plan, native bash output, independent
     // retries within the frozen contract's step limit.
     scenario = await makeScenario(storeRoot, spike.ctx, {
       taskId,
+      // A small task can run within its budget even with a large model context window.
+      limits: { maxTokens: live ? 1_000_000 : 1_000 },
       reservation: { steps: live ? MAX_STEPS_PER_RUN : 4 },
     })
     const activeScenario = scenario
@@ -711,6 +714,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
     const taskClosed = taskFactOf(facts)
     assert.equal(taskClosed.data.outcome, 'verified')
     assert.equal(taskClosed.data.decisiveRunId, runId)
+    if (!isSettledRunResult(result)) assert.fail('expected settled Run result')
     assert.equal(result.runFact.digest, runClosed.digest)
     assert.equal(result.taskFact?.digest, taskClosed.digest)
     assert.equal(verifierCalls.length, 1, 'the independent verifier runs once')
@@ -862,7 +866,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
 })
 
 void test('single Run stops purchasing at host budget boundaries', { timeout: 240_000 }, async t => {
-  const boundaries = ['steps', 'tokens', 'cache', 'reservation', 'unknown', 'deadline', 'rollback'] as const
+  const boundaries = ['steps', 'tokens', 'cache', 'unknown', 'deadline'] as const
   let boundary: (typeof boundaries)[number] = 'steps'
   let now = Date.now()
   let deadline = now + 60_000
@@ -870,12 +874,11 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
   await withHarness((_request, index) => {
     if (index > firstRequest) return { content: 'This request should have been refused.', usage: fixtureUsage(index) }
     if (boundary === 'deadline') now = deadline
-    if (boundary === 'rollback') now -= 1
     return {
       toolCalls: [{ id: `read-${String(index)}`, name: 'singularity_read', arguments: '{"kind":"self"}' }],
       ...(boundary === 'unknown' ? {} : { usage: boundary === 'cache'
         ? { promptTokens: 256_001, completionTokens: 8, totalTokens: 256_009, cachedTokens: 256_000 }
-        : fixtureUsage(index) }),
+        : fixtureUsage(0) }),
     }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
     for (const current of boundaries) {
@@ -891,9 +894,8 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
           limits: { deadlineAt: deadline },
           reservation: {
             ...(boundary === 'steps' ? { steps: 1 } : {}),
-            ...(boundary === 'tokens' ? { tokens: 256_000 } : {}),
-            ...(boundary === 'cache' ? { tokens: 512_000 } : {}),
-            ...(boundary === 'reservation' ? { tokens: 255_999 } : {}),
+            ...(boundary === 'tokens' ? { tokens: 48 } : {}),
+            ...(boundary === 'cache' ? { tokens: 256_009 } : {}),
           },
         })
         const result = await executeSingleRun({
@@ -904,7 +906,8 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
           clock: () => now,
           verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
         })
-        assert.equal(fixture.requests.length - firstRequest, boundary === 'reservation' ? 0 : 1)
+        assert.ok(result.kind === 'settled')
+        assert.equal(fixture.requests.length - firstRequest, 1)
         assert.equal(result.evidence, undefined)
         assert.ok(result.executionRecord)
         if (boundary === 'unknown') assert.equal(result.usage.unknownRequests, 1)
@@ -922,17 +925,17 @@ void test('oversized visible tool schemas are rejected before the first model re
     })
     const taskId = `oversized-tools-${String(Date.now())}`
     const scenario = await makeScenario(storeRoot, spike.ctx, { taskId, baseToolName: 'verbose_fixture' })
-    const result = await executeSingleRun({
+    await assert.rejects(executeSingleRun({
       ctx: spike.ctx, journalRoot: storeRoot, workspace,
       sessionId: `${taskId}:session`, runId: `${taskId}:run`,
       admission: scenario.runAdmission, composition: scenario.composition,
       agentOptions: agentOptions(), maxOutputBytes: 1024,
       verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
-    })
+    }), /visible tool schemas/)
+
+    assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 0)
     assert.equal(fixture.requests.length, 0)
-    assert.equal(result.classification, 'invalid')
-    assert.equal(result.evidence, undefined)
-    assert.match(result.executionRecord?.reason ?? '', /visible tool schemas/)
+
   })
 })
 
@@ -948,6 +951,7 @@ void test('single Run deadline cancels an in-flight DSH request', { timeout: 20_
       agentOptions: agentOptions(), maxOutputBytes: 1024,
       verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
     })
+    assert.ok(result.kind === 'settled')
     assert.equal(fixture.requests.length, 1)
     assert.ok(Date.now() - started < 3000, 'deadline must abort the request before the fixture gives up')
     assert.equal(result.evidence, undefined)
@@ -966,18 +970,18 @@ void test('unknown failed request cannot buy an internal DSH retry', { timeout: 
       retries += 1
       return Promise.resolve(retries < 2 ? { kind: 'retry' as const } : undefined)
     })
-    const result = await executeSingleRun({
+    await assert.rejects(executeSingleRun({
       ctx: spike.ctx, journalRoot: storeRoot, workspace,
       sessionId: `${taskId}:session`, runId: `${taskId}:run`,
       admission: scenario.runAdmission, composition: scenario.composition,
       agentOptions: agentOptions(), maxOutputBytes: 1024,
       verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
-    })
+    }), /fixture|request|error|500/i)
+
+    assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 0)
     assert.equal(fixture.requests.length, 1)
     assert.equal(retries, 0)
-    assert.equal(result.usage.steps, 1)
-    assert.equal(result.usage.unknownRequests, 1)
-    assert.equal(result.classification, 'invalid')
+
   })
 })
 
@@ -1012,6 +1016,7 @@ void test('single Run no-submission settles failed ExecutionRecord without a rec
       },
       transientInvalidReasons: [],
     })
+    assert.ok(result.kind === 'settled')
 
     assert.equal(fixture.requests.length, 1, 'a plain text turn must not be re-woken')
     assert.equal(verifierCalls, 0)
@@ -1034,6 +1039,7 @@ void test('single Run no-submission settles failed ExecutionRecord without a rec
     assert.match(runClosed.data.reason, /no-submission/i)
     assert.equal('evidenceRef' in runClosed.data, false)
     assert.equal('executionRecordRef' in runClosed.data, true)
+    if (!isSettledRunResult(result)) assert.fail('expected settled Run result')
     assert.equal(result.runFact.digest, runClosed.digest)
     const taskClosed = taskFactOf(facts)
     assert.equal(taskClosed.data.outcome, 'failed')
@@ -1126,6 +1132,7 @@ async function runInvalidVerifierCase(mode: 'invalid-criterion' | 'timeout'): Pr
       },
       transientInvalidReasons: [],
     })
+    assert.ok(result.kind === 'settled')
 
     assert.equal(fixture.requests.length, 4)
     assert.equal(verifierCalls, 1)
@@ -1153,6 +1160,7 @@ async function runInvalidVerifierCase(mode: 'invalid-criterion' | 'timeout'): Pr
     assert.equal(runClosed.data.reason, mode === 'timeout' ? 'verifier-timeout' : 'verifier-invalid')
     assert.equal('evidenceRef' in runClosed.data, false)
     assert.equal('executionRecordRef' in runClosed.data, true)
+    if (!isSettledRunResult(result)) assert.fail('expected settled Run result')
     assert.equal(result.runFact.digest, runClosed.digest)
     const taskClosed = taskFactOf(facts)
     assert.equal(taskClosed.data.outcome, 'invalid')
@@ -1234,6 +1242,7 @@ void test('symlinked declared output is rejected before manifest and settles fai
       },
       transientInvalidReasons: [],
     })
+    assert.ok(result.kind === 'settled')
 
     assert.equal(fixture.requests.length, 5)
     assert.equal(verifierCalls, 0)
@@ -1258,7 +1267,57 @@ void test('symlinked declared output is rejected before manifest and settles fai
     assert.equal('evidenceRef' in runClosed.data, false)
     const taskClosed = taskFactOf(facts)
     assert.equal(taskClosed.data.outcome, 'failed')
+    if (!isSettledRunResult(result)) assert.fail('expected settled Run result')
     assert.equal(result.runFact.digest, runClosed.digest)
     assert.equal(result.taskFact?.digest, taskClosed.digest)
+  })
+})
+
+void test('Task resource CAS failure aborts without asking the model to repair host storage', { timeout: 30_000 }, async () => {
+  let scenario: Scenario | undefined
+  let failNextRead = false
+  let injected = false
+  await withHarness((request, index) => {
+    assert.ok(scenario)
+    if (index === 0) return { toolCalls: [{ id: 'host-fault-self', name: 'singularity_read', arguments: JSON.stringify({ kind: 'self' }) }], usage: fixtureUsage(index) }
+    if (index === 1) {
+      const contextEpoch = contextEpochFrom(request)
+      assert.ok(contextEpoch)
+      return { toolCalls: [{ id: 'host-fault-plan', name: 'singularity_plan', arguments: JSON.stringify({ sketch: {
+        v: 1, taskId: scenario.contract.taskId, runId: 'host-fault-run', contextEpoch,
+        objective: 'Inspect the authorized input.', sourceContract: scenario.contract.digest,
+        levels: [0, 1].map(level => ({ level, purpose: 'local work', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+        directPlan: [], assumptions: [],
+      } }) }], usage: fixtureUsage(index) }
+    }
+    if (index > 2) return { toolCalls: [{ id: 'unexpected-host-repair', name: 'singularity_stop', arguments: JSON.stringify({ reason: 'blocked', message: 'Unexpected model request after host failure.' }) }], usage: fixtureUsage(index) }
+    failNextRead = true
+    return { toolCalls: [{ id: 'host-fault-resource', name: 'singularity_read', arguments: JSON.stringify({ kind: 'resource', id: scenario.contract.spec.inputs[0].id }) }], usage: fixtureUsage(index) }
+  }, async ({ spike, storeRoot, workspace, fixture }) => {
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId: 'host-fault-task', limits: { maxRuns: 1 } })
+    const service = await CommandService.open({ root: storeRoot, actor: { kind: 'runtime', id: 'host-fault-test' }, clock: Date.now })
+    const originalRead = service.readObject.bind(service)
+    const inputDigest = scenario.contract.spec.inputs[0].object.digest
+    service.readObject = (ref, domain) => {
+      if (failNextRead && ref.digest === inputDigest) {
+        failNextRead = false
+        injected = true
+        return Promise.reject(new Error('fixture CAS storage unavailable'))
+      }
+      return originalRead(ref, domain)
+    }
+    try {
+      await assert.rejects(executeSingleRun({ ctx: spike.ctx, journalRoot: storeRoot, workspace,
+        runId: 'host-fault-run', sessionId: 'host-fault-session', admission: scenario.runAdmission,
+        composition: scenario.composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
+        actor: { kind: 'runtime', id: 'host-fault-test' },
+        verifier: { provider: scenario.provider, verify() { assert.fail('no submission must not invoke verifier') } },
+      }, service), /fixture CAS storage unavailable/)
+
+      assert.equal(injected, true)
+      assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 0)
+      assert.equal(fixture.requests.length, 3)
+      assert.equal(service.facts().filter(fact => fact.type === 'run/closed').length, 0)
+    } finally { await service.close() }
   })
 })

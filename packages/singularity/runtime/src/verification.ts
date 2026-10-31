@@ -1,27 +1,28 @@
-import {
-  canonicalize,
-  executionRecordPayloadSchema,
-  parseProtocolValue,
-  seal,
-  sealEvidence,
-  validateEvidence,
-  validatePublicReceipt,
-} from '@singularity/protocol'
 import type {
-  Evidence,
-  ExecutionRecord,
-  JsonValue,
-  PublicReceipt,
-  PublicReceiptValidation,
-  Ref,
-  SessionCut,
-  TaskContract,
-  UsageRecord,
-  VerifyRequest,
+Evidence,
+ExecutionRecord,
+JsonValue,
+PublicReceipt,
+PublicReceiptValidation,
+Ref,
+SessionCut,
+TaskContract,
+UsageRecord,
+VerifyRequest,
 } from '@singularity/protocol'
+import {
+canonicalize,
+executionRecordPayloadSchema,
+parseProtocolValue,
+seal,
+sealEvidence,
+validateEvidence,
+validatePublicReceipt,
+} from '@singularity/protocol'
+import { SingleRunError } from './errors.ts'
 
 import type { CasDigestDomain } from './store.ts'
-import type { CasObjectReader, CasObjectWriter } from './workspace.ts'
+import type { CasObjectReader,CasObjectWriter } from './workspace.ts'
 
 /** Stable closure reasons used by the fixed retry policy. */
 export const VERIFIER_ERROR_REASON = 'verifier-error'
@@ -31,7 +32,6 @@ export const VERIFIER_INVALID_REASON = 'verifier-invalid'
 export const VERIFICATION_INVALID_REASON = 'verification-invalid'
 export const NO_SUBMISSION_REASON = 'no-submission'
 export const AGENT_ERROR_REASON = 'agent-error'
-export const WAKE_REFUSED_REASON = 'wake-refused'
 
 /** Invalid-verification subclass; invalid receipts never become Evidence. */
 export type InvalidVerificationCode =
@@ -43,6 +43,8 @@ export type InvalidVerificationCode =
 
 /** Runtime-side verifier request: data fields plus read-only CAS access. */
 export interface VerifierRequest extends VerifyRequest {
+  /** The domain adapter forwards cancellation and settles after its verifier stops. */
+  readonly signal: AbortSignal
   /**
    * Read one frozen CAS object and verify its digest under `domain`. The
    * verifier never receives the activity workspace or a writable handle.
@@ -60,6 +62,15 @@ export interface RunVerifier {
   verify(request: VerifierRequest): Promise<PublicReceipt>
 }
 
+/** Worker, trace and comparator views never expose the opaque private receipt. */
+export function publicVerificationOf(verification: Evidence['verification']): Omit<Evidence['verification'], 'privateReceipt'> {
+  return {
+    provider: verification.provider,
+    operationId: verification.operationId,
+    publicReceipt: verification.publicReceipt,
+  }
+}
+
 export interface RunVerificationInput {
   readonly contract: TaskContract
   readonly runId: string
@@ -68,6 +79,7 @@ export interface RunVerificationInput {
   readonly verifier: RunVerifier
   readonly reader: CasObjectReader
   readonly writer: CasObjectWriter
+  readonly signal?: AbortSignal
 }
 
 /** Host classification plus the sealed receipt ref written before closure. */
@@ -96,11 +108,7 @@ export async function verifyRunSubmission(
 ): Promise<RunVerification> {
   if (input.verifier.provider.id !== input.contract.acceptance.id
     || input.verifier.provider.digest !== input.contract.acceptance.digest) {
-    return {
-      verdict: 'invalid',
-      code: 'verification-invalid',
-      reason: `${VERIFICATION_INVALID_REASON}: verifier provider does not match the frozen acceptance`,
-    }
+    throw new SingleRunError('COMPOSITION_MISMATCH', 'verifier provider does not match the frozen acceptance')
   }
   const operationId = `${input.runId}:verify`
   const requiredCriteria = input.contract.spec.criteria
@@ -108,34 +116,35 @@ export async function verifyRunSubmission(
     .map(criterion => criterion.id)
 
   let receipt: PublicReceipt
-  let timer: ReturnType<typeof setTimeout> | undefined
+  const remaining = input.contract.limits.deadlineAt - clock()
+  const deadline = AbortSignal.timeout(Math.min(2_147_483_647, Math.max(0, remaining)))
+  const signal = input.signal === undefined ? deadline : AbortSignal.any([input.signal, deadline])
+  const timeout = new DOMException('verifier deadline', 'TimeoutError')
   try {
-    const startedAt = clock()
-    const remaining = input.contract.limits.deadlineAt - startedAt
-    if (!Number.isSafeInteger(remaining) || remaining <= 0) throw new DOMException('verifier deadline', 'TimeoutError')
-    receipt = await Promise.race([input.verifier.verify({
+    signal.throwIfAborted()
+    if (remaining <= 0) throw timeout
+    // Await the domain operation itself; a timer must not abandon a live verifier.
+    receipt = await input.verifier.verify({
       operationId,
       task: input.contract,
       inputs: input.inputs,
       outputs: input.outputs,
+      signal,
       readObject: (ref, domain) => input.reader.readObject(ref, domain),
-    }), new Promise<PublicReceipt>((_resolve, reject) => {
-      timer = setTimeout(() => { reject(new DOMException('verifier deadline', 'TimeoutError')) },
-        Math.min(2_147_483_647, remaining))
-    })])
-    const finishedAt = clock()
-    if (!Number.isSafeInteger(finishedAt) || finishedAt < startedAt || finishedAt >= input.contract.limits.deadlineAt) {
-      throw new DOMException('verifier deadline', 'TimeoutError')
-    }
+    })
+    signal.throwIfAborted()
+    if (clock() >= input.contract.limits.deadlineAt) throw timeout
   } catch (error) {
-    const code = error instanceof DOMException && error.name === 'TimeoutError' ? VERIFIER_TIMEOUT_REASON : VERIFIER_ERROR_REASON
+    const aborted = signal.aborted && (error === signal.reason
+      || (error instanceof Error && error.name === 'AbortError' && error.cause === signal.reason))
+    if (aborted && input.signal?.aborted === true) throw input.signal.reason
+    if (error !== timeout && !(aborted && deadline.aborted)) throw error
+    const code = VERIFIER_TIMEOUT_REASON
     return {
       verdict: 'invalid',
       code,
       reason: `${code}: ${errorMessage(error)}`,
     }
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
   }
 
   const validation = validatePublicReceipt(receipt, {
@@ -200,6 +209,7 @@ export interface BuildEvidenceOptions {
   readonly runId: string
   readonly composition: Ref
   readonly outputs: readonly Ref[]
+  readonly inputs?: readonly Ref[]
   readonly receipt: PublicReceipt
   readonly receiptRef: Ref
   readonly usage: UsageRecord
@@ -215,7 +225,7 @@ export function buildEvidence(options: BuildEvidenceOptions): Evidence {
     runId: options.runId,
     contractDigest: options.contract.digest,
     method: options.contract.method,
-    inputs: options.contract.spec.inputs.map(input => input.object),
+    inputs: options.inputs ?? options.contract.spec.inputs.map(input => input.object),
     outputs: options.outputs,
     composition: options.composition,
     verification: {
@@ -246,7 +256,6 @@ export interface BuildExecutionRecordOptions {
   readonly usage: UsageRecord
   readonly sessionCut: SessionCut
   readonly reason: string
-  readonly drainPending?: boolean
 }
 
 /** Seals a non-Evidence closure record in the object digest domain. */
@@ -265,7 +274,6 @@ export function buildExecutionRecord(
     usage: options.usage,
     sessionCut: options.sessionCut,
     reason: options.reason,
-    ...(options.drainPending === undefined ? {} : { drainPending: options.drainPending }),
   })
   return seal('object', payload)
 }

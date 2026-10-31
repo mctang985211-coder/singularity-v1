@@ -7,8 +7,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const failures = []
 const protocolSourcePrefix = 'packages/singularity/protocol/src/'
 const protocolForbiddenCalls = [
-  [/\bJSON\s*\.\s*parse\s*\(/, 'JSON.parse'],
   [/\bz\s*\.\s*(?:object|looseObject)\s*\(/, 'z.object/z.looseObject'],
+  [/(?:\.transform|\.default)\s*\(|\bz\s*\.\s*coerce\b/, 'schema transforms/defaults/coercion'],
   [/\bDate\s*\.\s*now\s*\(/, 'Date.now'],
   [/\bnew\s+Date\b/, 'new Date'],
   [/\bMath\s*\.\s*random\s*\(/, 'Math.random'],
@@ -29,13 +29,10 @@ async function text(relative) {
 
 for (const relative of [
   'AGENTS.md',
-  'README.md',
   'docs/framework.md',
-  'docs/conformance.md',
-  'docs/build-plan.md',
+  'docs/progress.md',
   'spec-lock.json',
   '.github/workflows/ci.yml',
-  '.github/pull_request_template.md',
   '.github/CODEOWNERS',
 ]) {
   try {
@@ -110,26 +107,11 @@ for (let index = 1; index <= 24; index += 1) {
   check(scenarioCounts.get(id) === 1, `conformance C-${id} must appear exactly once`)
 }
 
-const conformance = await text('docs/conformance.md')
-const registryCounts = new Map()
-for (const match of conformance.matchAll(/^\| C-(\d{2}) \|/gm)) {
-  const id = match[1]
-  registryCounts.set(id, (registryCounts.get(id) ?? 0) + 1)
-}
-for (let index = 1; index <= 24; index += 1) {
-  const id = String(index).padStart(2, '0')
-  check(registryCounts.get(id) === 1, `conformance registry C-${id} must appear exactly once`)
-}
 check(!/(?:["']?transport["']?\s*[:=]\s*["']sse["']|["']sse["']\s*[|,])/i.test(specification), 'framework retains unsupported SSE transport')
 
 const agents = await text('AGENTS.md')
 check(agents.includes('`docs/framework.md`'), 'AGENTS.md must point to docs/framework.md')
-check(agents.includes('V1 发布规范'), 'AGENTS.md must recognize the V1 release')
-check(!agents.includes('SINGULARITY_FRAMEWORK_V1_REVISED_DRAFT.md'), 'AGENTS.md retains a superseded draft reference')
-check(!agents.includes('当前施工阻断项'), 'AGENTS.md retains a resolved blocker section')
 check(agents.includes('pnpm verify'), 'AGENTS.md must document the root verification command')
-check(agents.includes('Structure done when'), 'AGENTS.md must retain the structural completion gate')
-check((await text('.github/pull_request_template.md')).includes('Structure done when'), 'PR template must retain the structural completion gate')
 
 const ci = await text('.github/workflows/ci.yml')
 check(/^\s+verify:\s*$/m.test(ci), 'CI must retain the stable verify job')

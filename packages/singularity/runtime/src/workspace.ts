@@ -1,30 +1,30 @@
 import { constants } from 'node:fs'
 import {
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  realpath,
-  writeFile,
+lstat,
+mkdir,
+open,
+readdir,
+realpath,
+writeFile
 } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { dirname,join,relative,resolve } from 'node:path'
+import type { TreeBundleFile } from './resource-bundle.ts'
+import { compareBundlePath,sealTreeManifest } from './resource-bundle.ts'
 
-import {
-  canonicalize,
-  seal,
-  sealSubmissionManifest,
-  validateSubmissionManifest,
-} from '@singularity/protocol'
 import type {
-  InputRef,
-  JsonValue,
-  OutputSpec,
-  Ref,
-  SubmittedLearningDraft,
-  SubmittedOutput,
-  SubmissionCheck,
-  SubmissionManifest,
-  TaskContract,
+InputRef,
+JsonValue,
+OutputSpec,
+Ref,
+SubmissionCheck,
+SubmissionManifest,
+SubmittedLearningDraft,
+SubmittedOutput,
+TaskContract,
+} from '@singularity/protocol'
+import {
+canonicalize,
+sealSubmissionManifest,
 } from '@singularity/protocol'
 
 import type { CasDigestDomain } from './store.ts'
@@ -32,12 +32,10 @@ import type { CasDigestDomain } from './store.ts'
 /** Stable local submit rejection; the tool layer maps these to INVALID_ARGUMENT. */
 export type SubmissionErrorCode =
   | 'OUTPUT_ID_INVALID'
-  | 'OUTPUT_PATH_INVALID'
   | 'OUTPUT_MISSING'
   | 'OUTPUT_SYMLINK'
   | 'OUTPUT_UNSUPPORTED'
   | 'OUTPUT_TOO_LARGE'
-  | 'OUTPUT_READ_FAILED'
 
 /** Submission freeze failure with a stable diagnostic code. */
 export class SubmissionError extends Error {
@@ -87,18 +85,7 @@ const draftSpecs = [
   },
 ] as const satisfies readonly DraftSpec[]
 
-interface TreeFile {
-  readonly path: string
-  readonly bytes: number
-  readonly object: Ref
-}
-
-export interface SealedTreeManifest {
-  readonly v: 1
-  readonly kind: 'tree'
-  readonly files: readonly TreeFile[]
-  readonly digest: string
-}
+export type { SealedTreeManifest } from './resource-bundle.ts'
 
 interface FrozenPath {
   readonly object: Ref
@@ -114,6 +101,8 @@ export interface FreezeSubmissionOptions {
   /** Deployment cap over all frozen output bytes in this submission. */
   readonly maxOutputBytes: number
   readonly writer: CasObjectWriter
+  /** Host-authorized snapshot: initial inputs followed by frozen direct outputs. */
+  readonly inputRefs?: readonly Ref[]
 }
 
 /** Frozen submission snapshot; all refs point at immutable CAS bytes. */
@@ -141,16 +130,10 @@ export async function prepareWorkspace(
   const canonicalRoot = await realpath(root)
   for (const input of inputs) {
     if (input.access !== 'copy-to-work') continue
-    assertWorkspaceRelativePath(input.path, 'input.path')
-    const target = resolveInside(canonicalRoot, input.path)
-    await assertNoSymlinkAncestors(canonicalRoot, input.path)
+    const target = join(canonicalRoot, input.path)
     await mkdir(dirname(target), { recursive: true })
-    const existing = await lstatOrUndefined(target)
-    if (existing?.isSymbolicLink() === true) {
-      throw new SubmissionError('OUTPUT_SYMLINK', `input path ${JSON.stringify(input.path)} is a symlink`)
-    }
     const { bytes } = await reader.readObject(input.object, 'object')
-    await writeFile(target, bytes)
+    await writeFile(target, bytes, { flag: 'wx', mode: 0o644 })
   }
   return canonicalRoot
 }
@@ -174,15 +157,7 @@ export async function freezeSubmission(
   let bytes = 0
 
   for (const output of declared) {
-    if (!ids.has(output.id)) {
-      if (output.required) {
-        throw new SubmissionError(
-          'OUTPUT_MISSING',
-          `required output ${JSON.stringify(output.id)} is absent from outputIds`,
-        )
-      }
-      continue
-    }
+    if (!ids.has(output.id)) continue
     const budget = options.maxOutputBytes - bytes
     const frozen = await freezeDeclaredPath({
       workspace,
@@ -191,15 +166,7 @@ export async function freezeSubmission(
       maxBytes: budget,
       writer: options.writer,
     })
-    if (frozen === undefined) {
-      if (output.required) {
-        throw new SubmissionError(
-          'OUTPUT_MISSING',
-          `required output ${JSON.stringify(output.id)} does not exist at ${JSON.stringify(output.path)}`,
-        )
-      }
-      continue
-    }
+    if (frozen === undefined) continue
     bytes += frozen.bytes
     frozenOutputs.set(output.id, frozen)
     checks.push({ outputId: output.id, bytes: frozen.bytes, symlinks: 'none' })
@@ -254,22 +221,11 @@ export async function freezeSubmission(
     learningDrafts,
     checks,
   })
-  const validation = validateSubmissionManifest(manifest, {
-    contract: options.contract,
-    runId: options.runId,
-  })
-  if (!validation.valid) {
-    throw new SubmissionError('OUTPUT_ID_INVALID', `submission manifest is invalid: ${validation.reason}`)
-  }
-
   const manifestRef = await options.writer.putObject(
     `${options.runId}:submission`,
     textEncoder.encode(canonicalize(manifest as unknown as JsonValue)),
     'object',
   )
-  if (manifestRef.digest !== manifest.digest) {
-    throw new SubmissionError('OUTPUT_READ_FAILED', 'manifest CAS digest does not match its seal')
-  }
 
   const outputRefs: Ref[] = []
   for (const output of manifest.outputs) {
@@ -282,7 +238,7 @@ export async function freezeSubmission(
   return {
     manifest,
     manifestRef,
-    inputRefs: options.contract.spec.inputs.map(input => input.object),
+    inputRefs: options.inputRefs ?? options.contract.spec.inputs.map(input => input.object),
     outputRefs,
   }
 }
@@ -326,7 +282,6 @@ interface FreezeDeclaredPathOptions {
 async function freezeDeclaredPath(
   options: FreezeDeclaredPathOptions,
 ): Promise<FrozenPath | undefined> {
-  assertOutputPath(options.output.path, `output ${JSON.stringify(options.output.id)}`)
   if (options.output.kind === 'file') {
     return freezeFile({
       workspace: options.workspace,
@@ -363,35 +318,13 @@ async function freezeFile(options: FreezeFileOptions): Promise<FrozenPath | unde
   if (options.maxBytes < 0) {
     throw new SubmissionError('OUTPUT_TOO_LARGE', 'submission size cap is exhausted')
   }
-  const absolute = resolveInside(options.workspace, options.path)
-  await assertNoSymlinkAncestors(options.workspace, options.path)
-  let stat
+  const absolute = join(options.workspace, options.path)
+  let bytes
   try {
-    stat = await lstat(absolute)
+    bytes = await readNoFollowFile(absolute, options.path, options.maxBytes)
   } catch (error) {
-    if (isErrno(error, 'ENOENT') && options.missingAllowed) return undefined
-    throw new SubmissionError('OUTPUT_MISSING', `cannot stat ${JSON.stringify(options.path)}`, {
-      cause: error,
-    })
-  }
-  if (stat.isSymbolicLink()) {
-    throw new SubmissionError('OUTPUT_SYMLINK', `${JSON.stringify(options.path)} is a symlink`)
-  }
-  if (!stat.isFile()) {
-    throw new SubmissionError(
-      'OUTPUT_UNSUPPORTED',
-      `${JSON.stringify(options.path)} is not a regular file`,
-    )
-  }
-  if (stat.size > options.maxBytes) {
-    throw new SubmissionError(
-      'OUTPUT_TOO_LARGE',
-      `${JSON.stringify(options.path)} is ${String(stat.size)} bytes, above the remaining ${String(options.maxBytes)}`,
-    )
-  }
-  const bytes = await readNoFollowFile(absolute, options.path)
-  if (bytes.byteLength > options.maxBytes) {
-    throw new SubmissionError('OUTPUT_TOO_LARGE', `${JSON.stringify(options.path)} grew above its cap`)
+    if (options.missingAllowed && error instanceof SubmissionError && error.code === 'OUTPUT_MISSING') return undefined
+    throw error
   }
   const object = await options.writer.putObject(
     `${options.runId}:${options.objectId}`,
@@ -415,13 +348,13 @@ async function freezeTree(options: FreezeTreeOptions): Promise<FrozenPath | unde
   if (options.maxBytes < 0) {
     throw new SubmissionError('OUTPUT_TOO_LARGE', 'submission size cap is exhausted')
   }
-  const absolute = resolveInside(options.workspace, options.path)
-  await assertNoSymlinkAncestors(options.workspace, options.path)
+  const absolute = join(options.workspace, options.path)
   let rootStat
   try {
     rootStat = await lstat(absolute)
   } catch (error) {
-    if (isErrno(error, 'ENOENT') && options.missingAllowed) return undefined
+    if (!isErrno(error, 'ENOENT')) throw error
+    if (options.missingAllowed) return undefined
     throw new SubmissionError('OUTPUT_MISSING', `cannot stat ${JSON.stringify(options.path)}`, {
       cause: error,
     })
@@ -436,83 +369,46 @@ async function freezeTree(options: FreezeTreeOptions): Promise<FrozenPath | unde
     )
   }
 
-  const files: TreeFile[] = []
+  const files: TreeBundleFile[] = []
   let bytes = 0
-  const visit = async (directory: string, relative: string): Promise<void> => {
-    const entries = await readdir(directory, { withFileTypes: true })
-    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
-    for (const entry of entries) {
-      const childRelative = relative.length === 0 ? entry.name : `${relative}/${entry.name}`
-      const childAbsolute = join(directory, entry.name)
-      const stat = await lstat(childAbsolute)
-      if (stat.isSymbolicLink()) {
-        throw new SubmissionError(
-          'OUTPUT_SYMLINK',
-          `${JSON.stringify(childRelative)} is a symlink`,
-        )
-      }
-      if (stat.isDirectory()) {
-        await visit(childAbsolute, childRelative)
-        continue
-      }
-      if (!stat.isFile()) {
-        throw new SubmissionError(
-          'OUTPUT_UNSUPPORTED',
-          `${JSON.stringify(childRelative)} is not a regular file`,
-        )
-      }
-      bytes += stat.size
-      if (bytes > options.maxBytes) {
-        throw new SubmissionError(
-          'OUTPUT_TOO_LARGE',
-          `${JSON.stringify(options.path)} exceeds the ${String(options.maxBytes)} byte cap`,
-        )
-      }
-      const data = await readNoFollowFile(childAbsolute, childRelative)
-      bytes += data.byteLength - stat.size
-      if (bytes > options.maxBytes) {
-        throw new SubmissionError(
-          'OUTPUT_TOO_LARGE',
-          `${JSON.stringify(options.path)} exceeds the ${String(options.maxBytes)} byte cap`,
-        )
-      }
-      const object = await options.writer.putObject(
-        `${options.runId}:${options.objectId}:${childRelative}`,
-        data,
-        'object',
-      )
-      files.push({ path: childRelative, bytes: data.byteLength, object })
+  const entries = await readdir(absolute, { recursive: true, withFileTypes: true })
+  const paths = entries.map(entry => ({ entry, path: relative(absolute, join(entry.parentPath, entry.name)) }))
+    .sort((left, right) => compareBundlePath(left.path, right.path))
+  for (const { entry, path } of paths) {
+    if (entry.isSymbolicLink()) {
+      throw new SubmissionError('OUTPUT_SYMLINK', `${JSON.stringify(path)} is a symlink`)
     }
+    if (entry.isDirectory()) continue
+    if (!entry.isFile()) {
+      throw new SubmissionError('OUTPUT_UNSUPPORTED', `${JSON.stringify(path)} is not a regular file`)
+    }
+    const data = await readNoFollowFile(join(absolute, path), path, options.maxBytes - bytes)
+    bytes += data.byteLength
+    const object = await options.writer.putObject(`${options.runId}:${options.objectId}:${path}`, data, 'object')
+    files.push({ path, bytes: data.byteLength, object })
   }
-  await visit(absolute, '')
 
-  const manifest = seal('object', {
-    v: 1,
-    kind: 'tree',
-    files: files as unknown as JsonValue,
-  }) as unknown as SealedTreeManifest
+  const manifest = sealTreeManifest(files)
   const object = await options.writer.putObject(
     `${options.runId}:${options.objectId}`,
     textEncoder.encode(canonicalize(manifest as unknown as JsonValue)),
     'object',
   )
-  if (object.digest !== manifest.digest) {
-    throw new SubmissionError('OUTPUT_READ_FAILED', 'tree manifest CAS digest does not match its seal')
-  }
   return { object, bytes }
 }
 
-async function readNoFollowFile(absolute: string, relative: string): Promise<Uint8Array> {
+async function readNoFollowFile(absolute: string, relative: string, maxBytes: number): Promise<Uint8Array> {
   let handle
   try {
-    handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW)
+    handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   } catch (error) {
     if (isErrno(error, 'ELOOP')) {
       throw new SubmissionError('OUTPUT_SYMLINK', `${JSON.stringify(relative)} is a symlink`)
     }
-    throw new SubmissionError('OUTPUT_READ_FAILED', `cannot open ${JSON.stringify(relative)}`, {
-      cause: error,
-    })
+    if (isErrno(error, 'ENOENT')) {
+      throw new SubmissionError('OUTPUT_MISSING', `${JSON.stringify(relative)} is missing`, { cause: error })
+    }
+    throw error
   }
   try {
     const stat = await handle.stat()
@@ -522,62 +418,12 @@ async function readNoFollowFile(absolute: string, relative: string): Promise<Uin
         `${JSON.stringify(relative)} is not a regular file`,
       )
     }
-    return await handle.readFile()
+    if (stat.size > maxBytes) throw new SubmissionError('OUTPUT_TOO_LARGE', `${JSON.stringify(relative)} exceeds the remaining output cap`)
+    const data = await handle.readFile()
+    if (data.byteLength > maxBytes) throw new SubmissionError('OUTPUT_TOO_LARGE', `${JSON.stringify(relative)} exceeds the remaining output cap`)
+    return data
   } finally {
     await handle.close()
-  }
-}
-
-function assertOutputPath(path: string, label: string): void {
-  assertWorkspaceRelativePath(path, label)
-  if (path === 'learning-drafts' || path.startsWith('learning-drafts/')) {
-    throw new SubmissionError(
-      'OUTPUT_PATH_INVALID',
-      `${label} must not use the reserved learning-drafts path`,
-    )
-  }
-}
-
-function assertWorkspaceRelativePath(path: string, label: string): void {
-  if (path.length === 0 || isAbsolute(path) || path.includes('\\')) {
-    throw new SubmissionError('OUTPUT_PATH_INVALID', `${label} must be a relative POSIX path`)
-  }
-  const segments = path.split('/')
-  if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) {
-    throw new SubmissionError('OUTPUT_PATH_INVALID', `${label} must not contain empty or dot segments`)
-  }
-}
-
-function resolveInside(root: string, relative: string): string {
-  const target = resolve(root, ...relative.split('/'))
-  if (target !== root && !target.startsWith(`${root}${sep}`)) {
-    throw new SubmissionError('OUTPUT_PATH_INVALID', `${JSON.stringify(relative)} escapes the workspace`)
-  }
-  return target
-}
-
-async function assertNoSymlinkAncestors(root: string, relative: string): Promise<void> {
-  const segments = relative.split('/').slice(0, -1)
-  let current = root
-  for (const segment of segments) {
-    current = join(current, segment)
-    const stat = await lstatOrUndefined(current)
-    if (stat === undefined) return
-    if (stat.isSymbolicLink()) {
-      throw new SubmissionError('OUTPUT_SYMLINK', `path ancestor ${JSON.stringify(segment)} is a symlink`)
-    }
-    if (!stat.isDirectory()) {
-      throw new SubmissionError('OUTPUT_UNSUPPORTED', `path ancestor ${JSON.stringify(segment)} is not a directory`)
-    }
-  }
-}
-
-async function lstatOrUndefined(path: string) {
-  try {
-    return await lstat(path)
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return undefined
-    throw error
   }
 }
 

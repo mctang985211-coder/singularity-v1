@@ -1,24 +1,9 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
+import { readSessionEvents } from './session-events.ts'
 
-import { deriveContextEpochFromEvents } from './epoch.ts'
 import type { ContextEpoch } from './epoch.ts'
-
-/** Stable diagnostic for a session log that cannot be read as committed events. */
-type SessionReceiptErrorCode =
-  | 'SESSION_LOG_INCOMPLETE'
-  | 'DUPLICATE_TOOL_CALL'
-  | 'TOOL_CALL_NOT_FOUND'
-
-class SessionReceiptError extends Error {
-  override readonly name = 'SessionReceiptError'
-  readonly code: SessionReceiptErrorCode
-
-  constructor(code: SessionReceiptErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options)
-    this.code = code
-  }
-}
+import { deriveContextEpoch } from './epoch.ts'
 
 /** One committed tool invocation from the DSH session log. */
 export interface ToolCallRecord {
@@ -42,7 +27,6 @@ export interface ToolResultRecord {
   /** Concatenated text blocks; undefined when the result has no text block. */
   readonly text: string | undefined
   readonly surfaceOp: 'append' | 'replace'
-  readonly sourceEventSeqs: readonly number[]
   readonly surfaceVisible: boolean
 }
 
@@ -50,27 +34,18 @@ export interface ToolResultRecord {
 export interface SessionToolView {
   readonly sessionId: string
   readonly epoch: ContextEpoch
-  readonly surfaceNodes: ReadonlySet<number>
   readonly calls: readonly ToolCallRecord[]
   readonly results: readonly ToolResultRecord[]
 }
 
 /**
- * Reads the committed DSH session log through `eventAt`/`seq` and derives the
+ * Reads committed tool records and uses native surface/lifecycle fields for the
  * current surface and context epoch. This module owns DSH event shape only;
  * business validation belongs to its caller.
  */
 export function readSessionToolView(session: Session): SessionToolView {
-  // alpha2 exposes no non-deprecated raw event reader; this adapter is the one
-  // intentionally unmigrated consumer for persisted tool receipts.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  const events = session.snapshotEvents()
-  if (events.length !== Number(session.seq)) {
-    throw new SessionReceiptError(
-      'SESSION_LOG_INCOMPLETE',
-      `session ${JSON.stringify(String(session.id))} logged ${String(events.length)} events for end offset ${String(session.seq)}`,
-    )
-  }
+  // The synchronous receipt consumer shares the one alpha2 compatibility read.
+  const events = readSessionEvents(session)
   const surfaceNodes = new Set(session.surface.nodes.map(Number))
   const calls: ToolCallRecord[] = []
   const results: ToolResultRecord[] = []
@@ -99,29 +74,22 @@ export function readSessionToolView(session: Session): SessionToolView {
       content: message.content,
       text,
       surfaceOp,
-      sourceEventSeqs: (event.sourceEventSeqs ?? []).map(Number),
       surfaceVisible: surfaceNodes.has(event.seq),
     })
   }
   return {
     sessionId: String(session.id),
-    epoch: deriveContextEpochFromEvents(session.id, events),
-    surfaceNodes,
+    epoch: deriveContextEpoch(session),
     calls,
     results,
   }
 }
 
-/** Finds exactly one committed call for a tool execution identity. */
+/** Resolve the native DSH call identity; DSH owns log integrity and uniqueness. */
 export function findCurrentToolCall(view: SessionToolView, callId: string): ToolCallRecord {
-  const matches = view.calls.filter(call => call.callId === callId)
-  if (matches.length !== 1) {
-    throw new SessionReceiptError(
-      matches.length === 0 ? 'TOOL_CALL_NOT_FOUND' : 'DUPLICATE_TOOL_CALL',
-      `expected exactly one tool/call for ${JSON.stringify(callId)}, found ${String(matches.length)}`,
-    )
-  }
-  return matches[0]
+  const call = view.calls.find(call => call.callId === callId)
+  if (call === undefined) throw new Error(`DSH tool call ${JSON.stringify(callId)} is missing`)
+  return call
 }
 
 function resultText(content: readonly ContentBlock[]): string | undefined {
