@@ -597,7 +597,7 @@ function applyChildrenAdmitted(
     }
     assertReservation(admitted.budgetReservation, child.limits, fact)
 
-    if (hasBindingWinner(runtime, parent, parentRun.runId, binding.bindingId)) {
+    if (binding.join === 'required' && hasBindingWinner(runtime, parent, parentRun.runId, binding.bindingId)) {
       fail(
         'BINDING_ALREADY_SATISFIED',
         fact,

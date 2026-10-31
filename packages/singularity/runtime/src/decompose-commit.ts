@@ -219,6 +219,7 @@ export async function commitDecomposeBatch(input: CommitDecomposeInput): Promise
 
   const replacements = new Map<string, { feedbackRef: Ref; supersedesChildIds: string[] }>()
   for (const child of batch.children) {
+    if (child.join !== 'required') continue
     const predecessors = [...state.tasks.values()].filter(task => task.parentRunId === input.parentRunId
       && task.bindingId === child.bindingId && task.phase === 'closed'
       && task.closed?.outcome !== 'verified' && task.supersededBy === undefined)

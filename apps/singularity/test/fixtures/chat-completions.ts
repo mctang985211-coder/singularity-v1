@@ -129,7 +129,7 @@ export interface ChatCompletionsFixture {
   close(): Promise<void>
 }
 
-const DEFAULT_MODEL = 'deepseek-v4.1-flash'
+const DEFAULT_MODEL = 'deepseek-flash'
 const COMPLETION_ID_PREFIX = 'chatcmpl-singularity-spike'
 const CREATED_AT = 1
 

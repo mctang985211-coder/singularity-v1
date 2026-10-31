@@ -705,6 +705,35 @@ void test('probe bindings do not block submit without a child', () => {
   assert.equal(mustGet(state.tasks, 'task-root').phase, 'active')
 })
 
+void test('a verified probe leaves its binding available for another batch while a required winner stays fixed', () => {
+  for (const join of ['required', 'probe'] as const) {
+    const root = join === 'probe' ? makeProbeRootContract() : makeRootContract()
+    const method = join === 'probe' ? probeMethod : baseMethod
+    const methodRef = { id: method.id, digest: method.digest }
+    const bindingId = join === 'probe' ? 'child-probe' : 'child-required'
+    const first = makeChildContract({ taskId: 'task-first', bindingId, method: methodRef })
+    const second = makeChildContract({ taskId: 'task-second', batchId: 'batch-2', bindingId, method: methodRef })
+    const journal = new Journal()
+    journal.add('task/admitted', { taskId: root.taskId, contract: contractRef(root) })
+    journal.add('run/opened', runOpened(root.taskId, 'run-root-1', 1))
+    journal.add('task/children-admitted', admission('run-root-1', 'batch-1', [admittedChild(first, join)]))
+    journal.add('run/opened', runOpened(first.taskId, 'run-first-1', 1))
+    journal.add('run/submitted', submitted('run-first-1'))
+    journal.add('run/closed', verifiedClosed('run-first-1'))
+    journal.add('task/closed', verifiedTask(first.taskId, 'run-first-1'))
+    journal.add('task/children-admitted', admission('run-root-1', 'batch-2', [admittedChild(second, join)]))
+    const context = makeContext([root], [method])
+    if (join === 'required') {
+      expectReducerError(() => reduceTaskRunFacts(journal.facts, context), 'BINDING_ALREADY_SATISFIED')
+    } else {
+      const state = reduceTaskRunFacts(journal.facts, context)
+      assert.equal(state.tasks.get(first.taskId)?.closed?.outcome, 'verified')
+      assert.equal(state.tasks.get(first.taskId)?.supersededBy, undefined)
+      assert.equal(state.tasks.get(second.taskId)?.phase, 'open')
+    }
+  }
+})
+
 void test('root admission checks contract ref, contract digest, method and template', () => {
   const root = makeRootContract()
   const admitted = { taskId: 'task-root', contract: contractRef(root) }

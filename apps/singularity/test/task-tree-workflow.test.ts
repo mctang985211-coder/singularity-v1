@@ -134,82 +134,88 @@ void test('S4 required child failure returns scheduler feedback, enforces replan
   })
 })
 
-void test('S4 second direct batch explicitly receives the first batch frozen output and parent integrates both required winners', { timeout: 240_000 }, async () => {
-  const taskId = `task-batches-${String(process.pid)}-${String(Date.now())}`
-  const runId = `${taskId}:run`
-  let scenario: Scenario | undefined
-  let child: TaskContract | undefined
-  let childRunId = ''
-  let firstOutput: InputRef | undefined
-  const children: TaskContract[] = []
-  await withHarness((request, index) => {
-    assert.ok(scenario)
-    if ([0, 4, 8, 13, 18].includes(index)) return call(index, 'singularity_read', { kind: 'self' })
-    if ([1, 5, 9, 14, 19].includes(index)) {
-      const current = index === 5 || index === 14 ? child : scenario.contract
-      assert.ok(current)
-      return plan(request, index, scenario, current, index === 5 || index === 14 ? childRunId : runId)
-    }
-    if (index === 2 || index === 11) return call(index, 'singularity_decompose', { action: 'prepare', bindingId: index === 2 ? 'first' : 'second' })
-    if (index === 3) return commit(request, index, 'first')
-    if (index === 6 || index === 16) return call(index, 'bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
-    if (index === 7 || index === 17) return call(index, 'singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
-    if (index === 10 || index === 20) return call(index, 'singularity_read', { kind: 'children' })
-    if (index === 12) {
-      firstOutput = outputInput(request)
-      return commit(request, index, 'second', [firstOutput])
-    }
-    if (index === 15) {
-      assert.ok(firstOutput)
-      return call(index, 'singularity_read', { kind: 'resource', id: firstOutput.id })
-    }
-    if (index === 21) return call(index, 'bash', { command: `cat 'children/${encodeURIComponent(children[1].taskId)}/child-note' > result.txt` })
-    if (index === 22) return submitReply()
-    throw new Error(`Unexpected multi-batch fixture request ${String(index)}`)
-  }, async ({ spike, fixture, workspace, storeRoot }) => {
-    const original = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1, maxStepsPerRun: 40, maxDepth: 1, maxTasks: 3,
-      childBinding: { bindingId: 'first', templateId: 'template:child', brief: 'Produce the first direct result.', join: 'required', example: s4b2Example() } })
-    const actor = { kind: 'runtime', id: 'singularity-runtime' } as const
-    const service = await CommandService.open({ root: storeRoot, actor, clock: Date.now })
-    try {
-      const method = sealMethodRevision({ ...methodPayload(original.method), id: 'method:batches-fixture',
-        templates: original.method.templates.map(template => template.id === original.contract.template.id
-          ? { ...template, children: [...template.children, { bindingId: 'second', templateId: 'template:child', brief: 'Consume the frozen first result.', join: 'required' }] }
-          : template) })
-      const methodRef = await service.putObject(method.id, jsonBytes(method), 'method')
-      const contract = sealTaskContract({ ...contractPayload(original.contract), method: methodRef, template: { id: original.contract.template.id, digest: method.digest } })
-      const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract, agentOptions: agentOptions(), base: { v: 1, seed: contract.environment.seed } })
-      scenario = { ...original, method, contract, composition }
-      const verifier = (task: TaskContract): RunVerifier => ({ provider: task.acceptance, async verify(request) {
-        const output = request.outputs[0]
-        assert.ok(output)
-        assert.equal(new TextDecoder().decode((await request.readObject(output, 'object')).bytes), FROZEN_OUTPUT)
-        if (task.origin.kind === 'child' && task.origin.bindingId === 'second') {
-          assert.ok(firstOutput)
-          assert.deepEqual(request.inputs, [firstOutput.object])
-        }
-        return sealPublicReceipt({ v: 1, provider: task.acceptance, operationId: request.operationId, contractDigest: task.digest,
-          inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-          criteria: task.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Exact bytes.' })),
-          exit: { code: 0, signal: null }, timedOut: false })
-      } })
-      const result = await executeTaskTree({ ctx: spike.ctx, journalRoot: storeRoot, workspace, runId, sessionId: `${runId}:session`,
-        admission: { ...original.runAdmission, contract, budgetReservation: { ...original.runAdmission.budgetReservation, steps: 40 } },
-        composition, agentOptions: agentOptions(), verifier: verifier(contract), maxOutputBytes: 1024, maxActive: 1, workspaceRoot: join(workspace, 'runs'),
-        async resolveRun(input) {
-          child = input.contract
-          childRunId = input.runId
-          children.push(child)
-          return { composition: await buildSingleRunComposition(spike.ctx, { store: service, id: input.runId, contract: child, agentOptions: agentOptions(), base: { v: 1, seed: child.environment.seed } }), agentOptions: agentOptions(), verifier: verifier(child), maxOutputBytes: 1024 }
-        },
-      }, service)
-      assert.equal(result.root.classification, 'verified', result.root.executionRecord?.reason)
-      assert.equal(fixture.requests.length, 23)
-      assert.ok(firstOutput)
-      assert.deepEqual(children[1].spec.inputs, [firstOutput])
-      assert.equal(result.runs.length, 3)
-      assert.equal(service.facts().filter(fact => fact.type === 'task/children-admitted').length, 2)
-      assert.ok(result.runs[0]?.evidence?.outputs.some(output => output.digest === firstOutput?.object.digest))
-    } finally { await service.close() }
+for (const mode of ['required', 'probe', 'failed-probe'] as const) {
+  void test(`S4 ${mode} subsequent batch receives frozen output and integrates without reusing a winner or fabricating replacement`, { timeout: 240_000 }, async () => {
+    const secondBinding = mode === 'required' ? 'second' : 'first'
+    const taskId = `task-batches-${String(process.pid)}-${String(Date.now())}`
+    const runId = `${taskId}:run`
+    let scenario: Scenario | undefined
+    let child: TaskContract | undefined
+    let childRunId = ''
+    let firstOutput: InputRef | undefined
+    const children: TaskContract[] = []
+    await withHarness((request, index) => {
+      assert.ok(scenario)
+      if ([0, 4, 8, 13, 18].includes(index)) return call(index, 'singularity_read', { kind: 'self' })
+      if ([1, 5, 9, 14, 19].includes(index)) {
+        const current = index === 5 || index === 14 ? child : scenario.contract
+        assert.ok(current)
+        return plan(request, index, scenario, current, index === 5 || index === 14 ? childRunId : runId)
+      }
+      if (index === 2 || index === 11) return call(index, 'singularity_decompose', { action: 'prepare', bindingId: index === 2 ? 'first' : secondBinding })
+      if (index === 3) return commit(request, index, 'first')
+      if (index === 6 || index === 16) return call(index, 'bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
+      if (index === 7 || index === 17) return call(index, 'singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
+      if (index === 10 || index === 20) return call(index, 'singularity_read', { kind: 'children' })
+      if (index === 12) {
+        firstOutput = outputInput(request)
+        return commit(request, index, secondBinding, [firstOutput])
+      }
+      if (index === 15) {
+        assert.ok(firstOutput)
+        return call(index, 'singularity_read', { kind: 'resource', id: firstOutput.id })
+      }
+      if (index === 21) return call(index, 'bash', { command: `cat 'children/${encodeURIComponent(children[1].taskId)}/child-note' > result.txt` })
+      if (index === 22) return submitReply()
+      throw new Error(`Unexpected multi-batch fixture request ${String(index)}`)
+    }, async ({ spike, fixture, workspace, storeRoot }) => {
+      const original = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1, maxStepsPerRun: 40, maxDepth: 1, maxTasks: 3,
+        childBinding: { bindingId: 'first', templateId: 'template:child', brief: 'Produce the first direct result.', join: mode === 'required' ? 'required' : 'probe', example: s4b2Example() } })
+      const actor = { kind: 'runtime', id: 'singularity-runtime' } as const
+      const service = await CommandService.open({ root: storeRoot, actor, clock: Date.now })
+      try {
+        const method = sealMethodRevision({ ...methodPayload(original.method), id: 'method:batches-fixture',
+          templates: original.method.templates.map(template => template.id === original.contract.template.id
+            ? { ...template, children: mode === 'required' ? [...template.children, { bindingId: 'second', templateId: 'template:child', brief: 'Consume the frozen first result.', join: 'required' }] : template.children }
+            : { ...template, requiredCriteria: [{ id: 'exact-child-bytes', statement: 'Produce the declared bytes.', required: true }] }) })
+        const methodRef = await service.putObject(method.id, jsonBytes(method), 'method')
+        const contract = sealTaskContract({ ...contractPayload(original.contract), method: methodRef, template: { id: original.contract.template.id, digest: method.digest } })
+        const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract, agentOptions: agentOptions(), base: { v: 1, seed: contract.environment.seed } })
+        scenario = { ...original, method, contract, composition }
+        const verifier = (task: TaskContract): RunVerifier => ({ provider: task.acceptance, async verify(request) {
+          const output = request.outputs[0]
+          assert.ok(output)
+          assert.equal(new TextDecoder().decode((await request.readObject(output, 'object')).bytes), FROZEN_OUTPUT)
+          if (task.origin.kind === 'child' && task.taskId === children.at(1)?.taskId) {
+            assert.ok(firstOutput)
+            assert.deepEqual(request.inputs, [firstOutput.object])
+          }
+          return sealPublicReceipt({ v: 1, provider: task.acceptance, operationId: request.operationId, contractDigest: task.digest,
+            inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
+            criteria: task.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: mode === 'failed-probe' && task.taskId === children.at(0)?.taskId ? 'fail' : 'pass', reason: 'Fixture criterion result.' })),
+            exit: { code: 0, signal: null }, timedOut: false })
+        } })
+        const result = await executeTaskTree({ ctx: spike.ctx, journalRoot: storeRoot, workspace, runId, sessionId: `${runId}:session`,
+          admission: { ...original.runAdmission, contract, budgetReservation: { ...original.runAdmission.budgetReservation, steps: 40 } },
+          composition, agentOptions: agentOptions(), verifier: verifier(contract), maxOutputBytes: 1024, maxActive: 1, workspaceRoot: join(workspace, 'runs'),
+          async resolveRun(input) {
+            child = input.contract
+            childRunId = input.runId
+            children.push(child)
+            return { composition: await buildSingleRunComposition(spike.ctx, { store: service, id: input.runId, contract: child, agentOptions: agentOptions(), base: { v: 1, seed: child.environment.seed } }), agentOptions: agentOptions(), verifier: verifier(child), maxOutputBytes: 1024 }
+          },
+        }, service)
+        assert.equal(result.root.classification, 'verified', result.root.executionRecord?.reason)
+        assert.equal(fixture.requests.length, 23)
+        assert.ok(firstOutput)
+        assert.deepEqual(children[1].spec.inputs, [firstOutput])
+        assert.equal(result.runs.length, 3)
+        const batches = service.facts().filter(fact => fact.type === 'task/children-admitted')
+        assert.equal(batches.length, 2)
+        assert.equal(batches[1]?.data.children[0]?.replacement, undefined)
+        assert.equal(result.runs[0]?.classification, mode === 'failed-probe' ? 'failed' : 'verified')
+        assert.ok(result.runs[0]?.evidence?.outputs.some(output => output.digest === firstOutput?.object.digest))
+      } finally { await service.close() }
+    })
   })
-})
+}

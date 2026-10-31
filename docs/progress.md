@@ -2,7 +2,7 @@
 
 更新：2026-11-01。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
 
-用户本次授权核实架构审计并联动修改规范、约束、源代码和测试，已作为 amendment 006/007/008 纳入框架与 spec-lock。接手时的 S4–S7 大量未提交成果保留，没有重置工作区。审计已逐项改成“成立/部分成立/否定”及实际处理，原文并非句句属实。
+用户已授权核实架构审计并联动修改规范、约束、源代码和测试，作为 amendment 006/007/008 纳入框架与 spec-lock。随后授权 deepseek-flash 真实全流程验证、prompt 优化及 PR/合并；amendment 009 澄清 probe 后续批次复用。接手时的 S4–S7 成果保留，没有重置工作区。
 
 当前运行契约：一个进程拥有一个执行根；退出后仅归档，下一次使用新根和 IDs。操作者提前固定可信资产、干净 env、provider/profile、预算、deadline 与所需隔离。公开可信任务可使用进程内 verifier；私有数据或不可信代码须先部署现成 OS/容器/broker。harness 不 crash resume/reconcile，不以目录/HOME/loopback 声明代替隔离。
 
@@ -45,15 +45,15 @@ amendment 008 的删改与核验：
 
 amendment 008 最终 `pnpm install --frozen-lockfile`、`pnpm verify` 全通过：**428/428**（protocol 202、runtime 134、app 79、domain 13），0 fail、0 skipped；project/build/typecheck/lint 均通过，`git diff --cached --check` 通过。日志：`artifacts/architecture-audit-20261101-amendment008-final-verify.log`。CAS 独立读者原子可见性、缺失 CAS consumer 的事务拒绝、公开 schema 字段的 Composition 序列化均有直接回归测试。待发布文本检查未发现私钥/token 签名，artifacts/环境文件未进入暂存区；该检查不冒充通用秘密检测器。
 
-当前生产 src 为 65 文件、14,507 行，相对 amendment 007 净减 947 行，相对最初接手净减 3,701 行；其中库存 harness 294 行移到 examples，并非删除用例。逐文件统计见 amendment008-metrics artifact，不把净行数当行为覆盖率。
+amendment 008 完成时生产 src 为 65 文件、14,507 行，相对 amendment 007 净减 947 行，相对最初接手净减 3,701 行；其中库存 harness 294 行移到 examples，并非删除用例。逐文件统计见 amendment008-metrics artifact，不把净行数当行为覆盖率。
 
-S4–S7 的框架实现已完成，C-01–24 均有对应协议测试或原生 DSH fixture（下表分别标出历史真实模型证据和部署缺口）。本轮没有购买模型请求、执行生产 activation 或交付私有隔离部署；这些是后续领域运行的验证工作，不能把当前 fixture 通过升级成这些证据。
+本次真实验证见 [validation-20261101.md](validation-20261101.md)。已完成从空 Method 建库、三级 Task 树、两批 probe 探索、祖先摘要、原生 skill/MCP、paired evaluation、连续赢家激活与发布后任务。432/432 本地门禁通过（protocol 203、runtime 134、app 82、domain 13）；真实失败和源码快照分开归档。runtime 修正已观察的空字段序列化、probe winner/replacement 和提示描述；RSI 工具直接使用 Zod JSON Schema 并删除手写形状转换器。产品/领域 src 净减 13 行，没有新增恢复层、状态或生产依赖。
+
+S4–S7 的框架实现已完成，C-01–24 均有对应协议测试或原生 DSH fixture。下表区分本次真实证据、历史冻结版本及部署缺口；验证域中的真实 activation 不代表外部生产部署或复杂芯片任务收益。
 
 DSH 平台原生 wake/resume 能力的 fixture 不代表 Singularity 支持退出后恢复；框架执行根拒绝重启，父 Run 续接仅限同一活跃进程。
 
-本轮未新增付费模型请求，I/J 的旧绝对授权窗口已经到期；没有新版本真实模型证据、生产 candidate activation 或私有隔离部署。Node SQLite 的 ExperimentalWarning 是固定宿主已知限制；真实 DSH fixture 和纯协议检查不等于这些未执行项。
-
-历史 S4–S7 交付覆盖 child 调度/join、多批次、祖先摘要、空 Method、sealed trace、独立 proposer、原子 candidate、paired evaluation、Round closure 与 expected-head activation。当前 C-01–24 证据如下，真实模型证据只归属下列历史冻结版本。
+Node SQLite 的 ExperimentalWarning 是固定宿主已知限制。真实隐藏数据隔离部署未交付；当前公开库存场景不证明该能力。
 
 | 场景 | 实现位置 | 现有证据与缺口 |
 |---|---|---|
@@ -63,23 +63,23 @@ DSH 平台原生 wake/resume 能力的 fixture 不代表 Singularity 支持退�
 | C-04 prepare／ack | decompose*、receipts | A–J 真实 prepare/commit；缺 ack／截断／epoch 负例有 fixture |
 | C-05 固定绑定 | protocol/admission、tools | 真实沿绑定执行；拒绝模型绑定由协议／DSH fixture 证明 |
 | C-06 required join／parent 验收 | children、task-pool | E–J 真实逐层独立验收；required winner/replacement 有 fixture |
-| C-07 后续 direct batch | task-pool、wake | workflow fixture 完成第二批与显式输出传递；未单独确认真实多批顺序用例 |
-| C-08 递归／局部规划 | planning、decompose、task-pool | I 真实 root→region→warehouse；[0,1,2] sketch 仅 exploration fixture，真实成功 sketch 均 [0,1] |
-| C-09 空 Method／draft | global-resources、exploration、workspace | 递归空 Method＋skill draft fixture；B 真实空 Method 未完成；真实 MCP draft 链未证明 |
-| C-10 原生取消后 closure | cancellation、task-pool | A–D 真实预算取消与最终 usage；fixture 验证保留已 terminal Evidence |
+| C-07 后续 direct batch | task-pool、wake | 本次 exploration-1 空 Method root 完成两批同 binding probe，父节点读取结果并自行汇总；required/probe/失败 probe 的显式输出传递有原生 fixture |
+| C-08 递归／局部规划 | planning、decompose、task-pool | 本次 guided-1 真实 root→region→warehouse，34 Task verified；16 次成功 [0,1,2] sketch，26 次 [0,1] |
+| C-09 空 Method／draft | global-resources、exploration、workspace | 本次 empty-2/exploration-2/3 从空 Method 建库并激活；exploration-3 新 skill 注册/绑定、评测与发布后原生消费已实跑；MCP 目录只有说明稿，可执行 MCP 演化链有完整原生 fixture |
+| C-10 原生取消后 closure | cancellation、task-pool | 本次 request-boundary-1 只买 3 次请求后原生取消，subtree closure、最终 usage、无虚假 Evidence/RSI；fixture 验证保留已 terminal Evidence |
 | C-11 事务 guard／幂等／归档 | store、service | 当前 SQLite rollback、UNIQUE、并发命令、缓存投影、CAS 负例和归档读取测试；旧 NDJSON replay 仅为历史证据 |
 | C-12 live yield 续接／拒绝重启 | run、task-pool、store | 当前 DSH 多批次/replacement/retry；子进程退出后拒绝旧根 writer，底层 CAS 也拒绝，fresh root 可用；无 crash resume |
 | C-13 capsule／隐藏读取边界 | workspace、视图授权 | fresh capsule 与 opaque/private CAS 拒读有 fixture；真实隐藏数据的进程／broker 读取隔离未交付；须在部署前建立 |
-| C-14 sealed proposer／validation 拒读 | trace、proposer | E–J 独立真实 proposer；隐藏 refs、上一轮 slots/cases 拒读有 fixture；不是 OS 隔离证据 |
+| C-14 sealed proposer／validation 拒读 | trace、proposer | 本次独立真实 proposer 消费封存轨迹；隐藏 refs、上一轮 slots/cases 拒读有 fixture；不是 OS 隔离证据 |
 | C-15 patch 权限 | method-patch schema/precheck | 真实 accepted/rejected patch；task/verifier/scorer 编辑拒绝由协议负例证明 |
-| C-16 MCP manifest／scope 调用 | mcp-resources、agent-mcp | stdio／streamable-http 原生 fixture；消费字段 schema 与冻结 surface 对比已覆盖，真实领域调用／完整部署执行隔离未证明 |
+| C-16 MCP manifest／scope 调用 | mcp-resources、agent-mcp | 本次 guided-1 有 9 次真实原生库存 MCP 调用；stdio／streamable-http 与冻结 surface 对比有 fixture；不证明不可信代码部署隔离 |
 | C-17 paired 独立 capsule | evaluation-case、evaluation | H–J 真实双 arm 多 case 普通 Task 与独立 workspace；同一非 Method case 的一致性有 fixture |
 | C-18 invalid 不作零分 | evaluation、acceptance | A–G 真实 insufficient closure；slot 缺失／invalid 对比较器的限制有 fixture |
-| C-19 expected-head activation | round、method-round | synthetic DSH fixture；未真实发布 candidate，不计初始化 activation |
+| C-19 expected-head activation | round、method-round | 本次 empty-2、guided-1、exploration-2/3 实际激活评测赢家，expectedPrevious 链及发布后 verified；初始化不计赢家 |
 | C-20 体积／百分比／分页 | prompt、node-view、tools | 真实百分比／分页读；固定体积边界有 fixture，未证明任意规模历史 |
 | C-21 direct feedback | task-feedback、run-settlement | G 真实 scheduler feedback；J 真实 worker feedback；只到 direct parent 有 fixture |
 | C-22 replan／replacement | decompose-commit、reducer | G 真实失败 child→feedback→replacement；旧 Evidence 保留与 winner 规则有 fixture |
-| C-23 连续 Round／CAS | round、proposer | H/I 两连续真实 Round，I 读前轮反馈；沿新 active-head／stale activation CAS 仅 fixture，未证明真实生产连续升级 |
+| C-23 连续 Round／CAS | round、proposer | 本次 guided-1 三轮沿前轮新 head 执行；empty-2 拒绝后实际读前轮反馈并成功改进；stale activation 拒绝有 fixture |
 | C-24 validation 回退拒绝 | evaluation、domain comparator | evaluation fixture／纯比较测试；真实 H–J 没有触发 validation 回退 |
 
 以下保留 A–J 历史证据入口，未在本轮重跑。H 两轮正确率目标均已饱和、no-improvement；I/J 在精确正确约束下的全子树 token 目标真实 improved，不能推成任意复杂任务的改进或生产升级。J 真实 child 失败后 retry 是保留业务 retry 的直接消费者。
@@ -99,6 +99,6 @@ DSH 平台原生 wake/resume 能力的 fixture 不代表 Singularity 支持退�
 
 I/J 最终累计 1068 请求边界／1067 已结算步骤／15,707,337 reported tokens，unknown=0；head 仅有初始化，不把它算生产 candidate activation。I 两轮都相对同一 base；第二轮读前轮反馈，不证明生产 Method 连续升级。收益不含发现 Method 的 proposer 成本。
 
-真实轨迹尚未观察到祖先查询/Summary Worker、领域 MCP 调用或 MCP 资产演化；当前覆盖来自 DSH fixture。H 的 skill 成功调用来自旧适配，不能证明当前冻结脚本的真实模型消费。当前 profile 关闭自动 compaction；独立 compaction 请求的 usage 未计入，不能直接开启并声称预算完整。三层 Task 树与三层 PlanningSketch 也不是同一证据。
+以上 A–J 历史轨迹没有祖先查询/Summary Worker、领域 MCP 或 MCP 资产演化证据；H 的 skill 调用来自旧适配。本次已补齐祖先查询、Summary、原生 skill/MCP、三层 sketch 和新 skill 正式演化；MCP 目录只生成说明稿，可执行 MCP 演化由原生 fixture 证明。当前 profile 关闭自动 compaction；独立 compaction 请求的 usage 未计入，不能直接开启并声称预算完整。
 
-后续需要实际任务和新授权窗口才能补充真实新版本模型、祖先/空 Method/领域 MCP、私有部署和生产 activation 证据。现有本地工作无需为制造覆盖添加恢复机制或备用安全系统。现有验证入口仍为根 `pnpm verify`；有界库存入口是 `pnpm --filter @singularity/app exec node examples/inventory-validation.ts <fresh-root> 1 <previous-root> --config <JSON路径>`，读取前次计量只用于新执行根的累计预算，不续跑旧事实或会话。
+后续领域工作包括芯片适配、真实私有部署与 MCP 可执行资产演化；不为制造计数添加恢复机制或无用工具。验证入口仍为根 `pnpm verify`；有界真实模型入口及配置见 README，前次计量只用于新执行根的累计预算，不续跑旧事实或会话。

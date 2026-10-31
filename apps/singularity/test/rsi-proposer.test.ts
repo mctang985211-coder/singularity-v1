@@ -42,7 +42,10 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       assert.ok(context.includes(canonicalize(scenario.method.templates[0].guidance)))
       assert.ok(context.includes(canonicalize(scenario.method.templates[0].example)))
       const schema = JSON.stringify(request.tools)
-      for (const field of ['instanceSchema', 'requiredCriteria', 'requiredOutputs', 'acceptancePolicy', 'guidance:string', 'exampleText', 'files:', 'set-entry', 'templateId:string | null']) assert.ok(schema.includes(field), `proposer schema must display ${field}`)
+      for (const field of ['instanceSchema', 'requiredCriteria', 'requiredOutputs', 'acceptancePolicy', 'guidance', 'exampleText', 'files', 'set-entry', 'templateId']) assert.ok(schema.includes(field), `proposer schema must display ${field}`)
+      const patchTool = request.tools?.find(tool => tool.function?.name === 'rsi_submit_patch')
+      const parameters = patchTool?.function?.parameters as { properties?: { patch?: { type?: string } } } | undefined
+      assert.equal(parameters?.properties?.patch?.type, 'object', 'native tool schema exposes the structured patch')
       return { toolCalls: [{ id: 'read-public-resources', name: 'rsi_read', arguments: JSON.stringify({ kind: 'public-resources' }) }], usage: fixtureUsage(index) }
     }
     if (index === 5) return { toolCalls: [{ id: 'read-children', name: 'rsi_read', arguments: JSON.stringify({ kind: 'trace-page', id: 'children' }) }], usage: fixtureUsage(index) }

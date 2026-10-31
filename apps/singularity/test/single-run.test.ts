@@ -433,7 +433,7 @@ async function withLiveHarness(
 function agentOptions(): AgentOptions {
   return {
     provider: 'singularity-local',
-    model: 'deepseek-v4.1-flash',
+    model: 'deepseek-flash',
     reasoningEffort: ReasoningEffortId('max'),
   }
 }

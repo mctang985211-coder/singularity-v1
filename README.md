@@ -19,10 +19,14 @@ pnpm verify
 
 An execution root belongs to one live process. Exit archives it; start new work with a new root. Configure trusted assets, provider, budgets, deadline and deployment permissions before launch. Private fixtures and untrusted code require a real OS/container/broker boundary supplied by the deployment. Local public fixtures do not establish that boundary.
 
-The inventory example makes model requests. With an explicitly approved budget and provider profile, run:
+The inventory example makes model requests. The native profile defaults to `deepseek-flash`, max reasoning, a 700000-token context and a 40000-token output limit. Set `SINGULARITY_SPIKE_BASE_URL` and `SINGULARITY_SPIKE_API_KEY` in the launch environment. With an approved budget, run:
 
 ```bash
 pnpm --filter @singularity/app exec node examples/inventory-validation.ts <fresh-root> 1 <previous-root> --config <config.json>
 ```
 
 The optional previous root supplies cumulative usage counters only. It does not resume prior execution. Automated tests use local DSH fixtures and do not purchase model requests or activate production Methods.
+
+The JSON config accepts `scenario: "warehouse-network"`, `initialMethod: "empty" | "guided"`, `publicResources: true`, and `activateWinners: true`. Public resources supply a native skill and inventory MCP. Winner activation uses the completed comparison and expected previous head in the isolated example domain; subsequent rounds and a final work Task consume the active head. Set absolute `deadlineAt`, `maxRequests`, `maxReportedTokens` and Task/Round budgets before launch. When the environment requires its configured HTTP proxy, pass Node's native `--use-env-proxy` flag.
+
+[The 2026-11-01 validation report](docs/validation-20261101.md) distinguishes actual model runs, local fixtures, failures and remaining domain validation.

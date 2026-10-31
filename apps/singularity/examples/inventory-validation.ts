@@ -11,10 +11,10 @@ INVENTORY_CASES,INVENTORY_COMPARATOR_ASSET,INVENTORY_PUBLIC_GUIDE,INVENTORY_VERI
 inventoryGuidedBaseline,inventoryMetric,inventoryTaskSpec,inventoryWarehouseTaskSpec,verifyInventory,
 } from '@singularity/domain-inventory'
 import type { FactPayloadMap,FactType,GlobalResourceSnapshot,JsonValue,Ref,TaskContract,TaskLimits } from '@singularity/protocol'
-import { admitRootTask,canonicalize,closedObject,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseJsonText,parseProtocolValue,resolveTemplateView,roundPlanSchema,taskLimitsSchema } from '@singularity/protocol'
+import { admitRootTask,canonicalize,closedObject,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseJsonText,parseProtocolValue,resolveTemplateView,roundPlanSchema,sealMethodRevision,taskCriterionSchema,taskLimitsSchema } from '@singularity/protocol'
 import type { EvaluationComparator,EvaluationTaskRequest } from '@singularity/runtime'
 import {
-CommandService,evaluateRsiCandidate,
+activateRoundCandidate,CommandService,ContractSummaryService,evaluateRsiCandidate,
 evaluationCaseFromContract,
 executeRsiProposer,executeTaskTree,
 freezeEvaluationCase,freezeGlobalResources,
@@ -23,6 +23,7 @@ precheckMethodPatch,sealPublicTrace,snapshotSession,taskProtocolReference,
 } from '@singularity/runtime'
 
 import { bootSpikeProfile,buildSingleRunComposition } from '../src/host-composition.ts'
+import { freezeInventoryResources } from './inventory-resources.ts'
 
 const actor = { kind: 'runtime', id: 'inventory-validation' } as const
 const bytes = (value: unknown) => new TextEncoder().encode(canonicalize(value))
@@ -37,6 +38,9 @@ export const inventoryValidationConfigSchema = closedObject({
   maxOutputBytes: positiveInteger.optional(),
   objective: routeId.refine(value => value === 'correctness' || value === 'reported-tokens').optional(),
   scenario: routeId.refine(value => value === 'single-csv' || value === 'warehouse-network').optional(),
+  initialMethod: routeId.refine(value => value === 'guided' || value === 'empty').optional(),
+  publicResources: taskCriterionSchema.shape.required.optional(),
+  activateWinners: taskCriterionSchema.shape.required.optional(),
   provider: routeId.optional(),
   model: routeId.optional(),
   reasoningEffort: routeId.optional(),
@@ -61,11 +65,13 @@ export function resolveInventoryValidationBudget(value: unknown, startedAt: numb
   return {
     maxRequests: config.maxRequests ?? 2000,
     maxReportedTokens: config.maxReportedTokens ?? 200_000_000,
-    maxOutputTokens: config.maxOutputTokens ?? 30_000,
+    maxOutputTokens: config.maxOutputTokens ?? 40_000,
     maxOutputBytes: config.maxOutputBytes ?? 16 * 1024 * 1024,
     objective: config.objective ?? 'correctness',
     scenario: config.scenario ?? 'single-csv',
-    provider: config.provider ?? 'singularity-local', model: config.model ?? 'deepseek-v4.1-flash',
+    initialMethod: config.initialMethod ?? 'guided', publicResources: config.publicResources ?? false,
+    activateWinners: config.activateWinners ?? false,
+    provider: config.provider ?? 'singularity-local', model: config.model ?? 'deepseek-flash',
     ...(config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort }),
     profilePatches: config.profilePatches ?? [], maxActive: config.maxActive ?? 1,
     deadlineAt,
@@ -133,6 +139,7 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
     command: { v: 1, commandId: id, tool: 'inventory-host', toolVersion: 1, actor, scope: {}, input: data as JsonValue }, type, data,
   }, [])
   const outcomes: unknown[] = []
+  let publishedWork: unknown
   let failure: string | undefined
   const failures: unknown[] = []
   try {
@@ -141,18 +148,22 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
     const baseTool = await service.putObject('base-tool:bash', bytes({ v: 1, name: 'bash' }))
     const document = await service.putObject('inventory:public-guide', bytes({ v: 1, text: INVENTORY_PUBLIC_GUIDE }))
     const protocol = await service.putObject('singularity:task-protocol', bytes(taskProtocolReference))
+    const publicResources = budget.publicResources ? await freezeInventoryResources(service) : { skills: [], tools: [] }
     const snapshotValue: GlobalResourceSnapshot = { v: 1,
       documents: [{ id: 'inventory-guide', description: 'Public CSV reconciliation rules.', object: document },
         { id: 'task-protocol', description: 'Current planning hierarchy, Task schemas and native skill paths; read before inferring protocol rules from errors.', object: protocol }],
-      skills: [], tools: [], baseTools: [baseTool], fallbackAcceptance: provider, fallbackJoin: 'probe' }
+      ...publicResources, baseTools: [baseTool], fallbackAcceptance: provider, fallbackJoin: 'probe' }
     const snapshot = await freezeGlobalResources(service, 'inventory:global-resources', snapshotValue)
     const seed = await service.putObject('inventory:seed', bytes({ v: 1, seed: 'inventory-2026-10-31' }))
     const options: AgentOptions = { provider: budget.provider, model: budget.model, maxTokens: budget.maxOutputTokens,
       ...(budget.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(budget.reasoningEffort) }) }
     const profile = await service.putObject('inventory:profile', bytes({ v: 1, profile: 'singularity', agentOptions: options }))
-    const baseline = inventoryGuidedBaseline(provider, budget.scenario === 'warehouse-network' ? 'warehouse-network' : 'single-csv')
+    const baseline = budget.initialMethod === 'empty'
+      ? { method: sealMethodRevision({ v: 1, id: 'inventory:method-empty', templates: [], skills: [], tools: [] }), assets: [] }
+      : inventoryGuidedBaseline(provider, budget.scenario === 'warehouse-network' ? 'warehouse-network' : 'single-csv')
     for (const asset of baseline.assets) await service.putObject(asset.ref.id, bytes(asset.value))
     const method = await service.putObject(baseline.method.id, bytes(baseline.method), 'method')
+    const summaries = new ContractSummaryService({ ctx: spike.ctx, writer: service, agentOptions: options })
     await commit('method/registered', { revision: method }, 'inventory:register-baseline')
     const approval = await service.putObject('inventory:initial-approval', bytes({ v: 1, purpose: 'isolated-validation-domain-initialization' }))
     await commit('method/activated', { next: method, approval }, 'inventory:initialize-head')
@@ -169,7 +180,7 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
       return executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace, runId, sessionId,
         admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt } },
         composition, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: { provider, verify: verifyInventory }, actor,
-        maxActive: slot?.maxActive ?? budget.maxActive, workspaceRoot: join(root, 'runs'),
+        maxActive: slot?.maxActive ?? budget.maxActive, workspaceRoot: join(root, 'runs'), summaries,
         signal: slot === undefined ? cancellation.signal : AbortSignal.any([cancellation.signal, slot.signal]),
         checkReportedBudget: reported => withinBudget() && (slot?.checkReportedBudget(reported) ?? true),
         ...(slot === undefined ? {} : { canOpenRun: slot.canOpenRun }),
@@ -192,12 +203,12 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
         origin: { kind: 'root', purpose, requestRef }, method: pinned,
         template: { id: templateId, digest: pinned.digest }, resources: { baseTools: [baseTool],
           skills: view.skills.map(id => {
-            const asset = revision.skills.find(asset => asset.id === id)
+            const asset = [...revision.skills, ...snapshotValue.skills].find(asset => asset.id === id)
             if (asset === undefined) throw new Error('Inventory entry skill is absent')
             return asset.bundle
           }),
           mcpServers: view.tools.map(id => {
-            const asset = revision.tools.find(asset => asset.id === id)
+            const asset = [...revision.tools, ...snapshotValue.tools].find(asset => asset.id === id)
             if (asset === undefined) throw new Error('Inventory entry MCP server is absent')
             return asset.server.bundle
           }), exploration: snapshot },
@@ -225,7 +236,7 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
       const sourceCase = publicCases.at(index % publicCases.length), validationCase = cases.at(2)
       if (sourceCase === undefined || validationCase === undefined) throw new Error('Inventory validation cases are absent')
       const source = await runTask(await contractFor(taskId, sourceCase.inputs, activeMethod, 'work', sourceRequest))
-      const trace = await sealPublicTrace({ ctx: spike.ctx, service, actor, rootTaskId: taskId })
+      const trace = await sealPublicTrace({ ctx: spike.ctx, service, actor, rootTaskId: taskId, summaries })
       const costObjective = budget.objective === 'reported-tokens'
       const plan = { v: 1 as const, cases: cases.slice(0, 2).map(value => value.ref), validationCases: [validationCase.ref],
         metric: { name: costObjective ? 'inventory-reported-tokens' : 'inventory-correctness' },
@@ -250,13 +261,31 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
           await runTask(await contractFor(slot.slot.taskId, value.inputs, slot.slot.method, 'evaluation', slot.requestRef), slot)
         },
       }) : undefined
-      const result = { roundId, source: { classification: source.root.classification, trace: trace.trace },
+      let activation
+      if (budget.activateWinners && evaluation?.comparison.outcome === 'improved') {
+        const candidate = (await service.methodRoundState()).rounds.get(roundId)?.candidateMethod
+        if (candidate === undefined) throw new Error('Improved round has no candidate')
+        const approval = await service.putObject(`${roundId}:approval`, bytes({ v: 1,
+          authorization: 'operator-authorized-evaluated-winners', expectedPrevious: activeMethod, next: candidate }))
+        activation = await activateRoundCandidate({ service, actor, roundId, approval })
+      }
+      const result = { roundId, baseMethod: activeMethod, source: { classification: source.root.classification, trace: trace.trace },
         proposal: { recordRef: proposal.recordRef, usage: proposal.usage, failure: proposal.failure }, precheck: checked,
-        evaluation: evaluation === undefined ? undefined : { comparisonRef: evaluation.comparisonRef, comparison: evaluation.comparison } }
+        evaluation: evaluation === undefined ? undefined : { comparisonRef: evaluation.comparisonRef, comparison: evaluation.comparison },
+        activation, activeMethod: (await service.methodRoundState()).productionHead }
       outcomes.push(result)
       await writeFile(join(root, `round-${String(index + 1)}.json`), JSON.stringify(result, null, 2))
       console.log(JSON.stringify({ roundId, source: source.root.classification, proposer: proposal.proposalRef !== undefined,
         candidate: checked?.accepted, evaluation: evaluation?.comparison.outcome, usage: usage() }))
+    }
+    if (service.facts().some(fact => fact.type === 'method/activated' && fact.data.evaluationRef !== undefined) && canPurchase()) {
+      const activeMethod = (await service.methodRoundState()).productionHead
+      const firstCase = cases[0]
+      if (activeMethod === undefined) throw new Error('Published inventory Method is absent')
+      const taskId = 'inventory:published-work'
+      const request = await service.putObject(`${taskId}:request`, bytes({ v: 1, purpose: 'post-publication-work' }))
+      const work = await runTask(await contractFor(taskId, firstCase.inputs, activeMethod, 'work', request))
+      publishedWork = { taskId, method: activeMethod, classification: work.root.classification, evidenceRef: work.root.evidenceRef }
     }
   } catch (error) {
     failures.push(error)
@@ -268,7 +297,7 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
     try { await service.close() } catch (error) { failures.push(error) }
   }
   const result = { v: 1, startedAt, finishedAt: Date.now(), previousRoot, budget,
-    requestBoundaries, usage: usage(true), outcomes, ...(failure === undefined ? {} : { failure }) }
+    requestBoundaries, usage: usage(true), outcomes, publishedWork, ...(failure === undefined ? {} : { failure }) }
   await writeFile(join(root, 'result.json'), JSON.stringify(result, null, 2))
   if (failures.length === 1 && failures[0] instanceof Error) throw failures[0]
   if (failures.length > 0) throw new AggregateError(failures, 'Validation execution or cleanup failed')

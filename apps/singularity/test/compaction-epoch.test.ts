@@ -143,7 +143,7 @@ void test('alpha2 compaction invalidates context-epoch receipts on resume and su
     }
     const agentOptions = {
       provider: 'singularity-local',
-      model: 'deepseek-v4.1-flash',
+      model: 'deepseek-flash',
       reasoningEffort: ReasoningEffortId('max'),
     } satisfies AgentOptions
 

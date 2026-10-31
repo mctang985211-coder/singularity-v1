@@ -48,27 +48,6 @@ export const methodPatchSchema = closedObject({
 })
 export type MethodPatch = z.infer<typeof methodPatchSchema>
 
-/** Compact model-facing shape, derived from the same schema used at submission. */
-export const methodPatchParameterShape = describeShape(z.toJSONSchema(methodPatchSchema))
-
-function describeShape(schema: z.core.JSONSchema.JSONSchema | boolean | undefined): string {
-  if (schema === undefined || typeof schema === 'boolean' || schema.$ref !== undefined) return 'json'
-  if (schema.const !== undefined) return JSON.stringify(schema.const)
-  if (schema.enum !== undefined) return schema.enum.map(value => JSON.stringify(value)).join('|')
-  const variants = schema.oneOf ?? schema.anyOf
-  if (variants !== undefined) return variants.map(describeShape).join(' | ')
-  if (schema.type === 'array') {
-    const item = Array.isArray(schema.items) ? schema.items.map(describeShape).join(',') : describeShape(schema.items)
-    return `(${item})[]`
-  }
-  if (schema.type === 'object') {
-    if (schema.properties === undefined) return `{[key:string]:${describeShape(schema.additionalProperties)}}`
-    return `{${Object.entries(schema.properties).map(([key, value]) =>
-      `${key}${schema.required?.includes(key) === true ? '' : '?'}:${describeShape(value)}`).join(',')}}`
-  }
-  return schema.type ?? 'json'
-}
-
 /** Parse at the model boundary, with the fixed canonical 256 KiB patch limit. */
 export function parseMethodPatch(value: unknown): MethodPatch {
   const patch = parseProtocolValue(methodPatchSchema, value)
