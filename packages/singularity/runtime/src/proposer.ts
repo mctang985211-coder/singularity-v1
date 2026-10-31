@@ -4,7 +4,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { FactActor,JsonValue,MethodPatch,Ref,SessionCut,UsageRecord } from '@singularity/protocol'
-import { canonicalize,methodPatchParameterShape,methodRevisionSchema,parseProtocolValue,seal } from '@singularity/protocol'
+import { canonicalize,closedObject,methodPatchSchema,methodRevisionSchema,parseProtocolValue,protocolJsonSchema,seal } from '@singularity/protocol'
 import { ZodError } from 'zod'
 import { DecomposeError,throwCollectedErrors } from './errors.ts'
 
@@ -21,6 +21,8 @@ import { readPublicTrace,readTraceAsset,readTracePage } from './trace.ts'
 import { deliverWakeOnceOrFail } from './wake.ts'
 
 const encoder = new TextEncoder()
+const patchInputSchema = protocolJsonSchema(closedObject({ patch: methodPatchSchema }))
+delete patchInputSchema.$schema
 
 export const RSI_PROPOSER_CARD = `You improve one pinned Method using one sealed root execution trace.
 Read the pinned Method and the original guidance/example assets you will change.
@@ -32,6 +34,11 @@ If correctness is already saturated, extra correctness prose cannot raise it.
 Read previous-round feedback when present; revise an unsuccessful hypothesis
 using its measured result. Preserve useful assets and choose the smallest
 executable change that addresses the evidence. Children own their local workflow.
+Start with the indexed costliest Runs and read the trace pages that test your
+hypothesis; submit when the evidence supports a concrete change. Keep the patch
+concise: put each reusable instruction in one asset and refer to it from guidance.
+Use short guidance naming operations and their inputs/outputs; keep detailed code
+in one skill or MCP asset. Send one JSON object as the tool arguments.
 Submit one reusable MethodPatch with rsi_submit_patch. Templates, guidance,
 examples, skill/MCP assets and bindings may evolve; host precheck, evaluation
 and activation approval determine the result.`
@@ -84,7 +91,8 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
   if (request.publicEvaluation.validationPolicy !== plan.validation) throw new Error('Public validation policy differs from the frozen RoundPlan')
   const method = parseProtocolValue(methodRevisionSchema, await readRoundObject(service, opened.data.baseMethod, 'method'))
   const entry = method.templates.find(template => template.id === method.entryTemplateId)
-  const methodIndex = { ref: opened.data.baseMethod, entryTemplateId: method.entryTemplateId,
+  const methodIndex = { ref: opened.data.baseMethod,
+    ...(method.entryTemplateId === undefined ? {} : { entryTemplateId: method.entryTemplateId }),
     counts: { templates: method.templates.length, skills: method.skills.length, tools: method.tools.length },
     ...(entry === undefined ? {} : { entry: { id: entry.id, guidance: entry.guidance, example: entry.example } }) }
   const previousRound = await previousRoundFeedback(service, roundId, opened.data.baseMethod)
@@ -191,11 +199,9 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
           return response as unknown as JsonValue
         },
       }))
-      register(defineTool({
-        name: 'rsi_submit_patch', description: 'Submit one MethodPatch: {v:1,base,hypothesis,changes,predictedRisks,transferPlan}. Changes: put-template, remove-template, put-skill, remove-skill, put-mcp-server, remove-mcp-server, set-entry. Inline guidance/example and UTF-8 files; the host generates refs and digests.',
-        parameters: { patch: { type: 'json', required: true,
-          description: `MethodPatch shape (? means optional; | means alternatives): ${methodPatchParameterShape}. guidance is inline text; example is an inline Task example with exampleText inputs. files maps relative paths to UTF-8 contents; a skill requires SKILL.md. acceptancePolicy must reuse an authorized source/base Ref. Use set-entry with the new template id to select it, or null to remove the entry. The host creates bundle/config refs and digests.`,
-        } },
+      const submit = defineTool({
+        name: 'rsi_submit_patch', description: 'Submit one reusable MethodPatch. guidance is inline text; example uses illustrative exampleText inputs. files maps relative paths to UTF-8 contents; a skill requires SKILL.md. acceptancePolicy reuses an authorized source/base Ref. set-entry selects a template, or null removes the entry. The host creates refs and digests.',
+        parameters: { patch: { type: 'json', required: true } },
         output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: canonicalize(value) }] },
         execute: async (args, exec) => {
           if (!available()) throw new DecomposeError('INVALID_ARGUMENT', 'Proposer budget is exhausted')
@@ -203,7 +209,8 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
           exec.concludeTurn()
           return { submitted: true, proposalRef, remainingBudgetPct: percentages() } as unknown as JsonValue
         },
-      }))
+      })
+      register({ ...submit, parameters: patchInputSchema })
       const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
       if (globalNames.length > 0) ctx.tools.restrict({ deny: globalNames })
       assertPromptBudget(canonicalize(ctx.tools.schemas(instance)), 12 * 1024, 'RSI tool schemas')

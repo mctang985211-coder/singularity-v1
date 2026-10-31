@@ -13,7 +13,7 @@ export const taskProtocolReference: JsonValue = {
     schema: protocolJsonSchema(planningSketchSchema),
   },
   decompose: protocolJsonSchema(decomposeCommitSchema),
-  method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Required join comes from the binding, not TaskProposal.',
+  method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Register skill/MCP assets in the Method before binding their IDs; public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
   skills: 'Bound skills use native DSH discovery; directory resources include frozen relative files. Use the path returned by the skill tool for bundled scripts.',
 }
 
@@ -34,7 +34,7 @@ export const planningInputSchema: ToolDefinition['parameters'] = {
 export const decomposeParameters = {
   action: { type: 'string', required: true, description: 'Use "prepare" to read a child example, or "commit" for a prepared batch.' },
   bindingId: { type: 'string', description: 'A bindingId from the current NodeView childOptions for prepare.' },
-  children: { type: 'json', description: 'Commit prepared children using previewRef.digest as ackPreview. Copy complete authorized input refs, including object and path; preview exampleText is illustrative. Template required outputs are inherited; localOutputs adds distinct supporting outputs, or [].' },
+  children: { type: 'json', description: 'Commit prepared children using previewRef.digest as ackPreview. Use each binding once per batch; reuse a probe binding in later batches. Copy complete authorized input refs, including object and path; preview exampleText is illustrative. Template required outputs are inherited; localOutputs adds distinct supporting outputs, or [].' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)

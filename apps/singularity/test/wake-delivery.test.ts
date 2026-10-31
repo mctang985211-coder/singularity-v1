@@ -26,7 +26,7 @@ import type { CapturedChatRequest, ChatCompletionsFixture, FixtureReply } from '
 const CRASH_CHILD_PATH = fileURLToPath(new URL('./fixtures/wake-crash-child.ts', import.meta.url))
 const AGENT_OPTIONS = {
   provider: 'singularity-local',
-  model: 'deepseek-v4.1-flash',
+  model: 'deepseek-flash',
   reasoningEffort: ReasoningEffortId('max'),
 } satisfies AgentOptions
 const FIXTURE_REPLY: FixtureReply = {

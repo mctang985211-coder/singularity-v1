@@ -14,7 +14,7 @@ import { startChatCompletionsFixture } from './fixtures/chat-completions.ts'
 void test('validation configuration keeps the cumulative deadline and validates host budget overrides', () => {
   const startedAt = 1_000
   const original = resolveInventoryValidationBudget({}, startedAt, 2_000)
-  assert.equal(original.maxOutputTokens, 30_000)
+  assert.equal(original.maxOutputTokens, 40_000)
   const configured = resolveInventoryValidationBudget({
     maxRequests: 80, maxReportedTokens: 450_000, maxOutputTokens: 32_768, deadlineAt: 900_000,
     task: { maxTokens: 220_000, maxStepsPerRun: 32, maxRuns: 3, maxDepth: 5, maxTasks: 21, maxBatchChildren: 5 },

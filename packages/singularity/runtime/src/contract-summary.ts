@@ -196,7 +196,7 @@ export class ContractSummaryService {
           ctx.tools.register(defineTool({
             name: 'singularity_summary_submit',
             description: 'Submit a compact read-only summary of the supplied frozen contract.',
-            parameters: { summary: { type: 'json', required: true, description: 'ContractSummary: v=1, sourceContract, goal, acceptance[], constraints[], outputs[], frozenDecisions[], sourceRefs[{field,digest}], generatedBy="contract-summary-worker".' } },
+            parameters: { summary: { type: 'json', required: true, description: 'ContractSummary: {v:1,sourceContract:string (the supplied sha256: contract digest),goal:string,acceptance:string[],constraints:string[],outputs:string[],frozenDecisions:string[],sourceRefs:{field:string,digest:string}[],generatedBy:"contract-summary-worker"}.' } },
             output: {
               schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean', required: true } } },
               render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],

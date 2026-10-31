@@ -4,7 +4,7 @@
 
 - `docs/framework.md` 是协议唯一权威；`spec-lock.json` 固定其 digest。`AGENTS.md` 只写施工约束，`docs/progress.md` 写当前状态、证据和缺口。调研 artifact 不替代规范，不另建平行任务卡和交接规范。
 - 开始或恢复工作时阅读相关规范、进度和实际消费者；保留工作区已有未提交成果。旧 Singularity 仓库不提供本仓库兼容要求。
-- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
+- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
 
 ## 启动条件先于执行
 
@@ -29,7 +29,7 @@
 - 边界验证真实输入，内部复用已解析类型和结果。相对路径共用 schema；DSH defineTool 已校验参数的部分不再手写 exact-key/类型检查。产物冻结使用原生递归 readdir、leaf no-follow 和最终 hash；不恢复 ancestor walker。路径隔离是部署前置条件，可信本地 fixture 不冒充私有/不可信部署。Zod 单源定义协议结构，Ajv 处理模板提供的动态 JSON Schema；不用手写 JSON parser/schema interpreter，不在每次解析时做 canonical JSON 往返。协议 schema 不使用 transform/default/coercion，由源码门禁约束。
 - 只有模型可修正的参数、计划、提交和协议拒绝返回模型。宿主 CAS、provider、会话、资源、原生清理等未知异常保留原始原因，原生 cancel/dispose 后抛出，不写虚假 invalid/Evidence/闭合 fact。Summary、Proposer、precheck 与 Task 工具遵守同一边界。清理须尝试完成；多重失败保留全部原因，不吞错误。
 - 预算/截止、领域失败和无效验收仍按协议结算。verifier 转发 AbortSignal 并等待自己拥有的工作退出，不能丢弃 Promise 冒充停止。任意不合作进程内代码不在强停保证内。
-- 同进程 parent yield → 整批 terminal → continue 是正常路径；只允许实际观察到的 live yield 续接，不从归档重建。保持原合同、session 和 deadline；已挂载 child 输出不重复覆盖。业务 retry 使用新 Run/session 和独占创建的新 workspace，保留 required feedback/replan/replacement。
+- 同进程 parent yield → 整批 terminal → continue 是正常路径；只允许实际观察到的 live yield 续接，不从归档重建。保持原合同、session 和 deadline；已挂载 child 输出不重复覆盖。业务 retry 使用新 Run/session 和独占创建的新 workspace，保留 required feedback/replan/replacement；probe 后续批次的新问题不沿用 required winner 或自动 replacement 门禁。
 - 工具条件复用一个 dispatch guard；wake 使用原生 deriveMessages 的消息 ID 判重，不承诺 provider exactly-once。submit 用 DSH exclusive 工具直接冻结 CAS，不建立进程表探测、静止检测或备用作业管理器。
 - TS 使用 ESM、严格类型、import type、本地 `.ts` 导入、包 exports、references 和 Cordis effects。新增生产依赖服务当前消费者并同步 lockfile；helper 仅承载实际重复或明确业务职责。
 
@@ -43,5 +43,5 @@ pnpm verify
 - 根 `pnpm verify` 依次检查 project、build、typecheck、lint、test；开发先跑相关检查，失败修复后复跑，集成完成跑根门禁，不机械重复验证。
 - 测试按批准后的协议迁移：删除退出后恢复/torn-tail 期待，保留业务 retry、live continuation、receipt/权限/预算/领域行为。宿主错误测试断言原始错误、原生资源结束、无新增模型请求和无虚假闭合；不能只改成宽泛通过。
 - tests 在所属 `*.test.ts` 注册，fixture 只提供构造；并行 runner 使用独立目录、DSH_HOME 和缓存。保留用户已有成果，不清理其他工作的目录。
-- 区分纯协议测试、真实 DSH fixture、真实模型、冻结多 case 领域评测。低等级证据不能升级；历史 A–J 只证明其冻结版本。本次未获新窗口时不新增付费请求，不执行生产 activation。
+- 区分纯协议测试、真实 DSH fixture、真实模型、冻结多 case 领域评测。低等级证据不能升级；历史 A–J 只证明其冻结版本。付费请求和 activation 遵守用户授权的窗口、预算与范围，进度记录实际消费及证据。
 - 同步受影响的规范、lock、约束、进度和注释；进度明确未覆盖项，不把工具/fact 计数当分支覆盖率。secrets/private fixtures 不进入公开文本和日志。
