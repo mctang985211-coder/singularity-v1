@@ -239,12 +239,14 @@ void test('S4-A2 resolves bound skills in template order and matches Composition
       template: state.templateRef,
       guidance: state.guidance,
       skills: state.bundles,
+      mcpServers: [],
     })
     await expectCode(
       assertCompositionResources(store, resources, {
         template: state.templateRef,
         guidance: state.guidance,
         skills: [...state.bundles].reverse(),
+        mcpServers: [],
       }),
       'COMPOSITION_MISMATCH',
     )

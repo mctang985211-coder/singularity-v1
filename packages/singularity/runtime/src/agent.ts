@@ -6,6 +6,12 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionCut, UsageRecord } from '@singularity/protocol'
 
 import { SingleRunError } from './errors.ts'
+import {
+  assertMcpSurface,
+  createMcpResourceRoot,
+  mountMcpServers,
+  removeMcpResourceRoot,
+} from './agent-mcp.ts'
 import { assertSkillDiscovery, assertSkillToolAvailability, registerSkills } from './agent-skills.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
 import { assertPromptBudget, renderWorkerCard } from './prompt.ts'
@@ -73,6 +79,9 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
   let drainPending = false
   let sessionAction: 'created' | 'none' | 'resumed' = 'none'
   let wakeOutcome: WakeDeliveryOutcome | undefined
+  let mcpRoot: string | undefined
+  let rootCleanup: Promise<void> | undefined
+  let lateAcquisition: Promise<void> | undefined
   const remaining = () => prepared.runOpened.data.budgetReservation.deadlineAt - runtime.clock()
   const initialRemaining = remaining()
   const deadline = AbortSignal.timeout(Math.min(2_147_483_647,
@@ -80,10 +89,39 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
   const cancel = () => handle?.agent.cancel({ kind: 'hook', reason: 'deadline' })
   deadline.addEventListener('abort', cancel, { once: true })
   const jobDrain = watchJobTeardown(request.ctx, request.sessionId)
+  const cleanupMcpRoot = (): Promise<void> => {
+    if (mcpRoot === undefined) return Promise.resolve()
+    rootCleanup ??= removeMcpResourceRoot(mcpRoot)
+    return rootCleanup
+  }
+  const cleanupMcpRootWithError = async (label: string): Promise<void> => {
+    try {
+      await cleanupMcpRoot()
+    } catch (error) {
+      drainPending = true
+      agentErrorCode ??= AGENT_ERROR_REASON
+      agentErrorDetail = `${label}: ${errorMessage(error)}`
+    }
+  }
 
   try {
     if (!options.checkBudget()) throw new Error('Run budget unavailable')
-    const setup = buildAgentSetup(options)
+    if (prepared.methodResources.mcpServers.length > 0) {
+      mcpRoot = await createMcpResourceRoot()
+    }
+    const setupState = { started: false }
+    let resolveSetup: () => void = () => {}
+    const setupDone = new Promise<void>(resolve => {
+      resolveSetup = resolve
+    })
+    const setup: AgentSetup = async (agentCtx, agent) => {
+      setupState.started = true
+      try {
+        await buildAgentSetup(options, mcpRoot)(agentCtx, agent)
+      } finally {
+        resolveSetup()
+      }
+    }
     const acquiring = mode === 'create'
       ? request.ctx.agents.create({
         sessionId: request.sessionId as SessionId,
@@ -93,18 +131,26 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
         setup,
       }).then(handle => ({ handle, action: 'created' as const }))
       : resumeOrCreateAgent(request, prepared.workspace, setup, service, deadline)
-    let abandoned = false
-    void acquiring.then(({ handle }) => {
-      if (abandoned) return handle.dispose()
-      return undefined
-    }).catch(() => undefined)
     try {
       const acquired = await waitWithin(acquiring, remaining())
       handle = acquired.handle
       sessionAction = acquired.action
     } catch (error) {
-      abandoned = true
       drainPending = error instanceof DOMException && error.name === 'TimeoutError'
+      lateAcquisition = (async () => {
+        let acquired: { readonly handle: AgentHandle } | undefined
+        try {
+          acquired = await acquiring
+        } catch {
+          acquired = undefined
+        }
+        if (setupState.started) await setupDone
+        if (acquired !== undefined) {
+          await acquired.handle.dispose()
+        }
+        await cleanupMcpRoot()
+      })()
+      void lateAcquisition.catch(() => undefined)
       throw error
     }
     deadline.throwIfAborted()
@@ -127,14 +173,19 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
     try {
       if (handle !== undefined) {
         snapshot = snapshotSession(handle.agent.session)
+        const disposing = handle.dispose()
         try {
           // Native dispose cancels, drains scoped jobs, and closes persistence.
           // Cleanup has a host-only grace period; no new work is admitted.
-          await waitWithin(handle.dispose(), 5_000)
+          await waitWithin(disposing, 5_000)
+          await cleanupMcpRootWithError('MCP resource cleanup failed')
         } catch (error) {
           drainPending = true
           agentErrorCode = AGENT_ERROR_REASON
-          agentErrorDetail = `dispose failed: ${errorMessage(error)}`
+          agentErrorDetail = `dispose failed: ${errorMessage(error)}; MCP resource root retained until late disposal`
+          void disposing.then(async () => {
+            await cleanupMcpRootWithError('late MCP resource cleanup failed')
+          }, () => undefined)
         }
         try {
           snapshot = snapshotSession(handle.agent.session)
@@ -144,6 +195,19 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
       } else {
         const live = request.ctx.sessions.get(request.sessionId as SessionId)
         if (live !== undefined) snapshot = snapshotSession(live)
+        if (mcpRoot !== undefined) {
+          if (lateAcquisition === undefined) {
+            await cleanupMcpRootWithError('MCP resource cleanup failed')
+          } else {
+            try {
+              await waitWithin(lateAcquisition, 5_000)
+            } catch (error) {
+              drainPending = true
+              agentErrorCode ??= AGENT_ERROR_REASON
+              agentErrorDetail = `MCP resource root quarantined: late acquisition or cleanup did not settle: ${errorMessage(error)}`
+            }
+          }
+        }
       }
       const orphanedJobId = jobDrain.failedJobId()
       if (orphanedJobId !== undefined) {
@@ -246,7 +310,7 @@ function isSessionNotFoundError(error: unknown): boolean {
     && (error as { readonly name?: unknown }).name === 'SessionPersistenceNotFoundError'
 }
 
-function buildAgentSetup(options: DriveAgentOptions): AgentSetup {
+function buildAgentSetup(options: DriveAgentOptions, mcpRoot: string | undefined): AgentSetup {
   const { prepared, request, controller } = options
   const { runtime } = prepared
   return async (agentCtx, agent) => {
@@ -273,6 +337,16 @@ function buildAgentSetup(options: DriveAgentOptions): AgentSetup {
       interpolate: false,
     })
     await registerSkills(agentCtx, prepared.methodResources.skills)
+    if (prepared.methodResources.mcpServers.length > 0) {
+      if (mcpRoot === undefined) {
+        throw new MethodResourceError(
+          'method',
+          'UNSUPPORTED_RESOURCES',
+          'host did not create the MCP resource root required by Method server bindings',
+        )
+      }
+      await mountMcpServers(agentCtx, prepared.methodResources.mcpServers, mcpRoot)
+    }
     agentCtx.systemPrompt.context({
       name: 'singularity:node-view',
       order: 300,
@@ -302,6 +376,7 @@ function buildAgentSetup(options: DriveAgentOptions): AgentSetup {
     } else if (globalNames.length > 0) {
       agentCtx.tools.restrict({ deny: globalNames })
     }
+    assertMcpSurface(agentCtx, agent, prepared.methodResources.mcpServers)
     await assertSkillDiscovery(agentCtx, agent, prepared.methodResources.skills, prepared.workspace)
     assertPromptBudget(JSON.stringify(agentCtx.tools.schemas(agent)), 12 * 1024, 'visible tool schemas')
   }

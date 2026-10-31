@@ -231,7 +231,6 @@ async function makeScenario(
       agentOptions: agentOptions(),
       base: {
         v: 1,
-        mcpServers: [],
         seed,
       },
     })

@@ -1,6 +1,6 @@
 # Singularity V1
 
-Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。S1–S3 已完成，S4-A1/A2 已完成；下一阶段为 S4-A3/S4-B。C-02/C-03/C-11/C-12 已有真实 DSH + 真实模型证据；child、RSI 和领域改进尚未实现。
+Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中心的领域任务 RSI 框架。S1–S3 已完成，S4-A1/A2/A3 已完成；下一阶段为 S4-A4/S4-B。C-02/C-03/C-11/C-12 已有真实 DSH + 真实模型证据；child、RSI 和领域改进尚未实现。
 
 ## 权威入口
 
@@ -17,7 +17,7 @@ Singularity 是一个基于 DeepSeek Harness `0.2.2-alpha.2`、以 Task 为中�
 
 - Node `>=24.9.0`
 - pnpm `11.18.0`
-- DSH `0.2.2-alpha.2`（S1-A–S1-E 与 S2/S3 全部完成，S4-A1/A2 完成；C-02/C-03/C-11/C-12 proven，下一阶段为 S4-A3/S4-B）
+- DSH `0.2.2-alpha.2`（S1-A–S1-E 与 S2/S3 全部完成，S4-A1/A2/A3 完成；C-02/C-03/C-11/C-12 proven，下一阶段为 S4-A4/S4-B）
 - 默认真实模型路由：OpenAI-compatible chat `http://127.0.0.1:16660/v1`，`deepseek-v4.1-flash`，`reasoning=max`；可用 `SINGULARITY_SPIKE_BASE_URL` 覆盖 endpoint，API key 只通过 `SINGULARITY_SPIKE_API_KEY` 进程环境提供，不写入仓库。
 
 ## 验证

@@ -13,6 +13,8 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 
 import type { ContextEpoch } from './epoch.ts'
 import { deriveContextEpoch } from './epoch.ts'
+import { MCP_RESOURCE_TOOL_NAMES } from './mcp-resources.ts'
+import type { McpDispatchPlan } from './mcp-resources.ts'
 import type { NodeView, RemainingBudgetPct } from './prompt.ts'
 import { assertPromptBudget } from './prompt.ts'
 import { freezeSubmission } from './workspace.ts'
@@ -22,7 +24,7 @@ const TOOL_ERROR_NEXT_ACTIONS: Readonly<Record<string, string>> = {
   INVALID_ARGUMENT: 'Fix the tool arguments and retry with declared fields only.',
   READ_SELF_FIRST: 'Call singularity_read(kind="self") and follow nextCursor through the complete contract, then continue.',
   PLAN_FIRST: 'Call singularity_plan with the current contextEpoch, then continue.',
-  INPUT_NOT_AUTHORIZED: 'Use only skills listed in the session skill catalog.',
+  INPUT_NOT_AUTHORIZED: 'Use only skills and MCP servers/tools listed in the session catalog and NodeView.',
   ALREADY_SUBMITTED: 'The submission is already frozen; stop calling tools.',
   RUN_CLOSED: 'This Run is already settling; stop calling tools.',
   ACTIVE_JOB: 'Wait for active jobs to finish or stop them with the listed job tools, then retry submission.',
@@ -39,6 +41,8 @@ export interface RunToolControllerOptions {
   readonly sessionId: string
   readonly workspace: string
   readonly skillNames: readonly string[]
+  /** Frozen MCP server/tool/resource identities admitted for this Run. */
+  readonly mcpPlan: McpDispatchPlan
   readonly writer: CasObjectWriter
   readonly maxOutputBytes: number
   readonly clock: () => number
@@ -146,6 +150,17 @@ export class RunToolController {
       return undefined
     }
     if (name === 'singularity_read' || name === 'singularity_stop') return undefined
+    if (isMcpResourceTool(name)) {
+      if (!this.options.mcpPlan.resourceToolNames.includes(name)) return 'INPUT_NOT_AUTHORIZED'
+      if (!this.options.checkBudget()) return 'LIMIT_EXCEEDED'
+      const serverName = serverNameOf(args)
+      return serverName !== undefined && this.options.mcpPlan.serverNames.includes(serverName)
+        ? undefined
+        : 'INPUT_NOT_AUTHORIZED'
+    }
+    if (name.startsWith('mcp__') && !this.options.mcpPlan.publicToolNames.includes(name)) {
+      return 'INPUT_NOT_AUTHORIZED'
+    }
     if (!this.options.checkBudget()) return 'LIMIT_EXCEEDED'
     if (!this.state.readSelf) return 'READ_SELF_FIRST'
     if (name === 'singularity_plan') return undefined
@@ -495,6 +510,16 @@ function skillNameOf(value: unknown): string | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const name = (value as { readonly name?: unknown }).name
   return typeof name === 'string' ? name : undefined
+}
+
+function serverNameOf(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const server = (value as { readonly server?: unknown }).server
+  return typeof server === 'string' ? server : undefined
+}
+
+function isMcpResourceTool(name: string): boolean {
+  return (MCP_RESOURCE_TOOL_NAMES as readonly string[]).includes(name)
 }
 
 function assertExactKeys(value: unknown, keys: readonly string[]): void {

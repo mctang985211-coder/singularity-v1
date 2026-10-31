@@ -18,7 +18,12 @@ export {
   PLATFORM_PROMPT_SERVICE,
   assertCompositionResources,
   loadMethodResources,
+  MethodResourceError,
 } from './resources.ts'
+export {
+  mcpCompositionEntry,
+  mcpPromptSections,
+} from './mcp-resources.ts'
 export * from './tools.ts'
 export * from './workspace.ts'
 export * from './verification.ts'
