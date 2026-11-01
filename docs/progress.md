@@ -138,3 +138,14 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 此次没有启动或续跑付费 campaign，原归档保持不变；芯片设计、frontend 验收和 PPA 赢家仍未获得。
 
 最终 `pnpm install --frozen-lockfile`、根 `pnpm verify` 均通过：**438/438**（protocol 203、runtime 134、domain 13、app 88），0 fail/skip；project/build/typecheck/lint 全部通过。日志：`artifacts/native-tool-arguments-verify.log`；定向 8/8 日志：`artifacts/native-tool-arguments-targeted.log`。
+
+
+## 2026-11-02：BB 阻塞定位与重跑前预检
+
+上一轮 `buckyball-cosyvoice3-live-20261101-213725` 在 source 提交后卡在 review 的 config install；3 小时截止时共 182 次请求、32,302,520 reported tokens，没有完成验收/RSI。独立重现证明候选 cosy 配置缺少 `[main_tile]`，config queue handler 抛 `ValueError` 而未写 failure；CLI 因此等待原有 24 小时轮询。review 手工 clone 也丢失 `.venv`/子模块准备资产。此前 help smoke 和 fake nix fixture 没有证明真实队列终态。
+
+领域 example 增加标准 `checkout(project)`，原生 cp 复制操作者准备副本并安装本地 configs；worker/reviewer 使用同一工具。bbdev 领域补丁只修实际故障：config 异常沿现有 failure 结果返回，TOML 库失败不退出 worker，SIGTERM 进入已有 finally。补丁见 `apps/singularity/examples/buckyball-bbdev.patch`，准备副本的 bbdev 为 `a9bd1cb4c4b9948b29ac6323b63a450fbfbb1d4a`，Buckyball 为 `7510fbaa6c4d8dc435b9b39e645055fe415bed09`；原用户仓库和旧 trace 未修改。新 `.venv` 使用 uv relocatable，复制后实际从各自副本加载。Singularity 未添加恢复状态、watchdog 或领域进程管理器；仅压缩 Task 工具描述以遵守原 prompt 预算。app 在 source 结算后检查整轮预算，截止即结束，不再尝试为预算终止 source 打开 RSI。
+
+真实 DSH MCP 预检（无模型请求）：全部两个工具实际调用；19 个 CLI/帮助入口成功；上一轮原始坏配置和缺失 TOML 都约 10 秒返回失败，移除后 config 安装成功；AXIS arbiter 完成真实 elaboration、VCS 编译和 UVM，`UVM_ERROR=0`、`UVM_FATAL=0`；长服务调用在 25 秒被原生 AbortSignal 取消，8 秒后该副本 bbdev/iii/motia 残留进程为零。未运行全芯片仿真、P2E 或物理后端；没有把组件 smoke 视为 CosyVoice3/PPA 验收。
+
+原始预检脚本、逐调用结果和原生 session 保存在 `artifacts/buckyball-cosyvoice3-20261102/`，目录 `mcp-preflight`、`mcp-preflight-business`、`mcp-preflight-cancel`、`mcp-preflight-native-cancel` 分别保留帮助/初次断言失败、组件业务、原始配置复现和真实取消证据；脚本中错误的预期断言和固定端口占用已分别记录并用实际复现/动态空闲端口重新核实，不把失败预检计作通过。根 `pnpm verify` 439/439（protocol 203、runtime 134、app 89、domain 13），0 fail/skip；新增 fixture 同时检查独立依赖复制、已有目录拒绝合并、CLI 失败与原生取消；fixture 与真实预检分别报告。

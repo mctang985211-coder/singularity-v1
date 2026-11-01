@@ -14,9 +14,10 @@
 
 | 资产 | 固定身份 |
 |---|---|
-| Buckyball | `c3317d2f0739f829c93a86bee145acc191898e81` |
+| Buckyball upstream | `c3317d2f0739f829c93a86bee145acc191898e81` |
+| 本轮准备副本 | `7510fbaa6c4d8dc435b9b39e645055fe415bed09`，只更新下述 bbdev 修复 gitlink |
 | stack | `f8af074a28eb83cc58424fe08eda2a67c472b73a` |
-| bbdev | `06d35a794b000bb31099f7bcb95b5b8d16b856a1` |
+| bbdev | `a9bd1cb4c4b9948b29ac6323b63a450fbfbb1d4a`，基于 `06d35a794b000bb31099f7bcb95b5b8d16b856a1` 应用领域修复 |
 | 公共 skills | `dc9dff7ce4ac3c6ac1de1748f7cb079bd030dc9b` |
 | CosyVoice 源码 | `074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc`，Matcha-TTS `dd9105b34bf2be2230f4aa1e4769fb586a3c824e` |
 | checkpoint | `FunAudioLLM/Fun-CosyVoice3-0.5B-2512@29e01c4e8d000f4bcd70751be16fa94bf3d85a18`，Apache-2.0，公开非 gated |
@@ -33,7 +34,7 @@
 
 - 仓库说明、当前 Task 协议、范围覆盖说明和固定资产清单。
 - 现有 `model-port`、`model-optimize`、`chip-designer`、`ip-designer`、`ball-align`、`workload-tests`、`debug-compiler`、`check` 和 `report` skills；以注册的原生 skill loader 加载。
-- 标准领域 MCP `mcp__buckyball__bbdev(project,args)`，在各自绝对 checkout 目录执行 `nix develop --command bash -c 'exec bbdev "$@"' -- ...args`；原生 `bash` 用于编辑和独立组件工具。
+- 标准领域 MCP `mcp__buckyball__checkout(project)` 创建完整准备副本，`mcp__buckyball__bbdev(project,args)`，在各自绝对 checkout 目录执行 `nix develop --command bash -c 'exec bbdev "$@"' -- ...args`；原生 `bash` 用于编辑和独立组件工具。
 - 固定平台 `explore-child`；是否分解、如何分解、是否继续分解由当前模型决定。父节点仍承担自己的技术工作和直属结果整合。
 
 不把旧 Singular 的 graph-contract、agent-runtime、canvas 或插件交付规则加入本领域 catalog；它们不是本次芯片业务资源。
@@ -44,16 +45,19 @@
 
 现有 FastMCP 的 `bbdev/mcp/common.py:repo_path()` 按服务源码位置固定仓库，不能直接供多个独立 checkout 共用。最初改用模型自行调用 shell CLI 的决定遗漏了 Nix 激活，真实实跑出现 `bbdev: command not found`；该方案已撤销。
 
-现在使用 [buckyball-mcp.ts](../apps/singularity/examples/buckyball-mcp.ts) 的薄 CLI 适配器，只有 `bbdev(project,args)` 一个工具：`project` 是当前节点独立 checkout 的绝对路径，`args` 是既有 CLI argv。工具直接在该目录执行 `nix develop --command bash -c 'exec bbdev "$@"' -- ...args`，参数逐项传递，不拼接 shell 命令。bbdev 仍负责自身业务命令，DSH 原生 MCP client 负责 transport、timeout 与 teardown；Singularity runtime 没有芯片或 Nix 分支。
+现在使用 [buckyball-mcp.ts](../apps/singularity/examples/buckyball-mcp.ts) 的两个领域工具：`checkout(project)` 用原生 `cp --archive --reflink=auto` 复制完整准备资产，再重新安装本地配置；`bbdev(project,args)` 调用既有 CLI。`BUCKYBALL_BASELINE` 在启动前固定，模型只给新目录的绝对路径；已有目录不能被 checkout 合并覆盖。`project` 是当前节点独立 checkout 的绝对路径，`args` 是既有 CLI argv。工具直接在该目录执行 `nix develop --command bash -c 'exec bbdev "$@"' -- ...args`，参数逐项传递，不拼接 shell 命令。bbdev 仍负责自身业务命令，DSH 原生 MCP client 负责 transport、timeout 与 teardown；Singularity runtime 没有芯片或 Nix 分支。
 
-[buckyball-resources.ts](../apps/singularity/examples/buckyball-resources.ts) 将此工具按标准 ToolAsset 冻结为公共 exploration 资源，空 Method 的每个节点均按正常协议获得它；独立 reviewer 也挂载相同 MCP。操作者预先安装 bbdev 依赖及配置；独立副本要保留这些准备成果，不把环境安装留给 Task 模型。`args:["--help"]` 获取准确语法；本次范围不授权全芯片仿真、全模型 BEMU、P2E/FPGA 或物理后端。组件 UVM 的 top/IP 要与实际设计匹配；elaboration 成功不等于仿真通过。
+[buckyball-resources.ts](../apps/singularity/examples/buckyball-resources.ts) 将此工具按标准 ToolAsset 冻结为公共 exploration 资源，空 Method 的每个节点均按正常协议获得它；独立 reviewer 也挂载相同 MCP。操作者预先安装 bbdev 依赖及配置，使用 `uv venv --relocatable` 创建可复制的 Python 环境。worker 和 reviewer 均用领域 checkout 工具获得包括 `.venv`、子模块、`result` 工具链链接的完整副本；模型不再手工 git clone 和补依赖。`args:["--help"]` 获取准确语法；本次范围不授权全芯片仿真、全模型 BEMU、P2E/FPGA 或物理后端。组件 UVM 的 top/IP 要与实际设计匹配；elaboration 成功不等于仿真通过。
 
 此前裁剪的上游 FastMCP 已完成九工具握手与 `validate(chip="toy")` smoke。它只证明原接口可用；新 MCP 的独立 checkout + 真实 Nix/CLI smoke 证据见 `artifacts/buckyball-cosyvoice3-20261101/native-tool-smoke/`，不把 CLI help 当成芯片构建通过。
 
 操作者准备命令为：
 
 ```bash
-cd "$BBDIR"
+cd "$BBDIR"  # 操作者的独立准备副本
+# 对原 bbdev revision 应用 examples/buckyball-bbdev.patch，然后固定修复后的身份。
+git -C bbdev apply /absolute/singularity-v1/apps/singularity/examples/buckyball-bbdev.patch
+nix develop --command bash -c 'uv venv --relocatable --clear --python "$(command -v python3)" bbdev/api/.venv && uv pip install --python bbdev/api/.venv/bin/python "motia[otel]==1.0.0rc17" "iii-sdk==0.2.0" -r bbdev/api/requirements.txt'
 nix develop --command bash -c 'bbdev config --install'
 ```
 
@@ -133,3 +137,12 @@ node apps/singularity/examples/buckyball-campaign.ts <全新 execution root> <�
 通过 pnpm 锁定补丁，让已完成的非法参数原样进入 DSH 原生工具校验，保留原始错误并附 `failed` 和极简完整格式用例。没有 JSON 自动修复、自然语言错误匹配或 provider 重试；长度终止仍不执行工具，宿主错误仍退出。不能靠 prompt 保证随机模型永远输出合法 JSON，边界职责是拒绝该调用并提供明确格式反馈。
 
 旧 fixture 用 `JSON.stringify` 产生参数，且绕过实际 bbdev 环境，因此没覆盖这两条真实路径。新增测试直接从本地 SSE endpoint 发送畸形参数，经真实 adapter、DSH loop 和工具校验后修正；覆盖 Task、RSI、Summary 和独立 review，并核对没有多建会话、重复准入或虚假闭合。领域 fixture 也实际调用冻结 MCP，另以独立副本验证真实 Nix 激活。此次修正不自动续跑归档或启动新的付费 campaign。
+
+
+## 2026-11-02：真实工具预检与阻塞修复
+
+上一轮的候选 `cosy` 配置缺少 `[main_tile]`。bbdev 的 config queue handler 抛出 `ValueError`，却没有写 failure 终态，CLI 的 24 小时轮询一直等待。仅调用 `--help` 的旧 smoke 未覆盖队列执行。领域补丁 [buckyball-bbdev.patch](../apps/singularity/examples/buckyball-bbdev.patch) 让 config handler 将实际异常写入现有 failure 结果；TOML 库错误使用 `ValueError`，避免 `SystemExit` 退出 worker。bbdev 收到原生 `SIGTERM` 时走现有 finally 清理自身服务。没有增加重试、看门狗、错误文字匹配或 Singularity 恢复状态。
+
+通过 DSH 原生 MCP client 实测全部两个工具：完整 checkout 与 config 安装成功；19 个 CLI/帮助入口可访问；重现上一轮缺失 `[main_tile]` 和缺失 TOML 的配置错误，均约 10 秒返回失败，修正后正常完成安装。AXIS arbiter 组件完成真实 elaboration、VCS 编译与 UVM 运行，`UVM_ERROR=0`、`UVM_FATAL=0`。长调用另以 DSH 原生 AbortSignal 在 25 秒取消，8 秒后确认该副本没有残留 bbdev/iii/motia 进程。这证明领域工具链的真实组件路径，不等于所有芯片设计、EDA 子命令或 CosyVoice3 验收完成。
+
+预检与原始结果保存在本地 `artifacts/buckyball-cosyvoice3-20261102/`。付费 campaign 在这些准备完成后使用新 execution 根和新 deadline；保持空 Method、原模型配置和原总预算。截止后 app 不再尝试将预算终止的 source 送入 RSI。固定工具/schema 仍遵守原 prompt 上限，通过精简重复说明容纳 checkout，不放宽门槛。
