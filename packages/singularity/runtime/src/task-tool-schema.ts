@@ -23,7 +23,7 @@ export const taskProtocolReference: JsonValue = {
   v: 1,
   planning: {
     levels: 'Exactly [0,1] or [0,1,2]. Level 0 is the current Task, level 1 its direct children, level 2 possible grandchildren. Levels describe Task hierarchy, not sequential computation steps.',
-    execution: 'Only directPlan and a later decompose commit select direct children. A sketch itself creates no Tasks. Each child plans and organizes its own level.',
+    execution: 'Refine the initial sketch after resource discovery. Delegate long-chain stages by output and check boundaries, using successive batches for sequential stages. Only directPlan and a later decompose commit select direct children; each child organizes deeper work. A sketch creates no Tasks. A leaf goal is one bounded, directly verifiable unit.',
     epoch: 'Read the current contextEpoch from NodeView. Resume or native compaction can change it; a child admission alone is not proof of an epoch change.',
     schema: protocolJsonSchema(planningSketchSchema),
   },
@@ -35,7 +35,7 @@ export const taskProtocolReference: JsonValue = {
 
 export const planningParameters = {
   sketch: { type: 'json', required: true,
-    description: 'Task hierarchy [0,1] or [0,1,2]: self, children, possible grandchildren. A leaf has empty level 1 and directPlan. Commit only direct children.',
+    description: 'Hierarchy [0,1] or [0,1,2]: self, children, possible grandchildren. Refine after discovery; delegate long-chain stages in direct batches. A bounded verifiable leaf has no children.',
   },
 } as const
 

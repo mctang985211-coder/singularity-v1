@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–009 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–011 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -492,6 +492,8 @@ MCP servers → { name, exposed tools, manifest digest, bundle digest }
 
 每个 worker 在第一次领域工作、调用领域工具或准入 child 之前，先提交一份轻量 PlanningSketch。草图的 `level=0` 是当前 Task，`level=1` 是当前 Task 的 direct children，`level=2` 是这些 children 可能组织的 grandchildren；因此视野是“当前层加未来两层”，最多三层。只有 level 1 能转化为本 Run 的 `singularity_decompose` child；level 2 只能是轻量预期，由对应 child 自己决定是否实现。草图不创建 Task、不改变 Method、不成为 Workflow/Graph authority。
 
+初始草图允许记录待确认的假设。worker 随后阅读相关文档、skill 和源码，在持续实现前细化本级职责、产物、接口与检查边界；发现新阶段或原目标过宽时更新草图并组织直属任务。长链工作的独立阶段通过 child 承接，串行阶段通过后续 batch 衔接；分解服务于职责与接口边界，也服务于并行。只有目标已收敛为一个有界、可直接验证的工作单元时才直接作为叶节点完成。每层仍承担必要的本地分析、实现、检查和直属结果集成。此处是模型工作指引，host 不做自然语言复杂度判定、不强制树深或 child 数量。
+
 ~~~ts
 interface PlanningSketch {
   readonly v: 1
@@ -540,7 +542,7 @@ Summary Worker 的工具面只有读取已注入合同和提交摘要对象；�
 - Method 固定 child template 选项、skill/tool 绑定、默认用例。
 - 当前模型根据本次目标和 PlanningSketch 决定是否分解、选哪几个、怎样填写业务字段、何时追加下一批。
 - 一次只准入一个 active child batch；同批 child 必须能独立执行，不含 sibling dependsOn。
-- 顺序依赖通过批次表达：第一批返回结果，父节点将明确 frozen outputs 作为第二批 inputs。
+- 顺序依赖通过批次表达：第一批返回结果，父节点将明确 frozen outputs 作为第二批 inputs。串行任务仍可有独立职责与产物，不以有无并行收益决定是否分解。
 - 不需要独立 Workflow 对象、DAG scheduler、join node 或 edge 状态。
 - 每个 Run 可依次发多批；禁止把“一批原子提交”写成“Task 一生只能分解一次”。
 
@@ -1263,38 +1265,39 @@ children/<taskId>/<outputId>/...
 下列 worker card 为 V1 规范的完整平台正文。它提供当前目标、可执行动作和下一步；schema、guard 和结算负责协议约束。模板 guidance 和 skill 与该 card 冲突时，平台义务优先。
 
 ~~~text
-You execute one Singularity Task as one level of a larger workflow.
-Start with singularity_read(kind="self"). Follow every nextCursor until the
-complete contract is read, then call singularity_plan with levels [0,1] or
-[0,1,2]: 0 is this Task, 1 direct children, 2 possible grandchildren, not
-sequential work steps. Commit only level 1; each child replans its own level.
-Use the current contextEpoch and directPlan only for bindingIds shown
-in NodeView childOptions. Work toward the current goal using the authorized
-workspace inputs, bound skills, and MCP tools listed in NodeView.
+You own one Task's local workflow, technical work and direct-result integration.
+Start with singularity_read(kind="self"); follow all nextCursor pages, then
+submit an initial singularity_plan. Read relevant documents, skills and source
+to refine it before sustained implementation. Plan levels [0,1] or [0,1,2]:
+0=this Task, 1=direct children, 2=possible grandchildren. Create only level 1;
+each child plans deeper work. Use current contextEpoch and visible bindingIds.
 
-Use singularity_decompose with action "prepare" and one visible bindingId to
-read that child's complete frozen example. With no useful child, keep directPlan
-empty and do current work. On a later model step, commit
-children with bindingId, ackPreview equal to previewRef.digest, and task filled
-with goal, localCriteria, authorized inputs and localOutputs. A successful
-commit concludes this turn and releases the parent while its batch is active.
-Use singularity_read(kind="status") to inspect previews; prepare again when
-status marks one stale. After a batch, read direct child results and feedback,
-then integrate or prepare the next batch. Read an ancestor summary when useful.
-Use singularity_feedback for a direct-parent suggestion and continue local work.
-When the declared outputs are ready, call singularity_submit; the
-independent verifier records acceptance. When the current goal cannot be
-completed, call singularity_stop with a concrete blocker.
+For a long chain, delegate stages with distinct outputs and checks to direct
+children, including sequential stages in successive batches. Decomposition
+sets responsibility and interfaces as well as parallelism. Do bounded local
+analysis, implementation, checking and integration yourself. Work directly as
+a leaf when the goal is one bounded, directly verifiable unit. Replan when
+discovery exposes further stages or an overly broad scope.
+
+Call singularity_decompose(action="prepare", bindingId=...) to read the full
+frozen example. On a later model step commit children with bindingId,
+ackPreview=previewRef.digest, and task goal/localCriteria/inputs/localOutputs.
+Commit ends this turn; wait for the batch. Read direct results and feedback,
+integrate, then prepare the next batch. Refresh stale previews via
+singularity_read(kind="status"). Use authorized inputs, workspace, skills and
+MCP tools. Public-resource work may use inputs:[].
+Read ancestor summaries when useful; send direct-parent suggestions with
+singularity_feedback and continue local work. Call singularity_submit when
+declared outputs are ready for independent verification, or singularity_stop
+with a concrete blocker when the goal cannot be completed.
 ~~~
 
 探索模式只追加：
 
 ~~~text
-Local exploration is enabled at this level. Follow supplied local guidance and
-explore with the frozen public documents, skills and MCP servers in resources.
-Use the fixed explore-child example for a direct child and preserve useful
-discoveries as drafts. Registering and binding capabilities belongs to a later
-Method revision.
+Local exploration is enabled at every eligible level. Discover the local
+workflow from frozen public resources, use explore-child for its direct
+stages, and preserve useful skill/tool drafts. RSI registers later revisions.
 ~~~
 
 首条 wake：
@@ -2162,7 +2165,7 @@ T14 host 比较多 case 与 validation Evidence，rsi/round-closed 为 improved/
 T15 若 domain evaluation 和发布门槛均满足，操作者以 CAS 授权 activation；下一 Round 以新 active head 为 base
 ~~~
 
-这个例子不要求新方法总有两个 child，也不要求所有节点必须分解。它展示了从零发现 workflow、形成资产、下一版固定绑定的边界；实际 domain 不需要为此修改 core。
+这个例子不固定 child 数或树深。长链任务按职责、产物与检查边界组织直属 workflow；已收敛为有界、可直接验证单元的叶节点直接完成。它展示了从零发现 workflow、形成资产、下一版固定绑定的边界；实际 domain 不需要为此修改 core。
 
 ## 20. Protocol conformance 场景
 
@@ -2281,7 +2284,7 @@ C-24 single-case gain with validation regression is not improved
 
 实现默认沿 DSH 公开接口或现成库完成。保留自定义层必须提供具体原生调用路径，并比较本项目实际接入后的状态、分支和适配；只有明确证明原生方案更复杂时才保留。“暂不能证明等价”“库存在不代表可替代”都不能单独充当保留理由。可由操作者保证的条件在启动前固定，runtime 不为环境违约另建探测、恢复或兜底系统。输入不符合合同或权限时返回对应错误，普通执行失败按现有分类结束。改变公开字段、状态或 authority 时提出 amendment；独立正常功能继续推进。
 
-当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010 为准）：
+当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011 为准）：
 
 | Amendment | 状态 | 纳入内容 |
 |---|---|---|
@@ -2295,6 +2298,8 @@ C-24 single-case gain with validation regression is not improved
 | 008 | 2026-11-01 用户要求完成剩余删改、核验完整框架并提交/合并 PR；已纳入本文 | events 唯一幂等索引；CAS 完整临时文件后原子发布，append 无通用引用扫描；schema 路径、原生 readdir 与 leaf hash；可信 MCP metadata 不作权限门禁；删重复 args/copy；领域运行入口移入 examples；保留业务 retry 与祖先摘要 |
 | 009 | 2026-11-01 用户授权补齐真实全流程测试并优化架构/prompt；落实既有 required/probe 区分 | winner 与自动 replacement 限制只用于 required；probe 后续 batch 可创建新子问题且保留旧结果；空 Method 的 ProposerView 省略不存在的 entry；摘要工具明确既有字段类型；proposer 按假设读取相关轨迹并集中表达复用指令，DSH 直接消费 Zod 派生的 MethodPatch JSON Schema。无新增协议字段、恢复机制或验收权限 |
 | 010 | 2026-11-01 用户要求 bbdev 使用标准 MCP、前置 Nix 环境并复用 DSH 参数失败；已纳入本文 | 领域 MCP 在所选 checkout 内激活环境；完成的非法工具参数走原生校验，保留错误并附 failed/极简完整用例；不修复 JSON、不做文字匹配或 provider 重试。锁定 alpha2 适配器补丁修正该错误分类，不新增 Task 状态或恢复层 |
+
+| 011 | 2026-11-02 用户要求停止浅层 BB 轮次、修改 workflow 引导并重开；已纳入本文 | 初始草图经资源探索后细化；长链按职责、产物和检查边界分解，串行阶段用后续批次；每层只组织直属任务并承担本地技术工作和集成；叶节点为有界可直接验证单元。保留结构校验与既有预算，无语义门禁、固定分解树或新增状态 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 
