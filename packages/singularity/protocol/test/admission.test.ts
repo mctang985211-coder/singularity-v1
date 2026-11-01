@@ -550,6 +550,30 @@ void test('child admission derives probe join from the fixed binding', () => {
   })
 })
 
+void test('empty Method children inherit a fixed goal criterion and cannot verify with an empty receipt', () => {
+  const emptyMethod = sealMethodRevision({ v: 1, id: 'empty', templates: [], skills: [], tools: [] })
+  const pinned = { id: emptyMethod.id, digest: emptyMethod.digest }
+  const exploration: protocol.GlobalResourceSnapshot = { v: 1, documents: [], skills: [], tools: [],
+    baseTools: [], fallbackAcceptance: childTemplate.acceptancePolicy, fallbackJoin: 'probe' }
+  const parent = admitRootTask({ ...rootInput, method: pinned,
+    template: { id: protocol.EXPLORE_TEMPLATE_ID, digest: pinned.digest },
+    resources: { ...resources, exploration: { id: 'global', digest: computeDigest('object', exploration) } } })
+  const request = childRequest(childBatchInput())
+  const child = firstChild(admitChildBatch({ parent, method: emptyMethod, exploration,
+    parentRunId: 'run-root-1', batchId: 'batch-1', children: [{ ...request,
+      bindingId: protocol.EXPLORE_BINDING_ID, proposal: { ...request.proposal, localCriteria: [] } }] })).contract
+  assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['task-goal', true]])
+  const expected: protocol.PublicReceiptExpectation = { provider: child.acceptance, operationId: 'verify-child',
+    contractDigest: child.digest, inputDigests: [], outputDigests: [], requiredCriteria: child.spec.criteria.map(value => value.id) }
+  const payload = { v: 1, provider: expected.provider, operationId: expected.operationId,
+    contractDigest: expected.contractDigest, inputDigests: [], outputDigests: [], exit: { code: 0, signal: null }, timedOut: false }
+  assert.equal(protocol.validatePublicReceipt(protocol.sealPublicReceipt({ ...payload, criteria: [] }), expected).verdict, 'invalid')
+  for (const verdict of ['pass', 'fail'] as const) {
+    const receipt = protocol.sealPublicReceipt({ ...payload, criteria: [{ id: 'task-goal', verdict, reason: 'Independent local goal finding.' }] })
+    assert.equal(protocol.validatePublicReceipt(receipt, expected).verdict, verdict === 'pass' ? 'verified' : 'failed')
+  }
+})
+
 void test('child admission allows multiple instances of a probe binding in one batch', () => {
   const input = childBatchInput()
   const request = childRequest(input)

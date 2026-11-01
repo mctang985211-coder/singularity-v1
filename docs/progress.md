@@ -168,3 +168,10 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 修订 admission/reducer：required 仍每批一实例；probe 可同批多实例并共用已交付 preview。runtime 的稳定 Task ID 加入数组 index，命令重放保持原实例与单事实，没有新模型字段、状态或恢复 helper。回归覆盖重复 required/Task ID 拒绝、同 probe 多实例预算与幂等，以及原生 DSH 的单槽逐 child 执行、整批 terminal 唤醒和 parent 集成验收。完整验证与新轮次结果随后以实际记录补充。
 
 本次根 `pnpm verify` 443/443（protocol 205、runtime 135、app 90、domain 13），0 fail/skip；project/build/typecheck/lint 通过。日志 `artifacts/probe-batch-20261102-verify.log`，原生两子任务单槽回归见 `artifacts/probe-batch-native-20261102.log`。尚不以 fixture 代表新 BB 实跑成功。
+
+
+### 探索 child 的本地目标验收（amendment 013）
+
+实跑中 fallback 的 requiredCriteria 为空，导致 child 正常提交后可获得空 criteria 的 verified，这只能证明协议退出，不能证明完成局部目标。固定 explore-child 现继承 required `task-goal`，领域 verifier 根据冻结 goal/deliverable/scope/constraints 检查实际输出；BB reviewer 同步说明。localCriteria 保持指导用途。协议回归同时检查空 receipt invalid、目标未完成 failed 和完成 verified；原生三级探索回归检查 child/grandchild 实际继承同一标准。无新工具、字段、状态或 runtime 语义判定器。
+
+本次根 `pnpm verify` 444/444（protocol 206、runtime 135、app 90、domain 13），project/build/typecheck/lint 通过，0 fail/skip；日志 `artifacts/explore-goal-20261102-verify.log`。该检查验证当前协议与原生接线，不替代新 BB 轮次的目标验收。
