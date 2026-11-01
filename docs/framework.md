@@ -1357,7 +1357,9 @@ singularity_stop
 
 MCP server/tool schema 与描述不携带本次 Run 的精确 token、step、wall-clock 或 Task 数；host 在 NodeView、wake 和 tool result 中提供统一剩余百分比，精确值留在 guard 和记录。
 
-上述工具的 schema 均拒绝未知字段。错误通过 DSH 标准 tool failure 返回短 JSON：{ code, nextAction, remainingBudgetPct }；nextAction 是正向可执行动作。协议拒绝码固定为 INVALID_ARGUMENT、READ_SELF_FIRST、PLAN_FIRST、PREVIEW_REQUIRED、PREVIEW_STALE、NEXT_STEP_REQUIRED、CHILD_BATCH_ACTIVE、REQUIRED_FEEDBACK_REPLAN、INPUT_NOT_AUTHORIZED、BINDING_FIXED、LIMIT_EXCEEDED、ALREADY_SUBMITTED、RUN_CLOSED、COMPOSITION_MISMATCH、IDEMPOTENCY_CONFLICT。错误不创建 child、不提交产物；已经落盘的相同命令按 commandId + commandDigest 返回原结果。
+上述工具的 schema 均拒绝未知字段。协议拒绝通过 DSH 标准 tool failure 返回短 JSON：{ code, nextAction, remainingBudgetPct }；nextAction 是正向可执行动作。协议拒绝码固定为 INVALID_ARGUMENT、READ_SELF_FIRST、PLAN_FIRST、PREVIEW_REQUIRED、PREVIEW_STALE、NEXT_STEP_REQUIRED、CHILD_BATCH_ACTIVE、REQUIRED_FEEDBACK_REPLAN、INPUT_NOT_AUTHORIZED、BINDING_FIXED、LIMIT_EXCEEDED、ALREADY_SUBMITTED、RUN_CLOSED、COMPOSITION_MISMATCH、IDEMPOTENCY_CONFLICT。错误不创建 child、不提交产物；已经落盘的相同命令按 commandId + commandDigest 返回原结果。
+
+模型已完成输出中的非法 JSON 或 schema 参数错误，交给 DSH 原生工具解析/校验并返回 `isError`；Singularity 工具保留原始错误内容，追加 `{status:"failed",example,nextAction}`，其中 example 是该工具完整、极简的格式用例，实际 ID 与目标取自当前视图。此规则同样适用于 RSI、Summary 和领域审查的提交工具。用例按需在失败结果或协议资源中展示，不重复注入 system prompt。模型可在同一 Run 的下一步修正，正常计入使用量；不修补 JSON、不匹配自然语言错误、不为参数错误重购 provider 请求或创建恢复会话。输出长度终止仍由 DSH 处理，不执行未完成的调用；宿主/provider/存储异常仍按 §19.1 抛出。
 
 ### 14.2 状态与工具交集
 
@@ -2109,7 +2111,7 @@ public/private boundary declaration
 real scenario conformance suite
 ~~~
 
-每个 MCP server 由部署在启动前提供可信 bundle、transport 配置和真实 OS/broker 权限。capabilities 只描述领域能力；框架不将声明变成权限白名单，不校验 manifest/config 的精确键集合。边界 schema 解析实际消费字段；DSH MCP client 负责连接、原生配置校验、schema 暴露、timeout 和 teardown。挂载后只比较实际工具名、description、parameters 和冻结 Method surface。
+每个 MCP server 由部署在启动前提供可信 bundle、transport 配置和真实 OS/broker 权限。领域 CLI 的环境激活与依赖由操作者或领域 MCP 准备；需要 Nix 的工具在目标项目目录内激活后执行，Task 模型只提交业务参数，runtime 不实现领域环境准备。capabilities 只描述领域能力；框架不将声明变成权限白名单，不校验 manifest/config 的精确键集合。边界 schema 解析实际消费字段；DSH MCP client 负责连接、原生配置校验、schema 暴露、timeout 和 teardown。挂载后只比较实际工具名、description、parameters 和冻结 Method surface。
 
 ### 19.1 启动条件、正常调度与同进程续接
 
@@ -2240,7 +2242,7 @@ C-24 single-case gain with validation regression is not improved
 
 ~~~text
 版本：V1 发布规范
-修订：2026-11-01 纳入 amendment 006/007/008/009（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布与 probe 复用）
+修订：2026-11-01 纳入 amendment 006/007/008/009/010（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 复用与原生工具参数失败）
 权威文件：docs/framework.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威
@@ -2279,7 +2281,7 @@ C-24 single-case gain with validation regression is not improved
 
 实现默认沿 DSH 公开接口或现成库完成。保留自定义层必须提供具体原生调用路径，并比较本项目实际接入后的状态、分支和适配；只有明确证明原生方案更复杂时才保留。“暂不能证明等价”“库存在不代表可替代”都不能单独充当保留理由。可由操作者保证的条件在启动前固定，runtime 不为环境违约另建探测、恢复或兜底系统。输入不符合合同或权限时返回对应错误，普通执行失败按现有分类结束。改变公开字段、状态或 authority 时提出 amendment；独立正常功能继续推进。
 
-当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009 为准）：
+当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010 为准）：
 
 | Amendment | 状态 | 纳入内容 |
 |---|---|---|
@@ -2292,6 +2294,7 @@ C-24 single-case gain with validation regression is not improved
 | 007 | 2026-11-01 用户要求修复审查问题，并规定只有明确证明原生接入更复杂才可保留自定义层；已纳入本文 | 原生生命周期/surface epoch 与消息面 wake 判重；删除 skill 事后逐字段复验、MCP HOME/XDG 管理和 loopback URL policy；schema 复用 Zod；保留项给出具体接入比较；operator 取消传入 verifier，仅本次 deadline 分类超时 |
 | 008 | 2026-11-01 用户要求完成剩余删改、核验完整框架并提交/合并 PR；已纳入本文 | events 唯一幂等索引；CAS 完整临时文件后原子发布，append 无通用引用扫描；schema 路径、原生 readdir 与 leaf hash；可信 MCP metadata 不作权限门禁；删重复 args/copy；领域运行入口移入 examples；保留业务 retry 与祖先摘要 |
 | 009 | 2026-11-01 用户授权补齐真实全流程测试并优化架构/prompt；落实既有 required/probe 区分 | winner 与自动 replacement 限制只用于 required；probe 后续 batch 可创建新子问题且保留旧结果；空 Method 的 ProposerView 省略不存在的 entry；摘要工具明确既有字段类型；proposer 按假设读取相关轨迹并集中表达复用指令，DSH 直接消费 Zod 派生的 MethodPatch JSON Schema。无新增协议字段、恢复机制或验收权限 |
+| 010 | 2026-11-01 用户要求 bbdev 使用标准 MCP、前置 Nix 环境并复用 DSH 参数失败；已纳入本文 | 领域 MCP 在所选 checkout 内激活环境；完成的非法工具参数走原生校验，保留错误并附 failed/极简完整用例；不修复 JSON、不做文字匹配或 provider 重试。锁定 alpha2 适配器补丁修正该错误分类，不新增 Task 状态或恢复层 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

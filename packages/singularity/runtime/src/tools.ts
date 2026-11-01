@@ -30,7 +30,8 @@ import { MCP_RESOURCE_TOOL_NAMES } from './mcp-resources.ts'
 import type { NodeView,RemainingBudgetPct } from './prompt.ts'
 import { assertPromptBudget } from './prompt.ts'
 import { createTaskFeedback,feedbackRefsFromSession } from './task-feedback.ts'
-import { budgetValueSchema,decomposeInputSchema,decomposeOutputSchema,decomposeParameters,planningInputSchema,planningParameters,refValueSchema } from './task-tool-schema.ts'
+import { budgetValueSchema,decomposeInputSchema,decomposeOutputSchema,decomposeParameters,planningInputSchema,planningParameters,refValueSchema,taskToolExamples } from './task-tool-schema.ts'
+import { withToolExample } from './tool-example.ts'
 import type { CasObjectWriter,FrozenSubmission } from './workspace.ts'
 import { freezeSubmission,SubmissionError } from './workspace.ts'
 
@@ -164,7 +165,7 @@ export class RunToolController {
     const tools: ToolDefinition[] = [this.readTool(), this.planTool(), this.feedbackTool(),
       ...(this.options.decompose === undefined ? [] : [this.decomposeTool(this.options.decompose, agent)]), this.submitTool(), this.stopTool()]
     for (const tool of tools) {
-      agentCtx.tools.register({ ...tool, execute: async (args, exec) => {
+      agentCtx.tools.register(withToolExample({ ...tool, execute: async (args, exec) => {
         this.refreshEpoch()
         const code = this.denialCode(tool.name, exec.agent, args)
         if (code !== undefined) throw this.toolError(code)
@@ -172,7 +173,7 @@ export class RunToolController {
           return await tool.execute(args, exec)
         } catch (error) {
           if (error instanceof TaskToolRefusal) throw error
-          if (error instanceof ToolArgsError) throw this.toolError('INVALID_ARGUMENT', error.message)
+          if (error instanceof ToolArgsError) throw error
           if (error instanceof DecomposeError) throw this.toolError(error.code, error.message)
           if (error instanceof SubmissionError) {
             throw this.toolError('INVALID_ARGUMENT', `${error.code}: ${error.message}`)
@@ -181,7 +182,7 @@ export class RunToolController {
           agent.cancel({ kind: 'hook', reason: 'task-tool-error' })
           throw error
         }
-      } })
+      } }, taskToolExamples[tool.name]))
     }
     // Task bodies and base/domain dispatch share one condition source, once per call.
     agentCtx.tools.guard(execution => tools.some(tool => tool.name === execution.name)

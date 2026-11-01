@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent,AgentHandle,AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool,ToolArgsError } from '@deepseek-ai/dsh-tools'
 import type { FactActor,JsonValue,MethodPatch,Ref,SessionCut,UsageRecord } from '@singularity/protocol'
 import { canonicalize,closedObject,methodPatchSchema,methodRevisionSchema,parseProtocolValue,protocolJsonSchema,seal } from '@singularity/protocol'
 import { ZodError } from 'zod'
@@ -16,6 +16,7 @@ import { readRoundObject,readRoundPlan } from './round.ts'
 import { commitFact } from './run-settlement.ts'
 import type { CommandService } from './service.ts'
 import { sameRef } from './skill-resources.ts'
+import { withToolExample } from './tool-example.ts'
 import type { PublicTrace } from './trace.ts'
 import { readPublicTrace,readTraceAsset,readTracePage } from './trace.ts'
 import { deliverWakeOnceOrFail } from './wake.ts'
@@ -143,7 +144,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
       agent = instance
       const register = (tool: ToolDefinition) => ctx.tools.register({ ...tool, execute: async (args, exec) => {
         try { return await tool.execute(args, exec) } catch (error) {
-          if (error instanceof DecomposeError || error instanceof MethodPatchRejection || error instanceof ZodError) throw error
+          if (error instanceof ToolArgsError || error instanceof DecomposeError || error instanceof MethodPatchRejection || error instanceof ZodError) throw error
           failures.push(error)
           instance.cancel({ kind: 'hook', reason: 'proposer-host-error' })
           throw error
@@ -161,7 +162,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
           return text
         },
       })
-      register(defineTool({
+      register(withToolExample(defineTool({
         name: 'rsi_read', description: 'Read the proposer view, sealed trace chapters, pinned Method and authorized public source assets by bounded pages.',
         parameters: {
           kind: { type: 'string', required: true, enum: ['proposer-view', 'trace-index', 'trace-page', 'method', 'asset', 'public-resources', 'previous-round'], description: 'Use {kind:"trace-index"} to list chapters. Read a chapter with {kind:"trace-page",id:"contract",page:0}. Read method for templates, then asset for original guidance/example refs. public-resources lists frozen documents including a task protocol reference when supplied. previous-round gives the latest same-base closed Round public feedback. Omit id except for trace-page and asset.' },
@@ -198,7 +199,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
           assertPromptBudget(canonicalize(response), 16 * 1024, 'RSI read result')
           return response as unknown as JsonValue
         },
-      }))
+      }), { kind: 'trace-index' }))
       const submit = defineTool({
         name: 'rsi_submit_patch', description: 'Submit one reusable MethodPatch. guidance is inline text; example uses illustrative exampleText inputs. files maps relative paths to UTF-8 contents; a skill requires SKILL.md. acceptancePolicy reuses an authorized source/base Ref. set-entry selects a template, or null removes the entry. The host creates refs and digests.',
         parameters: { patch: { type: 'json', required: true } },
@@ -210,7 +211,8 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
           return { submitted: true, proposalRef, remainingBudgetPct: percentages() } as unknown as JsonValue
         },
       })
-      register({ ...submit, parameters: patchInputSchema })
+      register(withToolExample({ ...submit, parameters: patchInputSchema }, { patch: { v: 1, base: opened.data.baseMethod,
+        hypothesis: 'Describe the reusable improvement.', changes: [], predictedRisks: [], transferPlan: 'Evaluate the changed workflow.' } }))
       const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
       if (globalNames.length > 0) ctx.tools.restrict({ deny: globalNames })
       assertPromptBudget(canonicalize(ctx.tools.schemas(instance)), 12 * 1024, 'RSI tool schemas')

@@ -1,0 +1,84 @@
+diff --git a/lib/index.js b/lib/index.js
+index 0520d6f80b4752e343c2d25790a110b9c6765147..c3d657de469c1a9953f5cc2e272591233924209c 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1541,13 +1541,12 @@ function mapStopReason(message, contextWindow) {
+ *   in-band terminal error an aborted finish.
+ * @param requestedModel - request model identity recorded for durable replay.
+ * @returns the harness chunks, ending with `usage` then `finish`; throws
+-*   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event, or
+-*   `MALFORMED_RESPONSE` when completed tool arguments are invalid. Length-limited
+-*   output retains its terminal reason so the assembler can discard incomplete calls.
++*   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event.
++*   Length-limited output retains its terminal reason so the assembler can discard
++*   incomplete calls. Invalid completed arguments go to the native tool validator.
+ */
+ async function* toStreamChunks(events, contextWindow, callerSignal, requestedModel) {
+ 	const toolIds = /* @__PURE__ */ new Map();
+-	let argumentsError;
+ 	for await (const event of events) switch (event.type) {
+ 		case "start": break;
+ 		case "text_start":
+@@ -1604,7 +1603,8 @@ async function* toStreamChunks(events, contextWindow, callerSignal, requestedMod
+ 			const name = partial?.type === "toolCall" ? partial.name : "";
+ 			toolIds.set(event.contentIndex, {
+ 				id,
+-				name
++				name,
++				arguments: ""
+ 			});
+ 			yield {
+ 				type: "block-start",
+@@ -1615,6 +1615,7 @@ async function* toStreamChunks(events, contextWindow, callerSignal, requestedMod
+ 		}
+ 		case "toolcall_delta": {
+ 			const known = toolIds.get(event.contentIndex);
++			if (known !== void 0) known.arguments += event.delta;
+ 			yield {
+ 				type: "tool-call-delta",
+ 				index: event.contentIndex,
+@@ -1625,10 +1626,6 @@ async function* toStreamChunks(events, contextWindow, callerSignal, requestedMod
+ 			break;
+ 		}
+ 		case "toolcall_end":
+-			if (event.toolCall.argumentsError !== void 0) {
+-				argumentsError ??= `Tool call "${event.toolCall.name}": ${event.toolCall.argumentsError}`;
+-				break;
+-			}
+ 			yield {
+ 				type: "block-end",
+ 				index: event.contentIndex,
+@@ -1636,7 +1633,7 @@ async function* toStreamChunks(events, contextWindow, callerSignal, requestedMod
+ 					type: "tool-call",
+ 					id: brandString(event.toolCall.id),
+ 					name: event.toolCall.name,
+-					arguments: JSON.stringify(event.toolCall.arguments)
++					arguments: event.toolCall.argumentsError === void 0 ? JSON.stringify(event.toolCall.arguments) : toolIds.get(event.contentIndex)?.arguments ?? ""
+ 				}
+ 			};
+ 			break;
+@@ -1645,7 +1642,6 @@ async function* toStreamChunks(events, contextWindow, callerSignal, requestedMod
+ 				type: "usage",
+ 				usage: mapUsage(event.message.usage)
+ 			};
+-			if (argumentsError !== void 0 && event.message.stopReason !== "length") throw new LlmError(argumentsError, "MALFORMED_RESPONSE");
+ 			yield {
+ 				type: "finish",
+ 				reason: mapStopReason(event.message, contextWindow),
+diff --git a/lib/types/stream.d.ts b/lib/types/stream.d.ts
+index a4052127c7c0da0356e354f50138f4d751149b05..837af55c7d91b8bcac72b0cf0287c500f9c462d5 100644
+--- a/lib/types/stream.d.ts
++++ b/lib/types/stream.d.ts
+@@ -37,9 +37,9 @@ export declare function mapStopReason(message: AssistantMessage, contextWindow?:
+  *   in-band terminal error an aborted finish.
+  * @param requestedModel - request model identity recorded for durable replay.
+  * @returns the harness chunks, ending with `usage` then `finish`; throws
+- *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event, or
+- *   `MALFORMED_RESPONSE` when completed tool arguments are invalid. Length-limited
+- *   output retains its terminal reason so the assembler can discard incomplete calls.
++ *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event.
++ *   Length-limited output retains its terminal reason so the assembler can discard
++ *   incomplete calls. Invalid completed arguments go to the native tool validator.
+  */
+ export declare function toStreamChunks(events: AsyncIterable<AssistantMessageEvent>, contextWindow?: number, callerSignal?: AbortSignal, requestedModel?: string): AsyncGenerator<StreamChunk>;
+ //# sourceMappingURL=stream.d.ts.map

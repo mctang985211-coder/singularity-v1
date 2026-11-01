@@ -7,13 +7,16 @@ import { ContractSummaryService, DomainStore } from '@singularity/runtime'
 import { agentOptions, fixtureUsage, makeScenario } from './task-fixture.ts'
 import type { Scenario } from './task-fixture.ts'
 import { withHarness } from './run-fixture.ts'
+import { messageTexts } from './fixtures/chat-completions.ts'
 
 void test('ancestor cache miss runs one independent scoped summary session and settles source usage', { timeout: 120_000 }, async () => {
   let scenario: Scenario | undefined
   let source: ContractSummary | undefined
   await withHarness((request, index) => {
     assert.ok(scenario)
-    assert.equal(index, 0)
+    if (index === 0) return { toolCalls: [{ id: 'bad-summary', name: 'singularity_summary_submit', arguments: '{"summary":' }], usage: fixtureUsage(index) }
+    assert.equal(index, 1)
+    assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
     assert.equal(JSON.stringify(request).includes(scenario.contract.digest), true)
     const toolNames = request.tools?.map(tool => tool.function?.name)
     assert.deepEqual(toolNames, ['singularity_summary_submit'])
@@ -42,18 +45,18 @@ void test('ancestor cache miss runs one independent scoped summary session and s
       const pending = await summaries.readAncestor(state, 'child', { kind: 'ancestor', id: scenario.contract.digest }, 100)
       assert.equal(JSON.stringify(pending.data).includes('SUMMARY_PENDING'), true)
       const usage = await summaries.finishRun('source-run')
-      assert.equal(fixture.requests.length, 1)
+      assert.equal(fixture.requests.length, 2)
       assert.ok(usage)
       assert.equal(usage.ownerTaskId, 'summary-root')
       assert.equal(usage.sourceContract, scenario.contract.digest)
-      assert.equal(usage.inputTokens, fixtureUsage(0).promptTokens)
-      assert.equal(usage.outputTokens, fixtureUsage(0).completionTokens)
-      assert.equal(usage.steps, 1)
+      assert.equal(usage.inputTokens, fixtureUsage(0).promptTokens + fixtureUsage(1).promptTokens)
+      assert.equal(usage.outputTokens, fixtureUsage(0).completionTokens + fixtureUsage(1).completionTokens)
+      assert.equal(usage.steps, 2)
       assert.equal(usage.unknownRequests, 0)
       const loaded = await summaries.readAncestor(state, 'child', { kind: 'ancestor' }, 101)
       assert.deepEqual((loaded.data as { summary: ContractSummary }).summary, source)
       assert.ok(loaded.objectRef)
-      assert.equal(fixture.requests.length, 1, 'cache hits and ancestor reads do not purchase model requests')
+      assert.equal(fixture.requests.length, 2, 'cache hits and ancestor reads do not purchase model requests')
       const record = summaries.records()[0]
       assert.ok(record)
       assert.ok(record.sessionCut.sessionId.includes('source-run'))

@@ -4,7 +4,7 @@
 
 - `docs/framework.md` 是协议唯一权威；`spec-lock.json` 固定其 digest。`AGENTS.md` 只写施工约束，`docs/progress.md` 写当前状态、证据和缺口。调研 artifact 不替代规范，不另建平行任务卡和交接规范。
 - 开始或恢复工作时阅读相关规范、进度和实际消费者；保留工作区已有未提交成果。旧 Singularity 仓库不提供本仓库兼容要求。
-- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
+- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
 
 ## 启动条件先于执行
 
@@ -13,6 +13,7 @@
 - app 在 profile boot 前验证剩余预算并 exclusive create 输出根；Run 在模型创建前验证冻结资源、provider identity 并准备输入。真实 scoped prompt/MCP surface 在 setup、第一模型请求前完成校验；固定 profile 只启用原生 skill registry/loader，冻结 skills 直接注册到 Agent scope，不逐字段重读自检。
 - 操作者提供健康存储和干净 launch env。可信公开任务沿现有本地 profile 执行；隐藏数据或不可信代码先用现成 OS/容器/broker 建立真实读写/网络/进程边界。cwd、HOME、chmod、loopback URL 和 manifest capability 声明均不能代替这些边界。
 - profile 不挂载任意 filesystem/global skill provider，不在执行中修改共享 registry；全局公开资源先冻结再注册到当前 scope。MCP 的 HOME/TMP/XDG 路径由部署环境提供，框架不创建或重定向。可信 bundle 的 capability 列表只作描述，manifest/config 只解析消费字段，不设 exact-key/能力白名单门禁；实际 surface 对比保留。
+- 领域 CLI 经标准 MCP 提供；操作者或领域 MCP 准备依赖并在目标项目内激活环境（如 nix develop → bash）。Task 模型传业务参数，runtime 不实现领域环境准备。
 - 公开 profile/config 只提供公开 JSON 值，凭据通过原生 launchEnvironment 注入；Composition 序列化不扫描 password/token 等字段名。DSH MCP client 已有原生环境名称 scrub；不再维护第二份 credential 清单，不宣称原生启发式去除了所有凭据渠道。
 
 ## 唯一 authority 与依赖
@@ -28,6 +29,7 @@
 - 默认使用现成库和 DSH 公开插件。保留自定义层必须列出可用原生调用路径，比较本项目接入后的状态、分支和适配成本，明确证明原生方案更复杂；“暂不能证明等价”不构成保留理由。可由操作者固定的环境条件写在启动约定，不添加运行期兜底。内部文件拆分由消费者决定，不设行数/文件数指标，不把临时 owner 表当永久架构。
 - 边界验证真实输入，内部复用已解析类型和结果。相对路径共用 schema；DSH defineTool 已校验参数的部分不再手写 exact-key/类型检查。产物冻结使用原生递归 readdir、leaf no-follow 和最终 hash；不恢复 ancestor walker。路径隔离是部署前置条件，可信本地 fixture 不冒充私有/不可信部署。Zod 单源定义协议结构，Ajv 处理模板提供的动态 JSON Schema；不用手写 JSON parser/schema interpreter，不在每次解析时做 canonical JSON 往返。协议 schema 不使用 transform/default/coercion，由源码门禁约束。
 - 只有模型可修正的参数、计划、提交和协议拒绝返回模型。宿主 CAS、provider、会话、资源、原生清理等未知异常保留原始原因，原生 cancel/dispose 后抛出，不写虚假 invalid/Evidence/闭合 fact。Summary、Proposer、precheck 与 Task 工具遵守同一边界。清理须尝试完成；多重失败保留全部原因，不吞错误。
+- 完成的非法工具参数走 DSH 原生解析/校验；Singularity 工具保留原始失败并附 failed 与完整极简格式用例。用例按需展示，不堆进 system prompt；不修补 JSON、不匹配自然语言错误、不建立参数恢复或 provider 重购机制。原始畸形参数须经过真实 provider adapter 的无付费回归，不能只用 JSON.stringify fixture 证明该路径。
 - 预算/截止、领域失败和无效验收仍按协议结算。verifier 转发 AbortSignal 并等待自己拥有的工作退出，不能丢弃 Promise 冒充停止。任意不合作进程内代码不在强停保证内。
 - 同进程 parent yield → 整批 terminal → continue 是正常路径；只允许实际观察到的 live yield 续接，不从归档重建。保持原合同、session 和 deadline；已挂载 child 输出不重复覆盖。业务 retry 使用新 Run/session 和独占创建的新 workspace，保留 required feedback/replan/replacement；probe 后续批次的新问题不沿用 required winner 或自动 replacement 门禁。
 - 工具条件复用一个 dispatch guard；wake 使用原生 deriveMessages 的消息 ID 判重，不承诺 provider exactly-once。submit 用 DSH exclusive 工具直接冻结 CAS，不建立进程表探测、静止检测或备用作业管理器。

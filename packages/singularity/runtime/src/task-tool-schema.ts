@@ -3,6 +3,21 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { decomposeCommitSchema, planningSketchSchema, protocolJsonSchema } from '@singularity/protocol'
 import type { JsonValue } from '@singularity/protocol'
 
+/** Syntax-only examples; current identities and objectives come from the Task view. */
+export const taskToolExamples: Record<string, JsonValue> = {
+  singularity_read: { kind: 'self' },
+  singularity_plan: { sketch: { v: 1, taskId: 'task', runId: 'run', contextEpoch: 'current-epoch',
+    sourceContract: `sha256:${'0'.repeat(64)}`, objective: 'Produce the result.',
+    levels: [0, 1].map(level => ({ level, purpose: 'Work at this level.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+    directPlan: [], assumptions: [] } },
+  singularity_decompose: { action: 'commit', children: [{ bindingId: 'platform:explore-child',
+    ackPreview: `sha256:${'0'.repeat(64)}`, task: { goal: { summary: 'Inspect one component.', deliverable: 'A report.', scope: [], constraints: [] },
+      inputs: [], localCriteria: [], localOutputs: [] } }] },
+  singularity_feedback: { kind: 'needs-replan', summary: 'Clarify this component boundary.', proposedChanges: [], refs: [] },
+  singularity_submit: { outputIds: ['result'], includeLearningDrafts: false },
+  singularity_stop: { reason: 'unsolved', message: 'The required result is incomplete.' },
+}
+
 /** A readable public protocol asset, frozen into the normal resource catalog by the host. */
 export const taskProtocolReference: JsonValue = {
   v: 1,
@@ -13,13 +28,14 @@ export const taskProtocolReference: JsonValue = {
     schema: protocolJsonSchema(planningSketchSchema),
   },
   decompose: protocolJsonSchema(decomposeCommitSchema),
+  examples: taskToolExamples,
   method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Register skill/MCP assets in the Method before binding their IDs; public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
   skills: 'Bound skills use native DSH discovery; directory resources include frozen relative files. Use the path returned by the skill tool for bundled scripts.',
 }
 
 export const planningParameters = {
   sketch: { type: 'json', required: true,
-    description: 'Ordered Task hierarchy [0,1] or [0,1,2]: this Task, direct children, possible grandchildren. Even a leaf includes level 1 with no likelyChildren and an empty directPlan. A sketch creates no Tasks; commit only direct children.',
+    description: 'Task hierarchy [0,1] or [0,1,2]: self, children, possible grandchildren. A leaf has empty level 1 and directPlan. Commit only direct children.',
   },
 } as const
 
@@ -32,9 +48,9 @@ export const planningInputSchema: ToolDefinition['parameters'] = {
 
 /** DSH declarations for Task tools; protocol admission remains authoritative. */
 export const decomposeParameters = {
-  action: { type: 'string', required: true, description: 'Use "prepare" to read a child example, or "commit" for a prepared batch.' },
-  bindingId: { type: 'string', description: 'A bindingId from the current NodeView childOptions for prepare.' },
-  children: { type: 'json', description: 'Commit prepared children using previewRef.digest as ackPreview. Use each binding once per batch; reuse a probe binding in later batches. Copy complete authorized input refs, including object and path; preview exampleText is illustrative. Template required outputs are inherited; localOutputs adds distinct supporting outputs, or [].' },
+  action: { type: 'string', required: true, description: '"prepare" reads an example; "commit" admits a prepared batch.' },
+  bindingId: { type: 'string', description: 'NodeView childOptions bindingId for prepare.' },
+  children: { type: 'json', description: 'Use previewRef.digest as ackPreview, once per binding per batch. Probe bindings may recur in later batches. Copy complete authorized input refs; exampleText is illustrative. Required outputs are inherited; localOutputs adds supporting outputs or [].' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)
