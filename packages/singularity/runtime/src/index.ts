@@ -42,6 +42,7 @@ export * from './method-patch.ts'
 export * from './proposer.ts'
 export { usesExploration } from './resources.ts'
 export { taskProtocolReference } from './task-tool-schema.ts'
+export { withToolExample } from './tool-example.ts'
 export * from './trace.ts'
 
 export { readTreeBundle } from './resource-bundle.ts'

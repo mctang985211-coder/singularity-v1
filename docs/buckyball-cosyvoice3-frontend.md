@@ -33,7 +33,7 @@
 
 - 仓库说明、当前 Task 协议、范围覆盖说明和固定资产清单。
 - 现有 `model-port`、`model-optimize`、`chip-designer`、`ip-designer`、`ball-align`、`workload-tests`、`debug-compiler`、`check` 和 `report` skills；以注册的原生 skill loader 加载。
-- `bash` 等既有 DSH 工具，通过各自工作副本中的现有 bbdev CLI 执行领域操作。
+- 标准领域 MCP `mcp__buckyball__bbdev(project,args)`，在各自绝对 checkout 目录执行 `nix develop --command bash -c 'exec bbdev "$@"' -- ...args`；原生 `bash` 用于编辑和独立组件工具。
 - 固定平台 `explore-child`；是否分解、如何分解、是否继续分解由当前模型决定。父节点仍承担自己的技术工作和直属结果整合。
 
 不把旧 Singular 的 graph-contract、agent-runtime、canvas 或插件交付规则加入本领域 catalog；它们不是本次芯片业务资源。
@@ -42,22 +42,22 @@
 
 ## 原生工具与环境
 
-已对现有 FastMCP 服务进行 `stdio` 接口验证；操作者使用其公开 `list_tools/remove_tool` 接口，选择 9 个前端相关工具完成 smoke：
+现有 FastMCP 的 `bbdev/mcp/common.py:repo_path()` 按服务源码位置固定仓库，不能直接供多个独立 checkout 共用。最初改用模型自行调用 shell CLI 的决定遗漏了 Nix 激活，真实实跑出现 `bbdev: command not found`；该方案已撤销。
 
-`validate`、`bbdev_compiler_build`、`bbdev_workload_build`、`bbdev_model_build`、`bbdev_bebop_verilator_verilog`、`bbdev_uvm_build`、`bbdev_uvm_run`、`bbdev_task_status`、`bbdev_task_cancel`。
+现在使用 [buckyball-mcp.ts](../apps/singularity/examples/buckyball-mcp.ts) 的薄 CLI 适配器，只有 `bbdev(project,args)` 一个工具：`project` 是当前节点独立 checkout 的绝对路径，`args` 是既有 CLI argv。工具直接在该目录执行 `nix develop --command bash -c 'exec bbdev "$@"' -- ...args`，参数逐项传递，不拼接 shell 命令。bbdev 仍负责自身业务命令，DSH 原生 MCP client 负责 transport、timeout 与 teardown；Singularity runtime 没有芯片或 Nix 分支。
 
-这不是新 MCP 实现或新的权限系统。该 surface 不含全芯片仿真、P2E、kernel/bitstream 与物理设计工具。但此次 probe **仅证明上游接口可用，不将它绑定给正式多节点任务**：`bbdev/mcp/common.py:repo_path()` 按服务源码位置固定仓库，现有 runtime 又将 stdio bundle 放在自身资源目录。绑定同一个冻结 launcher 会使所有 Run 指向同一份 checkout。
+[buckyball-resources.ts](../apps/singularity/examples/buckyball-resources.ts) 将此工具按标准 ToolAsset 冻结为公共 exploration 资源，空 Method 的每个节点均按正常协议获得它；独立 reviewer 也挂载相同 MCP。操作者预先安装 bbdev 依赖及配置；独立副本要保留这些准备成果，不把环境安装留给 Task 模型。`args:["--help"]` 获取准确语法；本次范围不授权全芯片仿真、全模型 BEMU、P2E/FPGA 或物理后端。组件 UVM 的 top/IP 要与实际设计匹配；elaboration 成功不等于仿真通过。
 
-本次选择 DSH 原生 shell + 各自目录下的 `nix develop -c bbdev ...`。CLI 已有相同的后端、task 轮询和服务 teardown；MCP 路径则需要额外的每 Run 路径注入或新的 RPC 转发层，接入职责更多。用户要求优先用现成工具，因此不为维持 MCP 形式写第二套工作区路由，也不让旧 skill 的 MCP-only 偏好迫使节点共享可写目录。组件 UVM 的 top/IP 要与实际被验证的设计匹配；elaboration 成功不等于仿真通过。
+此前裁剪的上游 FastMCP 已完成九工具握手与 `validate(chip="toy")` smoke。它只证明原接口可用；新 MCP 的独立 checkout + 真实 Nix/CLI smoke 证据见 `artifacts/buckyball-cosyvoice3-20261101/native-tool-smoke/`，不把 CLI help 当成芯片构建通过。
 
-独立副本安装 bbdev 自身 pyproject 依赖，用现有命令初始化配置：
+操作者准备命令为：
 
 ```bash
 cd "$BBDIR"
-nix develop -c bbdev config --install
+nix develop --command bash -c 'bbdev config --install'
 ```
 
-当前 CLI 的 config install 不接受 `--chip`。通过原生 MCP 实测 `validate(chip="toy")`，不能用成功握手代替业务工具返回值。
+当前 CLI 的 config install 不接受 `--chip`。工具执行结果必须检查 exit 和业务输出，不能用 MCP 成功握手代替业务调用。
 
 Buckyball 保留其 Python 3.14 Nix 环境。CosyVoice 原始软件参考使用单独 Python 3.10.20 / PyTorch 2.3.1 CPU 环境，不升级/替换仓库环境，不安装 GPU/TensorRT/DeepSpeed 训练栈。准备时固定 inference 依赖；Whisper 的旧构建及运行时依赖需要 `setuptools<81`，pyworld 使用宿主 GCC/G++ 编译，避免混用 Nix glibc。不修改上游模型源码以伪造可运行结果。
 
@@ -123,3 +123,13 @@ node apps/singularity/examples/buckyball-campaign.ts <全新 execution root> <�
 ```
 
 启动记录为 `launch.json`，原生请求累计记录为 `requests.jsonl`，标准输出留 `campaign.log`，每轮及最终结果为 `round-N.json`、`result.json`。执行根不会重启；失败保留原始错误。用户要求启动确认后停止人工操作，不持续监控或中途修改运行资产。
+
+## 首次实跑失败与参数边界修正
+
+首次实跑 `artifacts/buckyball-cosyvoice3-live-20261101-1502/execution` 持续 157.788 秒，21 次请求、746746 reported tokens。只有 root opened，没有 child admission、芯片提交、验收或 RSI；产物仍不满足任何芯片成果声明。
+
+`decompose prepare` 成功后，模型的 commit 输出缺少 `children` 的闭合 `]`。原始会话记录为 `assistant/attempt` / `MALFORMED_RESPONSE`，没有 commit 的 `tool/call`。2170 output tokens 低于 40k 上限；证据指向模型/接口返回的非法 JSON，不是 Singularity 拼接，也不是输出 cap 截断。DSH alpha2 的 pi-ai adapter 将已完成的非法工具参数当成 provider 致命错误，导致原生工具校验根本没有机会返回模型。
+
+通过 pnpm 锁定补丁，让已完成的非法参数原样进入 DSH 原生工具校验，保留原始错误并附 `failed` 和极简完整格式用例。没有 JSON 自动修复、自然语言错误匹配或 provider 重试；长度终止仍不执行工具，宿主错误仍退出。不能靠 prompt 保证随机模型永远输出合法 JSON，边界职责是拒绝该调用并提供明确格式反馈。
+
+旧 fixture 用 `JSON.stringify` 产生参数，且绕过实际 bbdev 环境，因此没覆盖这两条真实路径。新增测试直接从本地 SSE endpoint 发送畸形参数，经真实 adapter、DSH loop 和工具校验后修正；覆盖 Task、RSI、Summary 和独立 review，并核对没有多建会话、重复准入或虚假闭合。领域 fixture 也实际调用冻结 MCP，另以独立副本验证真实 Nix 激活。此次修正不自动续跑归档或启动新的付费 campaign。

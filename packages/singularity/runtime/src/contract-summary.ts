@@ -1,13 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle,AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Session,SessionId } from '@deepseek-ai/dsh-session'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool,ToolArgsError } from '@deepseek-ai/dsh-tools'
 import type { ContractSummary,ContractSummaryRef,JsonValue,SessionCut,TaskContract,TaskRunState,UsageRecord } from '@singularity/protocol'
 import { canonicalize,contractSummarySchema,parseProtocolValue } from '@singularity/protocol'
 
 import { snapshotSession } from './agent.ts'
 import { DecomposeError,throwCollectedErrors } from './errors.ts'
 import { assertPromptBudget } from './prompt.ts'
+import { withToolExample } from './tool-example.ts'
 import type { TaskReadQuery,TaskReadResult } from './tools.ts'
 import { createWakeMessage } from './wake.ts'
 import type { CasObjectWriter } from './workspace.ts'
@@ -193,7 +194,7 @@ export class ContractSummaryService {
           })
           ctx.systemPrompt.section({ name: 'singularity:contract-summary', order: 100, text: SUMMARY_CARD, interpolate: false })
           ctx.systemPrompt.section({ name: 'singularity:worker-card', order: 100, text: '', interpolate: false })
-          ctx.tools.register(defineTool({
+          ctx.tools.register(withToolExample(defineTool({
             name: 'singularity_summary_submit',
             description: 'Submit a compact read-only summary of the supplied frozen contract.',
             parameters: { summary: { type: 'json', required: true, description: 'ContractSummary: {v:1,sourceContract:string (the supplied sha256: contract digest),goal:string,acceptance:string[],constraints:string[],outputs:string[],frozenDecisions:string[],sourceRefs:{field:string,digest:string}[],generatedBy:"contract-summary-worker"}.' } },
@@ -203,13 +204,14 @@ export class ContractSummaryService {
             },
             execute: (args, exec) => {
               const parsed = parseProtocolValue(contractSummarySchema, args.summary)
-              if (parsed.sourceContract !== owner.contract.digest) throw new Error('summary sourceContract does not match the supplied contract')
+              if (parsed.sourceContract !== owner.contract.digest) throw new ToolArgsError(['summary.sourceContract must match the supplied contract'])
               assertPromptBudget(JSON.stringify(parsed), 12 * 1024, 'contract summary')
               summary = parsed
               exec.concludeTurn()
               return Promise.resolve({ accepted: true })
             },
-          }))
+          }), { summary: { v: 1, sourceContract: owner.contract.digest, goal: 'Summarize the supplied goal.', acceptance: [], constraints: [],
+            outputs: [], frozenDecisions: [], sourceRefs: [], generatedBy: 'contract-summary-worker' } }))
           // All source contracts are injected as data; this worker has no Task,
           // domain, filesystem, MCP, registry, or other global tools.
           ctx.tools.restrict({ deny: this.options.ctx.tools.definitions().map(tool => tool.name) })

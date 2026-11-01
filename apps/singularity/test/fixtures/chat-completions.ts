@@ -7,6 +7,7 @@ export interface FixtureReply {
   readonly content?: string
   readonly toolCalls?: readonly FixtureToolCall[]
   readonly usage?: FixtureUsage
+  readonly finishReason?: 'stop' | 'tool_calls' | 'length'
   /** Never answer; the request stays pending until the test tears the fixture down. */
   readonly hang?: true
   /** Answer with an HTTP error instead of an SSE stream. */
@@ -205,9 +206,9 @@ function replyChunks(id: string, model: string, reply: FixtureReply): string[] {
         function: { name: toolCall.name, arguments: toolCall.arguments },
       })),
     }))
-    chunks.push(chunk(id, model, {}, 'tool_calls'))
+    chunks.push(chunk(id, model, {}, reply.finishReason ?? 'tool_calls'))
   } else {
-    chunks.push(chunk(id, model, {}, 'stop'))
+    chunks.push(chunk(id, model, {}, reply.finishReason ?? 'stop'))
   }
   if (reply.usage !== undefined) chunks.push(usageChunk(id, model, reply.usage))
   return chunks

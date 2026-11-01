@@ -37,7 +37,7 @@ amendment 008 的删改与核验：
 |---|---|---|
 | 祖先摘要 | subagent.create 要求 ctx.agents.get(parent.id) 是 live parent；Task parent yield 时已 dispose。替换需保留 parent handle、额外 preset/catalog 与取消 owner。compaction.compactNow 改写 source surface；direct llm.stream 则新增 session/usage 生命周期。 | 已用 agents.create/followup/whenIdle/dispose，保留合同 digest 缓存与 source Task usage；无额外 live parent。 |
 | receipt/usage 读取 | sessionQuery.readSession/observeSession 是 Promise，query-sqlite 的 openAt:'never' 可不建 FTS，但仍新增 query 服务、Context 接口及 async guard 链；同步 projection 另需 schema/fold/ready owner。 | 保留 7 行 snapshotEvents 入口，复用原生缓存；epoch/wake 已用 firstLiveSeq/replaceGeneration/deriveMessages。 |
-| UsageRecord fold | 原生 tokenUsage 只给四个 token 桶，不给 steps/unknown/pending/failure；固定 cut 和归档仍须 fold。切换会保留 fold并新增 live registry 与 cut 桥接两条路径。 | 一个纯 fold 同时服务 live 和最终 cut，不加第二账本。自动 compaction 继续关闭。 |
+| UsageRecord fold | 原生 tokenUsage 只给四个 token 桶，不给 steps/unknown/pending/failure；固定 cut 和归档仍须 fold。切换会保留 fold并新增 live registry 与 cut 桥接两条路径。 | 一个纯 fold 同时服务 live 和最终 cut，不加第二账本。inventory 当时关闭自动 compaction；Buckyball 后续已接入原生 compaction 计量，见下文。 |
 | bundle 物化 | skills.register 接受正文/resourceBase，不消费 CAS Ref；filesystem skill provider 仍需 CAS→文件复制，并新增 frontmatter/provider discovery。MCP native stdio 同样需要 cwd/files。 | 普通 mkdir/writeFile 物化，注册/loader/MCP 生命周期交 DSH。 |
 | 冻结 MCP surface | 以 native 动态 surface 重新生成 Composition 需 intake 时额外建 Agent/连 server/dispose，或跨阶段转交 live handle owner。 | 同一已挂载 native surface 对比一次冻结身份，无第二 client。 |
 | 事实/CAS/验收 | DSH session persistence 不能替代领域事务/条件提交。放入 session 仍需 schema/reducer/receipt/hash，另加 root session owner/flush。 | SQLite events + 单一业务 guard、Node 原生 FS 原子发布。小 JSON 再放 objects 表会新增按体积分流及双读写后端，不能减少现有大文件 FS 路径，因此不添加。 |
@@ -99,7 +99,7 @@ Node SQLite 的 ExperimentalWarning 是固定宿主已知限制。真实隐藏�
 
 I/J 最终累计 1068 请求边界／1067 已结算步骤／15,707,337 reported tokens，unknown=0；head 仅有初始化，不把它算生产 candidate activation。I 两轮都相对同一 base；第二轮读前轮反馈，不证明生产 Method 连续升级。收益不含发现 Method 的 proposer 成本。
 
-以上 A–J 历史轨迹没有祖先查询/Summary Worker、领域 MCP 或 MCP 资产演化证据；H 的 skill 调用来自旧适配。本次已补齐祖先查询、Summary、原生 skill/MCP、三层 sketch 和新 skill 正式演化；MCP 目录只生成说明稿，可执行 MCP 演化由原生 fixture 证明。当前 profile 关闭自动 compaction；独立 compaction 请求的 usage 未计入，不能直接开启并声称预算完整。
+以上 A–J 历史轨迹没有祖先查询/Summary Worker、领域 MCP 或 MCP 资产演化证据；H 的 skill 调用来自旧适配。本次已补齐祖先查询、Summary、原生 skill/MCP、三层 sketch 和新 skill 正式演化；MCP 目录只生成说明稿，可执行 MCP 演化由原生 fixture 证明。这些 inventory profile 当时关闭自动 compaction；Buckyball 后续已通过原生 llm/stream 计量与 compaction/summary fold 覆盖辅助请求，再开启长任务压缩，见下文。
 
 后续领域工作包括芯片适配、真实私有部署与 MCP 可执行资产演化；不为制造计数添加恢复机制或无用工具。验证入口仍为根 `pnpm verify`；有界真实模型入口及配置见 README，前次计量只用于新执行根的累计预算，不续跑旧事实或会话。
 
@@ -109,9 +109,9 @@ I/J 最终累计 1068 请求边界／1067 已结算步骤／15,707,337 reported 
 
 已创建独立源码副本并保留原仓库已有修改，下载固定公开模型资产并核对 6 个大文件与官方 SHA-256；现有 bbdev 原生配置安装成功，裁剪的 FastMCP stdio surface 为 9 tools / 4620 bytes，真实 `validate(toy)` 返回 passed。VCS `-full64 -ID` 与 DC `-version`、license 状态读取完成。官方 CosyVoice3 CPU 原始软件推理完成单输入 smoke，生成 24kHz / 21120 样本的有限 FP32 音频，未声称听感、额外文本规范化或数值等价。这些是启动环境证据，不能升级为 RTL/芯片验收。原始文件位于本地忽略目录 `artifacts/buckyball-cosyvoice3-20261101/`。
 
-bbdev MCP 的仓库路径按源码位置固定，因此该 probe 不绑定给多 Run 的共享写入；正式领域操作选择现有 bbdev CLI，由 DSH 原生 shell 在各自副本执行，不新增 MCP 路由层。TaskSpec/TaskLimits schema 检查通过；使用已验证的官方 Node 24.9.0 完成根 `pnpm verify`，432/432、0 fail/skip。Buckyball Nix Node 24.18.0 的 DSH 原生 addon 启动失败日志保留，未添加产品兼容分支。
+准备时因上游 bbdev MCP 路径固定，曾选择模型通过原生 shell 调用 CLI；该决定遗漏环境激活，已由下文 amendment 010 的标准领域 MCP 替换。TaskSpec/TaskLimits schema 检查通过；使用已验证的官方 Node 24.9.0 完成根 `pnpm verify`，432/432、0 fail/skip。Buckyball Nix Node 24.18.0 的 DSH 原生 addon 启动失败日志保留，未添加产品兼容分支。
 
-本次尚未启动新的付费模型 campaign，未产生芯片 Evidence、芯片领域 comparison 或 activation。正式启动前要接好独立领域 verifier/冻结评测 case，并把原生 compaction 请求纳入预算后开启长任务自动压缩；不以模型自报或 schema 通过替代领域验收。
+此准备阶段尚未启动付费模型 campaign。后续独立 verifier、冻结 case、原生 compaction 计量与首次实跑见下文；环境准备不作为芯片 Evidence、comparison 或 activation。
 
 
 ### Buckyball 自主实跑接入（2026-11-01）
@@ -121,3 +121,20 @@ bbdev MCP 的仓库路径按源码位置固定，因此该 probe 不绑定给多
 原生 llm/stream 统一计量覆盖普通、Summary/review/proposer、compaction 与辅助请求；既有 usage fold 增加带 llmStreamCall 的原生 compaction/summary，模型无关摘要不计请求。本实验原生压缩启用，输出 cap 40k、75% 压力。DSH 原生 bash/jobs 承担长编译等待与生命周期，没有芯片 runtime 分支或新恢复管理器。实际启动时间、PID、绝对 deadline 和消费以 execution root 的 launch.json / requests.jsonl 为准。
 
 本次最终 `pnpm verify` 全通过：435/435（protocol 203、runtime 134、domain 13、app 85），0 fail/skip；含新增三个原生/领域 fixture。日志 `artifacts/buckyball-cosyvoice3-20261101/campaign-verify.log`。fixture 证明计量、准入、独立审查接线、真实失败保留和比较拒绝；不提升为芯片实现或 PPA 成果。
+
+
+### 首次芯片实跑诊断与 amendment 010（2026-11-01）
+
+归档 `artifacts/buckyball-cosyvoice3-live-20261101-1502/execution` 的真实运行在北京时间 15:02:14.806—15:04:52.594 共 157.788 秒内产生 21 次请求、746746 reported tokens，随后退出。只留下 method registered/activated、root admitted/opened 四条事实；没有 child admission、芯片提交、验收或 RSI。模型自主浏览了仓库并复制 baseline；直接运行 bbdev 找不到命令，后台 mill 探测被原生 teardown 停止，均不能算构建通过。
+
+commit 的原始 6363 字符参数缺少 children 数组的闭合 `]`；该次输出 2170 tokens，未触达 40k 上限。DSH pi-ai adapter 在工具调度前将其记为 `MALFORMED_RESPONSE` / assistant/attempt，没有 commit tool/call。这是已完成参数的错误分类：原生 dsh-tools 已有 JSON.parse → INVALID_ARGS → tool/result(isError) → 下一步纠正的路径，adapter 提前退出使其不可达。锁定的 alpha2 pnpm patch 仅转交原始畸形参数并保留 finish/usage；没有 JSON 修复器、文字匹配、request 重试、恢复会话或新状态。更换 adapter/升级依赖时须跑原始参数回归，再决定移除补丁。
+
+参数格式呈现由一个共享的 finalizeContent 包装处理，保留原生错误内容并追加 failed、完整极简用例和下一动作，复用于六个 Task 工具、RSI、Summary 与领域 review。大用例只在失败或按需协议资源中读取，system card 不扩充；已有 12 KiB 工具上限保留，重复描述已精简。
+
+bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 Method 的 Run 和独立 reviewer 均通过 DSH 原生 MCP client 调用。领域 example 仅把 project/argv 转交项目内 `nix develop --command bash`，操作者预装依赖/配置；runtime 没有 Nix 或芯片业务代码。独立新副本的真实 MCP/Nix/CLI help smoke exit=0，激活日志中的 bbdev 路径指向该副本。证据：`artifacts/buckyball-cosyvoice3-20261101/native-tool-smoke/{probe.py,result.json,probe.log}`。这不是编译、仿真或 PPA 成果。
+
+此前测试的缺口有两个：JSON.stringify 构造的工具参数永远语法完整；领域 fixture 不走 bbdev，因此握手与纯协议成功掩盖了环境缺失。当前新增本地 SSE → 真实 pi-ai adapter → 原生 loop/tool 的畸形参数测试；六个 Task 工具失败后，在同一 Run 修正 decompose，只有一次 child admission。RSI、Summary、独立 review 同样先失败后纠正；保留长度终止不执行工具、宿主/provider 失败不重购请求的测试。campaign fixture 实际调用冻结 MCP，以 fake nix 精确核对 cwd/argv（含 shell 字面字符），与上述真实 Nix smoke 分别记录，不混淆证据等级。
+
+此次没有启动或续跑付费 campaign，原归档保持不变；芯片设计、frontend 验收和 PPA 赢家仍未获得。
+
+最终 `pnpm install --frozen-lockfile`、根 `pnpm verify` 均通过：**438/438**（protocol 203、runtime 134、domain 13、app 88），0 fail/skip；project/build/typecheck/lint 全部通过。日志：`artifacts/native-tool-arguments-verify.log`；定向 8/8 日志：`artifacts/native-tool-arguments-targeted.log`。

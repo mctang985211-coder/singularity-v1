@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
+import { chmod,mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -91,16 +91,31 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     await writeFile(join(baseline, '.agents/skills', name, 'SKILL.md'), `# ${name}\nRead current domain sources.\n`)
   }
   await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: baseline } }))
+  const bin = join(directory, 'bin')
+  await mkdir(bin)
+  await writeFile(join(bin, 'nix'), '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > "$PWD/nix-argv.txt"\nprintf "fixture bbdev help\\n"\n')
+  await chmod(join(bin, 'nix'), 0o755)
+  const oldPath = process.env.PATH
+  process.env.PATH = `${bin}:${oldPath ?? ''}`
+  t.after(() => { if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath })
   let reviews = 0, proposers = 0
   const fixture = await startChatCompletionsFixture((request, index) => {
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `chip-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
       usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
     if (toolSchemaNames(request).includes('buckyball_review_submit')) {
+      if (!toolNames(request).includes('buckyball_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
+        name: 'buckyball_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
+      assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
       reviews += 1
       return call('buckyball_review_submit', { result: { criteria: ['model-reference', 'design-contract', 'implementation', 'component-verification', 'ppa-evidence', 'delivery']
         .map(id => ({ id, verdict: 'fail', reason: 'Fixture intentionally supplies no chip implementation or independently reproduced evidence.' })) } })
     }
     if (toolSchemaNames(request).includes('rsi_submit_patch')) {
+      const calls = toolNames(request)
+      const name = !calls.includes('rsi_read') ? 'rsi_read' : !calls.includes('rsi_submit_patch') ? 'rsi_submit_patch' : undefined
+      if (name !== undefined) return { toolCalls: [{ id: `bad-rsi-${String(index)}`, name, arguments: '{"patch":' }],
+        usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
+      assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
       proposers += 1
       return { content: 'No justified reusable improvement from this deliberately incomplete fixture.', usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
     }
@@ -114,6 +129,8 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     const data = JSON.parse(pages.map(value => value.data).join('')) as { taskId: string; runId: string; contractDigest: string }
     if (!calls.includes('singularity_plan')) return call('singularity_plan', { sketch: { v: 1, taskId: data.taskId, runId: data.runId, sourceContract: data.contractDigest, contextEpoch: last.contextEpoch,
       objective: 'Deliver the incomplete fixture honestly.', levels: [0, 1].map(level => ({ level, purpose: 'Inspect local output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })), directPlan: [], assumptions: [] } })
+    assert.ok(toolSchemaNames(request).includes('mcp__buckyball__bbdev'), 'the frozen domain MCP is available in each fresh Run')
+    if (!calls.includes('mcp__buckyball__bbdev')) return call('mcp__buckyball__bbdev', { project: baseline, args: ['--help', 'literal;$(false)'] })
     if (!calls.includes('bash')) {
       assert.match(messageTexts(request).join('\n'), /frontend/)
       return call('bash', { description: 'Create an explicitly incomplete fixture output.', command: "mkdir -p frontend\nprintf 'Incomplete fixture, no chip implementation.\\n' > frontend/report.md" })
@@ -140,4 +157,6 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   assert.equal(result.usage.requests, fixture.requests.length)
   assert.equal(result.usage.completed, fixture.requests.length)
   assert.equal(result.usage.unknown, 0)
+  assert.deepEqual((await readFile(join(baseline, 'nix-argv.txt'), 'utf8')).trimEnd().split('\n'),
+    [baseline, 'develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', '--help', 'literal;$(false)'])
 })
