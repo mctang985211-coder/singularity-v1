@@ -13,6 +13,7 @@
 - app 在 profile boot 前验证剩余预算并 exclusive create 输出根；Run 在模型创建前验证冻结资源、provider identity 并准备输入。真实 scoped prompt/MCP surface 在 setup、第一模型请求前完成校验；固定 profile 只启用原生 skill registry/loader，冻结 skills 直接注册到 Agent scope，不逐字段重读自检。
 - 操作者提供健康存储和干净 launch env。可信公开任务沿现有本地 profile 执行；隐藏数据或不可信代码先用现成 OS/容器/broker 建立真实读写/网络/进程边界。cwd、HOME、chmod、loopback URL 和 manifest capability 声明均不能代替这些边界。
 - profile 不挂载任意 filesystem/global skill provider，不在执行中修改共享 registry；全局公开资源先冻结再注册到当前 scope。MCP 的 HOME/TMP/XDG 路径由部署环境提供，框架不创建或重定向。可信 bundle 的 capability 列表只作描述，manifest/config 只解析消费字段，不设 exact-key/能力白名单门禁；实际 surface 对比保留。
+- 领域 MCP 上线前实测全部公开工具的业务成功、参数失败和取消退出；帮助/握手只证明接口可见，不能替代执行。独立源码副本由领域 checkout/现成复制工具携带完整预装依赖，不让 Task 模型重新安装。
 - 领域 CLI 经标准 MCP 提供；操作者或领域 MCP 准备依赖并在目标项目内激活环境（如 nix develop → bash）。Task 模型传业务参数，runtime 不实现领域环境准备。
 - 公开 profile/config 只提供公开 JSON 值，凭据通过原生 launchEnvironment 注入；Composition 序列化不扫描 password/token 等字段名。DSH MCP client 已有原生环境名称 scrub；不再维护第二份 credential 清单，不宣称原生启发式去除了所有凭据渠道。
 

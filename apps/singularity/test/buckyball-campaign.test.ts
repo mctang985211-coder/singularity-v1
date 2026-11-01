@@ -2,9 +2,13 @@ import assert from 'node:assert/strict'
 import { chmod,mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 
 import { CompactionId } from '@deepseek-ai/dsh-compaction'
+import * as mcpClient from '@deepseek-ai/dsh-mcp-client'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId,SessionSeq } from '@deepseek-ai/dsh-session'
 import type { RoundPlan } from '@singularity/protocol'
 import type { PublicEvaluationEvidence } from '@singularity/runtime'
@@ -16,6 +20,72 @@ import { nativeAccounting } from '../examples/native-accounting.ts'
 import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
 import { withHarness } from './run-fixture.ts'
 import { agentOptions } from './task-fixture.ts'
+
+void test('domain MCP copies prepared dependencies, reports CLI failure and forwards native cancellation', { timeout: 120_000 }, async () => {
+  await withHarness(() => { throw new Error('MCP preflight must not buy a model request') }, async ({ spike, workspace }) => {
+    const baseline = join(workspace, 'baseline'), project = join(workspace, 'buckyball'), bin = join(workspace, 'bin')
+    await mkdir(join(baseline, 'bbdev/api/.venv'), { recursive: true })
+    await writeFile(join(baseline, 'bbdev/api/.venv/prepared'), 'operator dependencies')
+    await mkdir(bin)
+    await writeFile(join(bin, 'nix'), `#!/usr/bin/env python3
+import os, pathlib, signal, sys
+p = pathlib.Path.cwd()
+if sys.argv[-1] == 'wait':
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    try:
+        (p / 'started').write_text(str(os.getpid()))
+        signal.pause()
+    finally:
+        (p / 'cleaned').write_text('native termination cleanup')
+elif sys.argv[-1] == 'fail':
+    print('domain command failed', file=sys.stderr)
+    sys.exit(7)
+else:
+    print('prepared config installed')
+`)
+    await chmod(join(bin, 'nix'), 0o755)
+    const handle = await spike.ctx.agents.create({ sessionId: SessionId('buckyball-mcp-preflight'), meta: { cwd: workspace },
+      setup: async scope => {
+        scope.tools.restrict({ allow: [] })
+        await scope.plugin(mcpClient, { transport: 'stdio', serverName: 'buckyball', command: process.execPath,
+          args: [fileURLToPath(new URL('../examples/buckyball-mcp.ts', import.meta.url))],
+          env: { BUCKYBALL_BASELINE: baseline, PATH: `${bin}:${process.env.PATH ?? ''}` },
+          failOnStartupError: true, reconnect: { enabled: false } })
+      } })
+    let sequence = 0
+    const call = async (name: string, args: unknown, signal = new AbortController().signal) => {
+      const result = await spike.ctx.tools.execute({ agent: handle.agent, signal,
+        calls: [{ type: 'tool-call', id: ToolCallId(`bb-preflight-${String(++sequence)}`),
+          name: `mcp__buckyball__${name}`, arguments: JSON.stringify(args) }] })
+      return result.results[0].result
+    }
+    try {
+      assert.equal((await call('checkout', { project })).isError, false)
+      assert.equal(await readFile(join(project, 'bbdev/api/.venv/prepared'), 'utf8'), 'operator dependencies')
+      await writeFile(join(project, 'bbdev/api/.venv/prepared'), 'independent copy')
+      assert.equal(await readFile(join(baseline, 'bbdev/api/.venv/prepared'), 'utf8'), 'operator dependencies')
+      assert.equal((await call('checkout', { project })).isError, true, 'a new checkout never merges with an existing directory')
+      const failure = await call('bbdev', { project, args: ['fail'] })
+      assert.equal(failure.isError, true)
+      assert.match(JSON.stringify(failure), /domain command failed/)
+      assert.equal((await call('bbdev', { project, args: 'bad schema' })).isError, true)
+      const cancellation = new AbortController()
+      const pending = call('bbdev', { project, args: ['wait'] }, cancellation.signal)
+      for (let i = 0; i < 100; i += 1) {
+        if (await readFile(join(project, 'started'), 'utf8').catch(() => '') !== '') break
+        await delay(20)
+      }
+      assert.ok(await readFile(join(project, 'started'), 'utf8'))
+      cancellation.abort()
+      assert.equal((await pending).isError, true)
+      for (let i = 0; i < 100; i += 1) {
+        if (await readFile(join(project, 'cleaned'), 'utf8').catch(() => '') !== '') break
+        await delay(20)
+      }
+      assert.equal(await readFile(join(project, 'cleaned'), 'utf8'), 'native termination cleanup')
+    } finally { await handle.dispose() }
+  })
+})
 
 void test('native campaign meter includes auxiliary calls; session projection counts marked compaction once', { timeout: 120_000 }, async () => {
   await withHarness(() => ({ content: 'A compact result.', usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }), async ({ spike, workspace }) => {

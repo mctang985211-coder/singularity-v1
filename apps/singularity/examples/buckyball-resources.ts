@@ -4,10 +4,10 @@ import type { Ref,ToolAsset } from '@singularity/protocol'
 import { canonicalize,seal } from '@singularity/protocol'
 import type { CommandService } from '@singularity/runtime'
 
-import { bbdevDescription,bbdevInstructions,bbdevParameters } from './buckyball-mcp.ts'
+import { bbdevDescription,bbdevInstructions,bbdevParameters,checkoutDescription,checkoutParameters } from './buckyball-mcp.ts'
 
 /** Freeze the operator-prepared domain tool into the ordinary exploration catalog. */
-export async function freezeBuckyballTools(service: CommandService): Promise<ToolAsset[]> {
+export async function freezeBuckyballTools(service: CommandService, baseline: string): Promise<ToolAsset[]> {
   const put = (id: string, value: unknown) => service.putObject(id, new TextEncoder().encode(canonicalize(value)))
   let source = await readFile(new URL('./buckyball-mcp.ts', import.meta.url), 'utf8')
   for (const name of ['@modelcontextprotocol/server', '@modelcontextprotocol/server/stdio']) {
@@ -19,9 +19,10 @@ export async function freezeBuckyballTools(service: CommandService): Promise<Too
     files: [{ path: 'server.ts', bytes: content.byteLength, object }] }))
   const manifest = await put('buckyball:mcp:manifest', { serverName: 'buckyball', transport: 'stdio', instructions: bbdevInstructions,
     entrypoint: 'server.ts', limits: { maxBundleBytes: 1024 * 1024 } })
-  const config = await put('buckyball:mcp:config', { transport: 'stdio', command: process.execPath, args: ['server.ts'], env: {},
+  const config = await put('buckyball:mcp:config', { transport: 'stdio', command: process.execPath, args: ['server.ts'], env: { BUCKYBALL_BASELINE: baseline },
     toolCallTimeoutMs: 3 * 60 * 60 * 1000, maxInstructionBytes: 8192 })
   return [{ id: 'buckyball-bbdev', name: 'buckyball', description: 'Existing bbdev CLI with project-local Nix activation.', kind: 'mcp-server',
     server: { bundle, sourceFiles: bundle, manifest, config, transport: 'stdio', capabilities: ['public-chip-frontend'],
-      exposedTools: [{ name: 'bbdev', description: bbdevDescription, parameters: bbdevParameters }] } }]
+      exposedTools: [{ name: 'checkout', description: checkoutDescription, parameters: checkoutParameters },
+        { name: 'bbdev', description: bbdevDescription, parameters: bbdevParameters }] } }]
 }
