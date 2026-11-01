@@ -26,19 +26,19 @@ export const EXPLORE_BINDING_ID = 'platform:explore-child'
 
 export const EXPLORE_GUIDANCE = {
   v: 1,
-  text: 'Discover this Task\'s local workflow from frozen public documents, skills and tools. Refine the initial sketch after inspecting relevant resources. Delegate stages with distinct outputs and checks to direct children; sequential stages use successive batches. Each child owns deeper work. Perform bounded local technical work and integrate direct results. A leaf goal is one bounded, directly verifiable unit. Public-resource work may use inputs:[]. Preserve reusable skill or MCP drafts under learning-drafts for RSI registration.',
+  text: 'Discover this Task\'s local workflow from frozen public documents, skills and tools. Refine the initial sketch after inspecting relevant resources. Delegate stages with distinct outputs and checks to direct children; sequential stages use successive batches. Each child owns deeper work. Perform bounded local technical work and integrate direct results. A leaf goal is one bounded, directly verifiable unit. Public-resource work may use inputs:[]. Children inherit the required result/ delivery tree: place artifacts and reproducible evidence there and submit output ID result. localOutputs may add supporting artifacts. Preserve reusable skill or MCP drafts under learning-drafts for RSI registration.',
 } as const
 
 export const EXPLORE_EXAMPLE: TaskExample = {
   goal: {
     summary: 'Inspect an authorized input and produce a useful local result.',
-    deliverable: 'A concise result that supports the parent goal.',
+    deliverable: 'result/ containing a concise finding and reproducible evidence for parent integration.',
     scope: ['One independently useful local question.'],
     constraints: ['Use only frozen inputs and public resources authorized for this Task.'],
   },
   localCriteria: [{ id: 'local-result', statement: 'The result answers the local question using the supplied input.' }],
   inputs: [{ id: 'source', exampleText: 'A public input that the parent may explicitly pass to this child.' }],
-  localOutputs: [{ id: 'result', path: 'result.txt', kind: 'file', description: 'The local result for parent integration.' }],
+  localOutputs: [],
 }
 
 export const EXPLORE_GUIDANCE_REF = { id: 'platform:explore-guidance', digest: computeDigest('object', EXPLORE_GUIDANCE) }
@@ -58,7 +58,7 @@ export function explorationTemplate(snapshot: GlobalResourceSnapshot): TaskTempl
     },
     requiredCriteria: [{ id: 'task-goal', required: true,
       statement: 'Submitted outputs and reproducible evidence fulfill this Task\'s frozen goal, deliverable, scope and constraints.' }],
-    requiredOutputs: [],
+    requiredOutputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
     acceptancePolicy: snapshot.fallbackAcceptance,
     skills: snapshot.skills.map(skill => skill.id),
     tools: snapshot.tools.map(tool => tool.id),

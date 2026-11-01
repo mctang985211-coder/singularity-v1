@@ -39,7 +39,7 @@
 
 不把旧 Singular 的 graph-contract、agent-runtime、canvas 或插件交付规则加入本领域 catalog；它们不是本次芯片业务资源。
 
-需要改代码或执行构建的 Task/Run 在自己的 workspace 使用独立 checkout；只读研究直接读公开 baseline。子节点只交付自己授权范围的 patch、接口与证据；父节点检查并合入自己的副本。评测 baseline/candidate 从同一冻结起点创建各自副本，不能共享已被修改的源码、server state 或 build 输出。采用现成 Git checkout/patch 操作，不在 runtime 加 checkout/recovery manager。
+需要改代码或执行构建的 Task/Run 在自己的 workspace 使用独立 checkout；只读研究直接读公开 baseline。探索 child 继承固定 required `result/` tree，以 output ID `result` 提交自己授权范围的 patch、接口与证据；localOutputs 仅追加 supporting 文件，可省略。父节点检查并合入自己的副本。评测 baseline/candidate 从同一冻结起点创建各自副本，不能共享已被修改的源码、server state 或 build 输出。采用现成 Git checkout/patch 操作，不在 runtime 加 checkout/recovery manager。
 
 ## 原生工具与环境
 
@@ -126,7 +126,7 @@ PPA 采用综合估计，权重 **功耗 0.30 / 关键路径延迟 0.40 / 映射
 node apps/singularity/examples/buckyball-campaign.ts <全新 execution root> <准备目录>
 ```
 
-启动记录为 `launch.json`，原生请求累计记录为 `requests.jsonl`，标准输出留 `campaign.log`，每轮及最终结果为 `round-N.json`、`result.json`。执行根不会重启；失败保留原始错误。用户要求启动确认后停止人工操作，不持续监控或中途修改运行资产。
+启动记录为 `launch.json`，原生请求累计记录为 `requests.jsonl`，标准输出留 `campaign.log`，每轮及最终结果为 `round-N.json`、`result.json`。执行根不会重启；失败保留原始错误。按用户最新要求每半小时只读巡检树、交付、验收、RSI 和累计用量；需要修订时先停止旧根，提交修改后从新根启动，不中途修改冻结运行资产。
 
 ## 首次实跑失败与参数边界修正
 
@@ -154,3 +154,7 @@ node apps/singularity/examples/buckyball-campaign.ts <全新 execution root> <�
 为了原生 cp 只复制 symlink 而非大体积工具链，在编译完成后可由操作者将 LLVM build 移到准备目录并在原路径保留绝对 symlink。此路径不提供给模型写入，MCP 仅将其作为预装依赖使用；没有新增 runtime 安装、检查或恢复逻辑。checkout/CLI 的真实使用结果及模型运行证据仍分别记录。
 
 Verdi PLI 预检复现 `libnovas.so` 缺少 `libz.so.1`；verify Nix shell 的 `NIX_LDFLAGS` 显式加入 Nix zlib rpath。补丁见 `examples/buckyball-verify.patch`，不会修改共享 EDA 安装或增加运行期探测/恢复。
+
+## 固定探索交付（2026-11-02，amendment 014）
+
+上轮研究 child 省略 localOutputs，合同仅有可选 learning drafts，导致实际统计文件未被冻结。平台探索模板现固定 required result/ tree，示例不再重复声明 result；root 保持 frontend/。原生三级回归以无 localOutputs 的 child/grandchild 验证冻结文件与逐层集成。新轮 maxActive=4，评测 maxActiveRuns=4；总 3 小时、4 亿 tokens、4000 请求不变。

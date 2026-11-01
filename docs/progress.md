@@ -189,3 +189,10 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 ### 当前 BB 重开（2026-11-02 04:08:09 +08）
 
 修复代码 `a96b48f` 从新根 `artifacts/buckyball-cosyvoice3-live-20261102-040756` 启动，PID 1162439，绝对截止 07:08:09 +08。保持整轮 3 小时、4 亿 reported tokens、4000 请求、单 Run 4096 步、depth 8、256 Task、batch 8、maxActive 2；模型 deepseek-flash/max/40k 输出，原生 compaction。启动阶段模型请求与 MCP setup 正常。操作者按半小时巡检实际树、产物、验收、RSI 与计量；未取得全流程证据前不提交 PR 或合并。
+
+
+### 固定探索交付出口（2026-11-02，amendment 014）
+
+04:08 轮于 05:43 停止并保留归档，原因是探索 child 省略 localOutputs 后没有普通产物出口；其文件路径提交被正确拒绝，空 outputIds 提交却没有把实际研究文件带给 verifier/parent。一个 reviewer 越过 frozen outputs 读取 worker 文件，故该条 verified 不作为独立冻结交付证据。最终 897 次已结算请求，input 91,525,462 / output 1,126,059，unknown=1（操作者取消）；四层树、自主多实例 probe、fresh retry、真实失败验收等已发生，但没有 root 验收、RSI 或 PPA 赢家。所有所属进程已退出（主 PID 仅剩已退出 zombie）。
+
+平台 explore-child 静态增加 required result/ tree；指导与预填示例明确 output ID result，localOutputs 仍仅追加 supporting，不改变 root 输出。未增加动态合同修改、输出恢复或新 guard。协议回归覆盖 omitted/empty localOutputs 与 result 不可覆盖；原生三级 fixture 真正冻结 tree 文件并逐层消费。BB guide/reviewer 同步，部署并发改为 4（整轮时间/tokens/请求不变）。根 pnpm verify 全通过：444/444（protocol 206、runtime 135、app 90、domain 13），project/build/typecheck/lint 通过、0 fail/skip。日志 artifacts/explore-result-20261102-verify.log。新的 BB 全流程证据仍待实跑。

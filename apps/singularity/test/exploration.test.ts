@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import { EXPLORE_BINDING_ID, EXPLORE_TEMPLATE_ID, sealMethodRevision, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type { TaskContract } from '@singularity/protocol'
-import { CommandService, DomainStore, executeTaskTree, freezeGlobalResources } from '@singularity/runtime'
+import { CommandService, DomainStore, executeTaskTree, freezeGlobalResources, readTreeBundle } from '@singularity/runtime'
 import type { RunVerifier } from '@singularity/runtime'
 
 import { buildSingleRunComposition } from '../src/host-composition.ts'
@@ -70,22 +70,22 @@ void test('empty Method plans three levels, commits direct children only, and in
       return call('singularity_decompose', { action: 'prepare', bindingId: EXPLORE_BINDING_ID })
     }
     if (index === 5 || index === 9) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: EXPLORE_BINDING_ID, ackPreview: previewDigestFrom(request), task: {
-      goal: { summary: 'Write a local finding.', deliverable: 'child.txt', scope: [], constraints: [] },
-      localCriteria: [], inputs: [], localOutputs: [{ id: 'finding', path: 'child.txt', kind: 'file', description: 'One local finding.' }],
+      goal: { summary: 'Write a local finding.', deliverable: 'result/finding.txt', scope: [], constraints: [] },
+      localCriteria: [], inputs: [], localOutputs: [],
     } }] })
-    if (index === 12) return call('bash', { command: "printf child-result > child.txt" })
-    if (index === 13 || index === 19) return call('singularity_submit', { outputIds: ['finding'], includeLearningDrafts: false })
+    if (index === 12) return call('bash', { command: 'mkdir -p result\nprintf child-result > result/finding.txt' })
+    if (index === 13 || index === 19) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
     if (index === 16) return call('singularity_read', { kind: 'children' })
     if (index === 17) return call('singularity_feedback', { kind: 'needs-replan', summary: 'Preserve the reusable local finding as a skill draft.', proposedChanges: [{ field: 'outputs', suggestion: 'Include a public learning draft when integrating this finding.' }], refs: [] })
     if (index === 18) {
       assert.ok(grandchild)
-      return call('bash', { command: `cat 'children/${encodeURIComponent(grandchild.taskId)}/finding' > child.txt` })
+      return call('bash', { command: `mkdir -p result\ncat 'children/${encodeURIComponent(grandchild.taskId)}/result/finding.txt' > result/finding.txt` })
     }
     if (index === 22) return call('singularity_read', { kind: 'feedback' })
     if (index === 23) {
       assert.ok(child)
       assert.match(messageTexts(request).join('\n'), /Preserve the reusable local finding as a skill draft/)
-      return call('bash', { command: `cat 'children/${encodeURIComponent(child.taskId)}/finding' > result.txt\nmkdir -p learning-drafts/skills/finding\nprintf '# Useful finding\n\nReuse the observed public approach.\n' > learning-drafts/skills/finding/SKILL.md` })
+      return call('bash', { command: `cat 'children/${encodeURIComponent(child.taskId)}/result/finding.txt' > result.txt\nmkdir -p learning-drafts/skills/finding\nprintf '# Useful finding\n\nReuse the observed public approach.\n' > learning-drafts/skills/finding/SKILL.md` })
     }
     if (index === 24) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: true })
     return { content: 'Unexpected fixture request.', usage: fixtureUsage(index) }
@@ -110,7 +110,10 @@ void test('empty Method plans three levels, commits direct children only, and in
     }
     const verifier = (contract: TaskContract): RunVerifier => ({ provider: contract.acceptance,
       async verify(request) {
-        assert.equal(new TextDecoder().decode((await request.readObject(request.outputs[0], 'object')).bytes), 'child-result')
+        const content = contract.origin.kind === 'child'
+          ? (await readTreeBundle({ readObject: request.readObject }, request.outputs[0], 4096)).contents.get('finding.txt')
+          : (await request.readObject(request.outputs[0], 'object')).bytes
+        assert.equal(new TextDecoder().decode(content), 'child-result')
         verified.push(contract.taskId)
         return sealPublicReceipt({ v: 1, provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,
           inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
@@ -141,11 +144,13 @@ void test('empty Method plans three levels, commits direct children only, and in
       assert.equal(child.method.digest, active.contract.method.digest)
       assert.equal(child.template.id, EXPLORE_TEMPLATE_ID)
       assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['task-goal', true]])
+      assert.deepEqual(child.spec.outputs.filter(output => output.required), [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }])
       assert.equal(child.resources.exploration?.digest, active.contract.resources.exploration?.digest)
       assert.equal(result.root.manifest?.learningDrafts[0]?.id, '__skill-drafts')
       assert.ok(result.root.manifest.learningDrafts[0].object)
       assert.ok(grandchild)
       assert.deepEqual(grandchild.spec.criteria, child.spec.criteria)
+      assert.deepEqual(grandchild.spec.outputs, child.spec.outputs)
       assert.deepEqual(grandchild.method, active.contract.method)
       assert.equal(grandchild.origin.kind === 'child' && grandchild.origin.parentId, child.taskId)
       assert.deepEqual(verified, [grandchild.taskId, child.taskId, taskId])

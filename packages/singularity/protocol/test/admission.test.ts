@@ -563,6 +563,17 @@ void test('empty Method children inherit a fixed goal criterion and cannot verif
     parentRunId: 'run-root-1', batchId: 'batch-1', children: [{ ...request,
       bindingId: protocol.EXPLORE_BINDING_ID, proposal: { ...request.proposal, localCriteria: [] } }] })).contract
   assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['task-goal', true]])
+  const resultOutput: OutputSpec = { id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }
+  for (const localOutputs of [undefined, []]) {
+    const proposal: TaskProposal = { goal, inputs: [], ...(localOutputs === undefined ? {} : { localOutputs }) }
+    const input = { parent, method: emptyMethod, exploration, parentRunId: 'run-root-1', batchId: 'batch-result',
+      children: [{ ...request, bindingId: protocol.EXPLORE_BINDING_ID, authorizedInputs: [], proposal }] }
+    assert.deepEqual(firstChild(admitChildBatch(input)).contract.spec.outputs.filter(output => output.required), [resultOutput])
+    assert.throws(() => admitChildBatch({ ...input, children: [{ ...input.children[0], proposal: {
+      ...proposal, localOutputs: [{ id: 'result', path: 'other.txt', kind: 'file', description: 'Cannot replace the delivery tree.' }],
+    } }] }), admissionError('INVALID_ARGUMENT'))
+  }
+  assert.deepEqual(parent.spec.outputs.filter(output => output.required), rootBaseOutputs.filter(output => output.required))
   const expected: protocol.PublicReceiptExpectation = { provider: child.acceptance, operationId: 'verify-child',
     contractDigest: child.digest, inputDigests: [], outputDigests: [], requiredCriteria: child.spec.criteria.map(value => value.id) }
   const payload = { v: 1, provider: expected.provider, operationId: expected.operationId,
