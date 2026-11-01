@@ -432,7 +432,7 @@ export class RunToolController {
   private planTool() {
     const definition = defineTool({
       name: 'singularity_plan',
-      description: 'Store this Run PlanningSketch; creates no Task and changes no contract.',
+      description: 'Store or refine this Run PlanningSketch after discovery; creates no Task and changes no contract.',
       parameters: planningParameters,
       output: {
         schema: {

@@ -1,6 +1,6 @@
 # Singularity V1 进度
 
-更新：2026-11-01。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
+更新：2026-11-02。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
 
 用户已授权核实架构审计并联动修改规范、约束、源代码和测试，作为 amendment 006/007/008 纳入框架与 spec-lock。随后授权 deepseek-flash 真实全流程验证、prompt 优化及 PR/合并；amendment 009 澄清 probe 后续批次复用。接手时的 S4–S7 成果保留，没有重置工作区。
 
@@ -64,7 +64,7 @@ Node SQLite 的 ExperimentalWarning 是固定宿主已知限制。真实隐藏�
 | C-05 固定绑定 | protocol/admission、tools | 真实沿绑定执行；拒绝模型绑定由协议／DSH fixture 证明 |
 | C-06 required join／parent 验收 | children、task-pool | E–J 真实逐层独立验收；required winner/replacement 有 fixture |
 | C-07 后续 direct batch | task-pool、wake | 本次 exploration-1 空 Method root 完成两批同 binding probe，父节点读取结果并自行汇总；required/probe/失败 probe 的显式输出传递有原生 fixture |
-| C-08 递归／局部规划 | planning、decompose、task-pool | 本次 guided-1 真实 root→region→warehouse，34 Task verified；16 次成功 [0,1,2] sketch，26 次 [0,1] |
+| C-08 递归／局部规划 | planning、decompose、task-pool | guided-1 真实 root→region→warehouse，34 Task verified；16 次成功 [0,1,2] sketch，26 次 [0,1]。该 Method 已指定 required 层级，证明递归执行，不证明空 Method 在复杂领域自主发现多层 workflow；BB 浅层失败与引导修订见下文 |
 | C-09 空 Method／draft | global-resources、exploration、workspace | 本次 empty-2/exploration-2/3 从空 Method 建库并激活；exploration-3 新 skill 注册/绑定、评测与发布后原生消费已实跑；MCP 目录只有说明稿，可执行 MCP 演化链有完整原生 fixture |
 | C-10 原生取消后 closure | cancellation、task-pool | 本次 request-boundary-1 只买 3 次请求后原生取消，subtree closure、最终 usage、无虚假 Evidence/RSI；fixture 验证保留已 terminal Evidence |
 | C-11 事务 guard／幂等／归档 | store、service | 当前 SQLite rollback、UNIQUE、并发命令、缓存投影、CAS 负例和归档读取测试；旧 NDJSON replay 仅为历史证据 |
@@ -149,3 +149,13 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 真实 DSH MCP 预检（无模型请求）：全部两个工具实际调用；19 个 CLI/帮助入口成功；上一轮原始坏配置和缺失 TOML 都约 10 秒返回失败，移除后 config 安装成功；AXIS arbiter 完成真实 elaboration、VCS 编译和 UVM，`UVM_ERROR=0`、`UVM_FATAL=0`；长服务调用在 25 秒被原生 AbortSignal 取消，8 秒后该副本 bbdev/iii/motia 残留进程为零。未运行全芯片仿真、P2E 或物理后端；没有把组件 smoke 视为 CosyVoice3/PPA 验收。
 
 原始预检脚本、逐调用结果和原生 session 保存在 `artifacts/buckyball-cosyvoice3-20261102/`，目录 `mcp-preflight`、`mcp-preflight-business`、`mcp-preflight-cancel`、`mcp-preflight-native-cancel` 分别保留帮助/初次断言失败、组件业务、原始配置复现和真实取消证据；脚本中错误的预期断言和固定端口占用已分别记录并用实际复现/动态空闲端口重新核实，不把失败预检计作通过。根 `pnpm verify` 439/439（protocol 203、runtime 134、app 89、domain 13），0 fail/skip；新增 fixture 同时检查独立依赖复制、已有目录拒绝合并、CLI 失败与原生取消；fixture 与真实预检分别报告。
+
+### BB 浅层分解实跑与 workflow 引导修订（2026-11-02，amendment 011）
+
+用户要求停止 `artifacts/buckyball-cosyvoice3-live-20261102-010855` 并修改后用新根重开。操作者在北京时间 02:35:27 停止该进程及其工作子进程，旧根保留归档；最后计量 442 次已结算请求、51,227,888 reported tokens、unknown=0。该轮只有 root→LLM/Flow/HiFT 一层分解；root 没有提交、没有 root 验收或 RSI 结果。三个探索 child 的 criteria 均为空，其 `verified` 不代表芯片前端验收通过。
+
+原生 session 证明三个 child 都有 fallback、剩余深度 7，规划后 `canDecompose=true`，没有调用过 decompose。三个节点均在读取 skill/源码前只提交一次初始规划，以串行、紧耦合或无并行收益为由直接承接 reference→kernels→numerics→workload→mapping 长链；root 还自行写入了较短的 child 时间要求。实际卡片只写 when useful、无 useful child 时直接工作，没有讲清职责分解与并行的区别。旧 guided inventory 层级由 Method 的 required bindings/guidance 指定，不升级为空 Method 自主发现层级的证据。
+
+现有 worker card、exploration guidance、Task 协议资源、BB guide/TaskSpec 与框架 §6.3/§7/§13 同步为：资源探索后细化初始草图；长链按职责、产物与检查边界组织直属 workflow；串行阶段用后续批次；每层承担有界本地技术工作与集成；叶目标为有界可直接验证单元。没有增加状态、语义复杂度校验器、树深/child 数门禁或预置芯片分解树。worker+exploration card 共 1918 bytes，保持 2 KiB 原上限。实际自主递归和芯片实现收益仍需新轮次证明，不以文本或 fixture 通过替代实跑。
+
+本次最终根 `pnpm verify` 全通过：439/439（protocol 203、runtime 134、app 89、domain 13），0 fail、0 skipped，project/build/typecheck/lint 通过；原生 fixture 的 prompt/tool surface 上限与递归执行保持通过。日志 `artifacts/workflow-guidance-20261102-final-verify.log`；没有为文本改动增加实现镜像测试。

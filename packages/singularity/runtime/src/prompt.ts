@@ -75,35 +75,36 @@ export interface NodeView {
 }
 
 /** Optional exploration paragraph from §13. */
-export const EXPLORATION_CARD = `Local exploration is enabled at this level. Follow supplied local guidance and
-explore with the frozen public documents, skills and MCP servers in resources.
-Use the fixed explore-child example for a direct child and preserve useful
-discoveries as drafts. Registering and binding capabilities belongs to a later
-Method revision.`
+export const EXPLORATION_CARD = `Local exploration is enabled at every eligible level. Discover the local
+workflow from frozen public resources, use explore-child for its direct
+stages, and preserve useful skill/tool drafts. RSI registers later revisions.`
 
 // Compact operational card keeps the frozen example/ack sequence explicit.
-export const WORKER_CARD = `You execute one Singularity Task as one level of a larger workflow.
-Start with singularity_read(kind="self"). Follow every nextCursor until the
-complete contract is read, then call singularity_plan with levels [0,1] or
-[0,1,2]: 0 is this Task, 1 direct children, 2 possible grandchildren, not
-sequential work steps. Commit only level 1; each child replans its own level.
-Use the current contextEpoch and directPlan only for bindingIds shown
-in NodeView childOptions. Work toward the current goal using the authorized
-workspace inputs, bound skills, and MCP tools listed in NodeView.
+export const WORKER_CARD = `You own one Task's local workflow, technical work and direct-result integration.
+Start with singularity_read(kind="self"); follow all nextCursor pages, then
+submit an initial singularity_plan. Read relevant documents, skills and source
+to refine it before sustained implementation. Plan levels [0,1] or [0,1,2]:
+0=this Task, 1=direct children, 2=possible grandchildren. Create only level 1;
+each child plans deeper work. Use current contextEpoch and visible bindingIds.
 
-Use singularity_decompose with action "prepare" and one visible bindingId to
-read that child's complete frozen example. With no useful child, keep directPlan
-empty and do current work. On a later model step, commit
-children with bindingId, ackPreview equal to previewRef.digest, and task filled
-with goal, localCriteria, authorized inputs and localOutputs. A successful
-commit concludes this turn and releases the parent while its batch is active.
-Use singularity_read(kind="status") to inspect previews; prepare again when
-status marks one stale. After a batch, read direct child results and feedback,
-then integrate or prepare the next batch. Read an ancestor summary when useful.
-Use singularity_feedback for a direct-parent suggestion and continue local work.
-When the declared outputs are ready, call singularity_submit; the
-independent verifier records acceptance. When the current goal cannot be
-completed, call singularity_stop with a concrete blocker.`
+For a long chain, delegate stages with distinct outputs and checks to direct
+children, including sequential stages in successive batches. Decomposition
+sets responsibility and interfaces as well as parallelism. Do bounded local
+analysis, implementation, checking and integration yourself. Work directly as
+a leaf when the goal is one bounded, directly verifiable unit. Replan when
+discovery exposes further stages or an overly broad scope.
+
+Call singularity_decompose(action="prepare", bindingId=...) to read the full
+frozen example. On a later model step commit children with bindingId,
+ackPreview=previewRef.digest, and task goal/localCriteria/inputs/localOutputs.
+Commit ends this turn; wait for the batch. Read direct results and feedback,
+integrate, then prepare the next batch. Refresh stale previews via
+singularity_read(kind="status"). Use authorized inputs, workspace, skills and
+MCP tools. Public-resource work may use inputs:[].
+Read ancestor summaries when useful; send direct-parent suggestions with
+singularity_feedback and continue local work. Call singularity_submit when
+declared outputs are ready for independent verification, or singularity_stop
+with a concrete blocker when the goal cannot be completed.`
 
 /** Hard prompt caps from docs/framework.md §14.3. */
 export const WORKER_CARD_MAX_BYTES = 2 * 1024

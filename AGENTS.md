@@ -4,7 +4,7 @@
 
 - `docs/framework.md` 是协议唯一权威；`spec-lock.json` 固定其 digest。`AGENTS.md` 只写施工约束，`docs/progress.md` 写当前状态、证据和缺口。调研 artifact 不替代规范，不另建平行任务卡和交接规范。
 - 开始或恢复工作时阅读相关规范、进度和实际消费者；保留工作区已有未提交成果。旧 Singularity 仓库不提供本仓库兼容要求。
-- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
+- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
 
 ## 启动条件先于执行
 
@@ -22,6 +22,7 @@
 - `runtime → protocol`、`app → runtime`、`domain → protocol public types`。protocol 保持纯 TS，除纯 hash 外不访问宿主副作用；runtime 不包含领域算法/suite 分支，app 只做组合。
 - Task、Run、Method、Evidence、RsiRound 是业务概念；Task 树是只读投影。每个 domain 一个 CommandService、事实序列、纯 fold 和 Task wake authority。SQLite 事务内强制 guard → INSERT fact → COMMIT；retry policy 参数不能关闭 guard。领域投影和 CAS 解析可缓存；命令去重直接查询 events.command_id 唯一索引，不维护内存 command projection 或第二份可变业务状态表。CAS 用同目录完整临时文件 + 原生 link 原子发布；不添加 append 引用扫描或修复器。
 - DSH 拥有 Agent/Session、模型 loop、tool/skill registry、MCP transport、compaction、session persistence、创建回滚、取消和 disposal。直接组合公开能力；同步 receipt/usage 原始事件读取只留一个经过接入成本比较的适配入口，不复制 inbox 或 transcript。
+- 每个 worker 是 workflow 的一级：先形成初始草图，再依据相关资源细化职责、产物和检查边界；长链阶段创建直属任务，串行阶段用后续批次衔接。每层承担本地技术工作与集成，叶目标应有界且可直接验证。优化现有 prompt，不增语义判定器、固定树深或分解数量门禁；guided 分解证据不能升级为空 Method 自主发现多层 workflow 的证据。
 - 正式 child Task 使用独立 DSH session；只创建 direct children，root/descendants 固定 Method revision，运行中合同不变。Summary 是按合同 digest 派生的只读业务缓存，usage 归 source Task；Summary 使用原生 agents.create/dispose；替换为 subagent 所需的 live parent/preset/catalog 成本比较见 `docs/progress.md` 的原生接入比较。
 - root acceptance 归 operator/domain。保留冻结 Ref/digest 和外部 receipt 绑定；DB 外键不能证明外部内容身份。Proposer 只提交 patch，host 评测、比较和 trusted expected-head activation；隐藏 payload 保持实际部署读取边界。
 

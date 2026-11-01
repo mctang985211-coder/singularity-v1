@@ -26,7 +26,7 @@ export const EXPLORE_BINDING_ID = 'platform:explore-child'
 
 export const EXPLORE_GUIDANCE = {
   v: 1,
-  text: 'Work on the current Task goal and declared criteria. Read the frozen public resource list and use useful authorized capabilities. Organize only direct children when useful. A child owns its own local workflow. Integrate direct results into this level\'s declared outputs, verify the local work, then submit. Preserve reusable skill or MCP drafts under learning-drafts; registration belongs to RSI.',
+  text: 'Discover this Task\'s local workflow from frozen public documents, skills and tools. Refine the initial sketch after inspecting relevant resources. Delegate stages with distinct outputs and checks to direct children; sequential stages use successive batches. Each child owns deeper work. Perform bounded local technical work and integrate direct results. A leaf goal is one bounded, directly verifiable unit. Public-resource work may use inputs:[]. Preserve reusable skill or MCP drafts under learning-drafts for RSI registration.',
 } as const
 
 export const EXPLORE_EXAMPLE: TaskExample = {
