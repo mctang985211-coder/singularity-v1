@@ -119,3 +119,5 @@ bbdev MCP 的仓库路径按源码位置固定，因此该 probe 不绑定给多
 用户授权按 Buckyball skill 实施领域验收、自主选择 PPA 权重，并在启动确认后结束人工操作。新增 example campaign 与独立 review：读取冻结 CAS 输出、独立 checkout/patch 与真实组件工具复跑；这是模型领域审查及工具证据，不宣称形式化签核。PPA 用功耗/延迟/面积 0.30/0.40/0.30 加权几何改进，功能全通过、条件相同、均值至少 1% 改善且无 case 回退才发布。LLM prefill、Flow streaming 与 HiFT 边界为冻结 workload 定义，不预设求解树。
 
 原生 llm/stream 统一计量覆盖普通、Summary/review/proposer、compaction 与辅助请求；既有 usage fold 增加带 llmStreamCall 的原生 compaction/summary，模型无关摘要不计请求。本实验原生压缩启用，输出 cap 40k、75% 压力。DSH 原生 bash/jobs 承担长编译等待与生命周期，没有芯片 runtime 分支或新恢复管理器。实际启动时间、PID、绝对 deadline 和消费以 execution root 的 launch.json / requests.jsonl 为准。
+
+本次最终 `pnpm verify` 全通过：435/435（protocol 203、runtime 134、domain 13、app 85），0 fail/skip；含新增三个原生/领域 fixture。日志 `artifacts/buckyball-cosyvoice3-20261101/campaign-verify.log`。fixture 证明计量、准入、独立审查接线、真实失败保留和比较拒绝；不提升为芯片实现或 PPA 成果。
