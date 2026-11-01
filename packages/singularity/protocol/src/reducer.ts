@@ -22,6 +22,7 @@ import type { ChildBinding, MethodRevision, TaskTemplate } from './method.ts'
 import { projectMethodRounds } from './method-round.ts'
 import type { MethodRoundState } from './method-round.ts'
 import type { RoundPlan } from './round-plan.ts'
+import { sameRef } from './refs.ts'
 import type { Ref } from './refs.ts'
 import { parseProtocolValue } from './schema.ts'
 import { verifyTaskContract } from './task.ts'
@@ -1313,10 +1314,6 @@ function latestRun(
     fail('TASK_OUTCOME_INVALID', fact, `Task ${JSON.stringify(task.taskId)} has no Run`)
   }
   return requireRun(runtime, runId, fact)
-}
-
-function sameRef(left: Ref, right: Ref): boolean {
-  return left.id === right.id && left.digest === right.digest
 }
 
 function fail(code: ReducerErrorCode, fact: Fact | undefined, message: string): never {

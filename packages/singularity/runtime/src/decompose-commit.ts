@@ -6,6 +6,7 @@ import {
   computeDigest,
   decomposeCommitSchema,
   parseProtocolValue,
+  sameRef,
 } from '@singularity/protocol'
 import type {
   ChildBatchState,
@@ -433,8 +434,4 @@ function resultFromFact(
     deliveryReceiptRefs: receiptRefs.map(ref => ({ ...ref })),
     fact,
   }
-}
-
-function sameRef(left: Ref, right: Ref): boolean {
-  return left.id === right.id && left.digest === right.digest
 }
