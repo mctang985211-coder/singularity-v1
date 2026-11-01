@@ -12,6 +12,7 @@ VerifyRequest,
 } from '@singularity/protocol'
 import {
 canonicalize,
+errorMessage,
 executionRecordPayloadSchema,
 parseProtocolValue,
 seal,
@@ -143,7 +144,7 @@ export async function verifyRunSubmission(
     return {
       verdict: 'invalid',
       code,
-      reason: `${code}: ${errorMessage(error)}`,
+      reason: `${code}: ${errorMessage(error, 'unknown verifier error')}`,
     }
   }
 
@@ -276,10 +277,6 @@ export function buildExecutionRecord(
     reason: options.reason,
   })
   return seal('object', payload)
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'unknown verifier error'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

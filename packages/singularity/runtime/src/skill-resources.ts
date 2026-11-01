@@ -1,5 +1,6 @@
 import { escapeText, isSkillName, renderSkillContent } from '@deepseek-ai/dsh-skill'
 
+import { sameRef } from '@singularity/protocol'
 import type {
   MethodRevision,
   Ref,
@@ -212,6 +213,4 @@ function validateSkillCatalog(skills: readonly SkillAsset[]): ReadonlyMap<string
   return byId
 }
 
-export function sameRef(left: Ref, right: Ref): boolean {
-  return left.id === right.id && left.digest === right.digest
-}
+export { sameRef }

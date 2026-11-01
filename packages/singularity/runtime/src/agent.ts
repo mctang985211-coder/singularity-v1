@@ -1,6 +1,7 @@
 import type { AgentHandle,AgentSetup } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-compaction'
 import type { Session,SessionEvent,SessionId } from '@deepseek-ai/dsh-session'
+import { errorMessage } from '@singularity/protocol'
 import type { SessionCut,TaskRunState,UsageRecord } from '@singularity/protocol'
 import { throwCollectedErrors } from './errors.ts'
 import { readSessionEvents } from './session-events.ts'
@@ -298,8 +299,4 @@ function isPlatformPromptRenderer(value: unknown): value is PlatformPromptRender
     && value !== null
     && 'render' in value
     && typeof (value as { readonly render?: unknown }).render === 'function'
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

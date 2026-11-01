@@ -1,5 +1,5 @@
 import type { Digest,Ref } from '@singularity/protocol'
-import { closedObject,computeDigest,digestSchema,parseJsonText,parseProtocolValue,refSchema,seal,workspaceRelativePathSchema } from '@singularity/protocol'
+import { closedObject,computeDigest,digestSchema,errorMessage,parseJsonText,parseProtocolValue,refSchema,seal,workspaceRelativePathSchema } from '@singularity/protocol'
 import { z } from 'zod'
 
 import type { CasObjectReader } from './workspace.ts'
@@ -109,8 +109,4 @@ export function compareBundlePath(left: string, right: string): number {
     if (a !== b) return a < b ? -1 : 1
   }
   return leftSegments.length - rightSegments.length
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

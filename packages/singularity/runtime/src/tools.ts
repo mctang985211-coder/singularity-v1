@@ -12,6 +12,7 @@ TaskContract,
 import {
 canonicalize,
 decomposeCommitSchema,decomposePrepareSchema,
+errorMessage,
 parseProtocolValue,
 planningSketchSchema,
 taskFeedbackInputSchema,
@@ -449,7 +450,7 @@ export class RunToolController {
         try {
           sketch = parseProtocolValue(planningSketchSchema, args.sketch)
         } catch (error) {
-          throw this.toolError('INVALID_ARGUMENT', errorMessage(error))
+          throw this.toolError('INVALID_ARGUMENT', errorMessage(error, 'unknown error'))
         }
         if (sketch.taskId !== this.options.contract.taskId
           || sketch.runId !== this.options.runId
@@ -499,7 +500,7 @@ export class RunToolController {
           try {
             commit = parseProtocolValue(decomposeCommitSchema, args)
           } catch (error) {
-            throw this.toolError('INVALID_ARGUMENT', errorMessage(error))
+            throw this.toolError('INVALID_ARGUMENT', errorMessage(error, 'unknown error'))
           }
           const commitChildBatch = this.options.commitChildBatch
           if (commitChildBatch === undefined) {
@@ -577,7 +578,7 @@ export class RunToolController {
       execute: async (args, exec) => {
         let input
         try { input = parseProtocolValue(taskFeedbackInputSchema, args) }
-        catch (error) { throw this.toolError('INVALID_ARGUMENT', errorMessage(error)) }
+        catch (error) { throw this.toolError('INVALID_ARGUMENT', errorMessage(error, 'unknown error')) }
         const feedbackRef = await createTaskFeedback({
           contract: this.options.contract,
           runId: this.options.runId,
@@ -728,8 +729,4 @@ function serverNameOf(value: unknown): string | undefined {
 
 function isMcpResourceTool(name: string): boolean {
   return (MCP_RESOURCE_TOOL_NAMES as readonly string[]).includes(name)
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'unknown error'
 }

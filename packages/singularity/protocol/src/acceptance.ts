@@ -2,8 +2,9 @@ import { z } from 'zod'
 
 import { digestSchema, seal, verifyDigest } from './digest.ts'
 import type { Digest } from './digest.ts'
+import { errorMessage } from './errors.ts'
 import { sessionCutSchema, usageRecordSchema } from './fact.ts'
-import { refSchema } from './refs.ts'
+import { refSchema, sameRef } from './refs.ts'
 import type { Ref } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
 import { verifyTaskContract } from './task.ts'
@@ -168,7 +169,7 @@ export function validatePublicReceipt(
   try {
     receipt = parseProtocolValue(publicReceiptSchema, value)
   } catch (error) {
-    return invalidReceipt(`receipt is not a strict sealed object: ${errorMessage(error)}`)
+    return invalidReceipt(`receipt is not a strict sealed object: ${errorMessage(error, 'unknown validation error')}`)
   }
   if (!verifyDigest('object', receipt)) {
     return invalidReceipt('receipt digest is not a valid object-domain seal')
@@ -249,17 +250,9 @@ function invalidReceipt(reason: string): PublicReceiptValidation {
   return { verdict: 'invalid', reason }
 }
 
-function sameRef(left: Ref, right: Ref): boolean {
-  return left.id === right.id && left.digest === right.digest
-}
-
 function sameDigests(left: readonly Digest[], right: readonly Digest[]): boolean {
   if (left.length !== right.length) return false
   return left.every((digest, index) => digest === right[index])
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'unknown validation error'
 }
 
 /** One frozen non-draft submission output from amendment 002 A3. */
@@ -462,7 +455,7 @@ export function validateSubmissionManifest(
   try {
     manifest = parseProtocolValue(submissionManifestSchema, value)
   } catch (error) {
-    return invalidManifest(`manifest is not a strict sealed object: ${errorMessage(error)}`)
+    return invalidManifest(`manifest is not a strict sealed object: ${errorMessage(error, 'unknown validation error')}`)
   }
   if (!verifyDigest('object', manifest)) {
     return invalidManifest('manifest digest is not a valid object-domain seal')
@@ -656,7 +649,7 @@ export function validateEvidence(
   try {
     evidence = parseProtocolValue(evidenceSchema, value)
   } catch (error) {
-    return { valid: false, reason: `Evidence is not a strict sealed object: ${errorMessage(error)}` }
+    return { valid: false, reason: `Evidence is not a strict sealed object: ${errorMessage(error, 'unknown validation error')}` }
   }
   if (!verifyDigest('evidence', evidence)) {
     return { valid: false, reason: 'Evidence digest is not a valid evidence-domain seal' }

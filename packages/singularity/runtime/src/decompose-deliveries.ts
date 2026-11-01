@@ -1,5 +1,5 @@
 import type { Session } from '@deepseek-ai/dsh-session'
-import { canonicalize } from '@singularity/protocol'
+import { canonicalize,sameRef } from '@singularity/protocol'
 import type { JsonValue, Ref, TaskContract } from '@singularity/protocol'
 
 import {
@@ -244,8 +244,4 @@ function staleDelivery(
 
 function refsOf(output: Pick<DecomposePrepareResult, 'previewRef' | 'deliveryReceiptRef'>): DeliveryRefs {
   return { previewRef: output.previewRef, deliveryReceiptRef: output.deliveryReceiptRef }
-}
-
-function sameRef(left: Ref, right: Ref): boolean {
-  return left.id === right.id && left.digest === right.digest
 }

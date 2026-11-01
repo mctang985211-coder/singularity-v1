@@ -51,3 +51,8 @@ export const toolErrorSchema = z.strictObject({
 })
 
 export type ToolError = z.infer<typeof toolErrorSchema>
+
+/** Preserve the original message while keeping the caller's non-Error fallback. */
+export function errorMessage(error: unknown, fallback = String(error)): string {
+  return error instanceof Error ? error.message : fallback
+}
