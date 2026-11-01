@@ -184,3 +184,8 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 真实原生 DSH MCP 复测：checkout 15.820 秒成功；新副本 compiler build 273.646 秒成功，零 LLVM rebuild；前次 libnovas 的缺失依赖被精确复现为 libz.so.1，verify Nix shell 声明 zlib rpath。带 VERDI_HOME 的 AXIS arbiter VCS/UVM 43.808 秒成功，UVM_ERROR/UVM_FATAL 均 0，libnovas 动态依赖解析成功。首次 UVM 预检遗漏操作者 EDA PATH，实际报 vcs-not-found，按指南补齐后重测；未为此增加产品探测或 fallback。证据 `artifacts/buckyball-cosyvoice3-20261102/{compiler-preparation.log,mcp-preflight-toolchain,mcp-preflight-verdi,toolchain-readiness.json}`，0 模型请求；不作为 CosyVoice3/PPA 验收。
 
 最终根 `pnpm verify` 444/444，project/build/typecheck/lint 全通过、0 fail/skip；日志 `artifacts/goal-toolchain-final-20261102-verify.log`。原生 MCP fixture 同时检查工具链路径从领域 MCP 传入。全流程实跑及 PR/合并仍以实际结果为条件。
+
+
+### 当前 BB 重开（2026-11-02 04:08:09 +08）
+
+修复代码 `a96b48f` 从新根 `artifacts/buckyball-cosyvoice3-live-20261102-040756` 启动，PID 1162439，绝对截止 07:08:09 +08。保持整轮 3 小时、4 亿 reported tokens、4000 请求、单 Run 4096 步、depth 8、256 Task、batch 8、maxActive 2；模型 deepseek-flash/max/40k 输出，原生 compaction。启动阶段模型请求与 MCP setup 正常。操作者按半小时巡检实际树、产物、验收、RSI 与计量；未取得全流程证据前不提交 PR 或合并。
