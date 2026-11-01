@@ -1,0 +1,27 @@
+- id: compaction-basic
+  config:
+    auto: true
+    thresholdRatio: 0.75
+    retainRatio: 0.16
+    maxTokens: 40000
+    compactionRetries: 0
+    maxOverflowRetries: 0
+
+- id: persistent-bash
+  disabled: true
+
+- insert:
+    - id: frontend-shell
+      name: '@deepseek-ai/dsh-bash-local'
+      config:
+        timeoutMs: 60000
+        maxTimeoutMs: 10800000
+    - id: frontend-shell-env
+      name: '@deepseek-ai/dsh-shell-env'
+    - id: frontend-bash
+      name: '@deepseek-ai/dsh-tool-bash'
+    - id: frontend-jobs
+      name: '@deepseek-ai/dsh-tool-jobs'
+      config:
+        completionDelivery: quiet
+        maxWaitTimeoutMs: 600000
