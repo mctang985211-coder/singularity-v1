@@ -1,4 +1,4 @@
-import type { Ref,TaskLimits,TaskSpec } from '@singularity/protocol'
+import type { Ref,RoundPlan,TaskLimits,TaskSpec } from '@singularity/protocol'
 
 /** All agents share the campaign cap; child budgets do not multiply it. */
 export const BUCKYBALL_FRONTEND_CAMPAIGN = {
@@ -9,6 +9,10 @@ export const BUCKYBALL_FRONTEND_CAMPAIGN = {
   maxOutputBytes: 256 * 1024 * 1024,
   task: { maxRuns: 3, maxStepsPerRun: 4096, maxTokens: 400_000_000,
     maxDepth: 8, maxTasks: 256, maxBatchChildren: 8 } satisfies Omit<TaskLimits, 'deadlineAt'>,
+  proposerBudget: { maxSteps: 4096, maxTokens: 400_000_000,
+    maxWallClockMs: 3 * 60 * 60 * 1000 } satisfies RoundPlan['proposerBudget'],
+  evaluationBudget: { maxRuns: 6 * 256 * 3, maxTokens: 400_000_000,
+    maxWallClockMs: 3 * 60 * 60 * 1000, maxActiveRuns: 2 } satisfies RoundPlan['budget'],
 } as const
 
 /** Operator owns acceptance; the empty Method does not prescribe a chip or workflow. */

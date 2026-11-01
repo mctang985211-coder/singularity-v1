@@ -105,7 +105,7 @@ I/J 最终累计 1068 请求边界／1067 已结算步骤／15,707,337 reported 
 
 ### Buckyball / CosyVoice3 前端准备（2026-11-01）
 
-用户将真实项目范围明确为芯片 frontend，排除所有全芯片仿真、P2E 和物理后端。[准备说明](buckyball-cosyvoice3-frontend.md) 固定源码/checkpoint、空 Method 资源视图、根任务五项验收和较高的节点限制；示例 TaskSpec 工厂与预算只在 examples，不向 runtime 添加芯片逻辑。每轮累计上限为 3 小时 / 4 亿 tokens / 4000 请求，单 Run 4096 步、树深 8、256 Task、单批 8 child。
+用户将真实项目范围明确为芯片 frontend，排除所有全芯片仿真、P2E 和物理后端。[准备说明](buckyball-cosyvoice3-frontend.md) 固定源码/checkpoint、空 Method 资源视图、根任务五项验收和较高的节点限制；示例 TaskSpec 工厂与预算只在 examples，不向 runtime 添加芯片逻辑。每轮累计上限为 3 小时 / 4 亿 tokens / 4000 请求，单 Run 与 proposer 均为 4096 步、树深 8、256 Task、单批 8 child。proposer/评测也显式使用高额度并受整轮累计预算和剩余 deadline 约束，不沿用 inventory 的低默认值。
 
 已创建独立源码副本并保留原仓库已有修改，下载固定公开模型资产并核对 6 个大文件与官方 SHA-256；现有 bbdev 原生配置安装成功，裁剪的 FastMCP stdio surface 为 9 tools / 4620 bytes，真实 `validate(toy)` 返回 passed。VCS `-full64 -ID` 与 DC `-version`、license 状态读取完成。官方 CosyVoice3 CPU 原始软件推理完成单输入 smoke，生成 24kHz / 21120 样本的有限 FP32 音频，未声称听感、额外文本规范化或数值等价。这些是启动环境证据，不能升级为 RTL/芯片验收。原始文件位于本地忽略目录 `artifacts/buckyball-cosyvoice3-20261101/`。
 

@@ -76,12 +76,14 @@ Singularity host 使用已验证的官方 Node 24.9.0 二进制。Buckyball Nix 
 | 模型 | `deepseek-flash`，reasoning `max`，700000 context，40000 output |
 | 整轮所有模型请求 | 最长 3 小时、400000000 tokens、4000 次调用；source/child/Summary/proposer/评测/发布后验证共用累计计量 |
 | 单 Run | `maxStepsPerRun: 4096`；避免先于整轮调用上限截断 |
+| RSI proposer | `maxSteps: 4096`、400000000 tokens；时间仍受整轮剩余 deadline 限制，不沿用 inventory 的 96 步/2M token 默认值 |
+| 双臂评测 | `maxRuns: 4608`、400000000 tokens、`maxActiveRuns: 2`；这是内部上限，实际购买请求仍受整轮累计 4000 次限制 |
 | Task 树 | `maxDepth: 8`、`maxTasks: 256`、`maxBatchChildren: 8`、`maxRuns: 3`；不是必须达到的目标 |
 | 初始 root 子树 token 上限 | 400000000；子树配额不能使整轮总额增加 |
 | 活跃 Task 上限 | 初始 2；外部构建并发与模型上下文限制分别配置 |
 | 输出冻结上限 | 256 MiB；交付 patch、必要小向量和证据，不重复提交权重或整个 build 目录 |
 
-绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 3 小时。每次执行使用全新 execution root；不复用此前已过期的 inventory 窗口。秘密只经 launch environment 注入。
+绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 3 小时。给 proposer/evaluation 的相对时间取整轮剩余时间，所有阶段共用累计计量，不各自重新获得 3 小时或 4 亿 tokens。每次执行使用全新 execution root；不复用此前已过期的 inventory 窗口。秘密只经 launch environment 注入。
 
 当前 profile 仍关闭自动 compaction，因为现有计量只读 assistant 请求；长任务正式启动前需要把**原生 compaction 请求**纳入同一累计调用/token 预算，再开启原生自动压缩。不要通过关闭预算、编造 usage、自建摘要 loop 或重新购买失败请求绕开此缺口。
 
