@@ -37,7 +37,11 @@
     "@deepseek-ai/dsh-tool-skill": "0.2.2-alpha.2",
     "@deepseek-ai/dsh-tools": "0.2.2-alpha.2",
     "@singularity/protocol": "workspace:*",
-    "@singularity/runtime": "workspace:*"
+    "@singularity/runtime": "workspace:*",
+    "@deepseek-ai/dsh-bash-local": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-shell-env": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-tool-bash": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-tool-jobs": "0.2.2-alpha.2"
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "2.0.0",

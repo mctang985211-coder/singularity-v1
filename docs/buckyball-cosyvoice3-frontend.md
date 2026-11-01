@@ -85,11 +85,11 @@ Singularity host 使用已验证的官方 Node 24.9.0 二进制。Buckyball Nix 
 
 绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 3 小时。给 proposer/evaluation 的相对时间取整轮剩余时间，所有阶段共用累计计量，不各自重新获得 3 小时或 4 亿 tokens。每次执行使用全新 execution root；不复用此前已过期的 inventory 窗口。秘密只经 launch environment 注入。
 
-当前 profile 仍关闭自动 compaction，因为现有计量只读 assistant 请求；长任务正式启动前需要把**原生 compaction 请求**纳入同一累计调用/token 预算，再开启原生自动压缩。不要通过关闭预算、编造 usage、自建摘要 loop 或重新购买失败请求绕开此缺口。
+默认 inventory profile 仍关闭自动 compaction。本实验以原生 profile patch 启用自动压缩：75% context 压力、16% 近期历史保留、40000 输出上限；不配置额外 compaction/overflow 重购。`native-accounting.ts` 在 DSH `llm/stream` 接缝计入所有请求（包括 Summary、review、proposer、compaction 与辅助调用），共用累计预算。session usage fold 同时消费带 `llmStreamCall:true` 的原生 `compaction/summary`，模型无关摘要不算模型请求。
 
 ## 验收与 RSI
 
-根合同固定五项 required criteria：原始参考、设计合同、实现/elaboration/逻辑综合、组件验证、可复现交付。缺失阶段保持失败或未完成；成功提交文件和模型自报的 PASS 不能使硬件验收通过。
+根合同固定六项 required criteria：原始参考、设计合同、实现/elaboration/逻辑综合、组件验证、PPA 证据、可复现交付。缺失阶段保持失败或未完成；成功提交文件和模型自报的 PASS 不能使硬件验收通过。
 
 领域 verifier 要在付费启动前接好：只消费冻结交付物，在独立验证 checkout 应用 patch，重跑对应组件检查并按原始软件 oracle 检查数值。模型可提出设计、测试和阈值建议；验收方负责冻结精度标准，审核覆盖和数值方案，不能让候选 patch 改写验收。架构/映射完整性需要独立领域审查；若只有自动结构检查，则明确报告该项未证明，不冒充芯片正确。
 
@@ -99,8 +99,27 @@ RSI 只读取 root 验收结束后的 sealed trace，改进可复用 Method/skil
 
 功能覆盖从实际成功的协议工具、原生 skill/MCP、Task closure、comparison 和 activation 读取，分别标明未触达项。不要为了填计数强制生成无用工具、固定树深或人为制造失败。
 
-## 本次证据与启动缺口
+## 环境证据与运行接入
 
 本地忽略目录 `artifacts/buckyball-cosyvoice3-20261101/` 保存源码副本、checkout 清单、固定模型、Python 环境及 lock、`project.json`、`campaign.json`、`task-spec.json`、原始软件 smoke/FP32 输出、原生 MCP probe、配置安装与商业工具版本日志。原 Buckyball 工作区保持原状态。环境安装和 smoke 中的真实错误保留原日志；这是操作者启动准备，没有向 harness 增加自动修复流程。
 
-已完成准备不等于已完成 Singularity 芯片实跑：本次尚未购买新的模型请求，也未生成芯片验收 Evidence 或 RSI winner。正式付费 campaign 前剩下两个接入项：领域独立 verifier/冻结 case 与原生 compaction 统一计量。这些工作应落在 example/domain 和既有计量接缝，不向核心加入芯片分支或恢复框架。
+环境 smoke 不等于芯片验收。领域独立 verifier、冻结 workload case 与原生 compaction 统一计量已由下述 example 和既有接缝补齐；runtime 没有芯片分支或恢复框架。实际启动、消费和芯片验收结果仅以独立 execution root 记录为准。
+
+
+## 自主 campaign 启动入口
+
+`apps/singularity/examples/buckyball-campaign.ts` 通过现有 root/child/trace/proposer/evaluation/activation 接口执行：最多三个连续 RSI Round，共用同一 3 小时窗口；达到预算即停。初始 Method 为空，不预置设计答案或分解树。使用原生 bash-local、tool-bash 和 tool-jobs 代替最小 profile 的 persistent bash，后台构建由 DSH 管理，模型可用 job_output 等待结果；没有新增进程管理器。
+
+用户授权本实验自主选择设计与 PPA 比例，覆盖旧 skill 中逐项请示设计的约定。领域验收按上述仓库 skill，由**独立 DSH review Agent**在独立目录读取冻结 CAS 输出、检查合同和源代码、应用 patch 并重跑相关真实工具。它不读取原 worker 的可写目录、不修复候选、不把 exit 0 或模型自报 PASS 当正确性。review 的请求和 tokens 同样入总账。这是独立模型审查与复跑证据，并非形式化签核；数值/组件覆盖和缺口留在原生 session 与 receipt。
+
+PPA 采用综合估计，权重 **功耗 0.30 / 关键路径延迟 0.40 / 映射面积 0.30**；比较 `pow(Pb/Pc,.30) * pow(Db/Dc,.40) * pow(Ab/Ac,.30) - 1`。面积、功耗、关键路径延迟分别保留 um²、mW、ns 及 library/corner/clock/activity/offload 身份；不能用时钟约束冒充达到的关键路径或猜测功耗。所有功能项通过、条件一致、均值改善至少 1% 且任一 case 无回退才允许激活。缺 PPA、缺实现或无法验证时保持失败/not-comparable，不强行选赢家。
+
+评测固定 LLM 16/64 token prefill、Flow 16/32 frame streaming 两项 workload 定义，独立验证为 HiFT 小 mel chunk 边界；它们固定输入范围与目标，不规定解决步骤。原始 oracle 来自固定源码/checkpoint，在独立审查内复现。全芯片仿真/P2E 仍排除。新 `ppa-evidence` 根验收要求实际复现 PPA 报告。
+
+运行命令（凭据仅从 launch environment 注入）：
+
+```bash
+node apps/singularity/examples/buckyball-campaign.ts <全新 execution root> <准备目录>
+```
+
+启动记录为 `launch.json`，原生请求累计记录为 `requests.jsonl`，标准输出留 `campaign.log`，每轮及最终结果为 `round-N.json`、`result.json`。执行根不会重启；失败保留原始错误。用户要求启动确认后停止人工操作，不持续监控或中途修改运行资产。

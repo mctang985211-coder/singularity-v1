@@ -1,4 +1,5 @@
 import type { AgentHandle,AgentSetup } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-compaction'
 import type { Session,SessionEvent,SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionCut,TaskRunState,UsageRecord } from '@singularity/protocol'
 import { throwCollectedErrors } from './errors.ts'
@@ -252,10 +253,13 @@ export function snapshotSessionEvents(sessionId: string, events: readonly Sessio
   for (const event of events) {
     if (event.type === 'turn/end' && event.data.reason.kind === 'error') failure = event.data.reason.error.message
     if (event.type === 'step/start') pending.add(`${String(event.data.turn)}:${String(event.data.step)}`)
-    if (event.type !== 'assistant/attempt' && event.type !== 'assistant/message') continue
-    pending.delete(`${String(event.data.turn)}:${String(event.data.step)}`)
+    const compaction = event.type === 'compaction/summary' && event.data.llmStreamCall === true
+    if (event.type !== 'assistant/attempt' && event.type !== 'assistant/message' && !compaction) continue
+    if (event.type === 'assistant/attempt' || event.type === 'assistant/message') {
+      pending.delete(`${String(event.data.turn)}:${String(event.data.step)}`)
+    }
     steps += 1
-    const usage = event.type === 'assistant/message' ? event.data.usage : undefined
+    const usage = event.type === 'assistant/message' || event.type === 'compaction/summary' ? event.data.usage : undefined
     // alpha2 pi-ai supplies zero counters when its endpoint omits usage.
     const input = usage === undefined ? 0 : usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
     const output = usage?.outputTokens ?? 0
