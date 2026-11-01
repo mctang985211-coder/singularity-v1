@@ -158,3 +158,7 @@ Verdi PLI 预检复现 `libnovas.so` 缺少 `libz.so.1`；verify Nix shell 的 `
 ## 固定探索交付（2026-11-02，amendment 014）
 
 上轮研究 child 省略 localOutputs，合同仅有可选 learning drafts，导致实际统计文件未被冻结。平台探索模板现固定 required result/ tree，示例不再重复声明 result；root 保持 frontend/。原生三级回归以无 localOutputs 的 child/grandchild 验证冻结文件与逐层集成。新轮 maxActive=4，评测 maxActiveRuns=4；总 3 小时、4 亿 tokens、4000 请求不变。
+
+## CLI 声明与实际路由对齐（2026-11-02）
+
+实跑暴露 bbdev 的 uvm --verilog 空路由：帮助有声明但后端没有实现，导致服务启动后空等 120 秒。领域补丁删除该操作及同样失效的 verilator --cosim，API 指引改为已有 uvm --build（--chip/--ball）。保留 48 个实际有路由的 CLI 操作；操作是否业务成功仍分别实测，不用静态清单代替验证。新准备副本 base 82533d89 / bbdev bc83fe53 在 artifacts/buckyball-cosyvoice3-20261102-routes；完整 checkout、无效参数原生拒绝、AXIS VCS/UVM 及 help 已通过真实 MCP 复测，0 模型请求。旧轮继续使用冻结资产。

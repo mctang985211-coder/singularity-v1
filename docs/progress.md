@@ -201,3 +201,10 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 ### 当前 BB 实跑（2026-11-02 05:48:38 +08）
 
 以提交 a30b254 从新根 artifacts/buckyball-cosyvoice3-live-20261102-0552 启动，PID 1280450，绝对截止 08:48:38 +08。maxActive=4，空 Method、独立 checkout、固定 result/ 输出及 task-goal 验收；其余总预算与模型参数不变。原生启动和模型请求正常，按半小时巡检。启动本身不构成 root 验收或 RSI/PPA 赢家证据，尚未提交 PR/合并。
+
+
+### bbdev 空路由声明修正与预检（2026-11-02 07:25 +08）
+
+当前 BB 轮的独立 review 多次调用 bbdev uvm --verilog，120 秒后报告 Routes failed to register。源码核对确定 CLI 宣称的 /uvm/verilog 后端不存在；对 50 个声明做操作者静态清单比较还发现 /verilator/cosim 同样不存在。领域补丁删除这两个过时操作，两个 API 错误提示改为已有的 uvm --build（chip/ball）。无运行时探测、重试、路由 alias 或恢复 manager；不修改当前轮冻结 baseline。
+
+单独准备副本 artifacts/buckyball-cosyvoice3-20261102-routes：base 82533d89 / bbdev bc83fe53。补丁对上游 06d35a79 可完整应用；48 个剩余 CLI 操作都有对应 route（静态清单不冒充全部业务成功）。原生 DSH MCP 实测 checkout/config 15.593 秒；两个已删除参数分别 2.090/2.040 秒由既有 argparse 拒绝；uvm help 与总 help 成功；已有 AXIS arbiter VCS/UVM 63.355 秒成功。0 模型请求。证据 route-inventory.json 与 mcp-preflight-routes/；准备环境仅用于下一新根。
