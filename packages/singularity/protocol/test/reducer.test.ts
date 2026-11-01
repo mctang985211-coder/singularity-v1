@@ -705,6 +705,28 @@ void test('probe bindings do not block submit without a child', () => {
   assert.equal(mustGet(state.tasks, 'task-root').phase, 'active')
 })
 
+void test('one batch allows distinct probe instances but only one child per required obligation', () => {
+  for (const join of ['required', 'probe'] as const) {
+    const root = makeRootContract()
+    const bindingId = join === 'probe' ? 'child-probe' : 'child-required'
+    const children = ['task-a', 'task-b'].map(taskId =>
+      admittedChild(makeChildContract({ taskId, bindingId }), join))
+    const journal = new Journal()
+    journal.add('task/admitted', { taskId: root.taskId, contract: contractRef(root) })
+    journal.add('run/opened', runOpened(root.taskId, 'run-root-1', 1))
+    journal.add('task/children-admitted', admission('run-root-1', 'batch-1', children))
+    const context = makeContext([root])
+    if (join === 'required') {
+      expectReducerError(() => reduceTaskRunFacts(journal.facts, context), 'CHILD_DUPLICATE')
+    } else {
+      const state = reduceTaskRunFacts(journal.facts, context)
+      assert.deepEqual(state.batches.get(childBatchKey('run-root-1', 'batch-1'))?.childIds, ['task-a', 'task-b'])
+      assert.equal(state.tasks.get('task-a')?.phase, 'open')
+      assert.equal(state.tasks.get('task-b')?.phase, 'open')
+    }
+  }
+})
+
 void test('a verified probe leaves its binding available for another batch while a required winner stays fixed', () => {
   for (const join of ['required', 'probe'] as const) {
     const root = join === 'probe' ? makeProbeRootContract() : makeRootContract()

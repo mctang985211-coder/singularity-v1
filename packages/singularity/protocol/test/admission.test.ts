@@ -550,7 +550,22 @@ void test('child admission derives probe join from the fixed binding', () => {
   })
 })
 
-void test('child admission rejects empty batches, duplicate bindings, oversized batches, and active batches', () => {
+void test('child admission allows multiple instances of a probe binding in one batch', () => {
+  const input = childBatchInput()
+  const request = childRequest(input)
+  input.children = [
+    { ...request, bindingId: 'probe-part', taskId: 'task-probe-a' },
+    { ...request, bindingId: 'probe-part', taskId: 'task-probe-b' },
+  ]
+  const batch = admitChildBatch(input)
+  assert.deepEqual(batch.children.map(child => [child.contract.taskId, child.join]), [
+    ['task-probe-a', 'probe'], ['task-probe-b', 'probe'],
+  ])
+  input.children[1] = { ...input.children[1], taskId: 'task-probe-a' }
+  assert.throws(() => admitChildBatch(input), admissionError('INVALID_ARGUMENT'))
+})
+
+void test('child admission rejects empty batches, duplicate required bindings, oversized batches, and active batches', () => {
   const empty = childBatchInput()
   empty.children = []
   assert.throws(() => admitChildBatch(empty), admissionError('INVALID_ARGUMENT'))

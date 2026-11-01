@@ -414,9 +414,10 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
   let totalTokens = 0
   let totalSteps = 0
   for (const request of parsed.children) {
-    if (seenBindings.has(request.bindingId)) {
+    const binding = findBinding(parentTemplate, request.bindingId)
+    if (binding.join === 'required' && seenBindings.has(request.bindingId)) {
       invalidArgument(
-        `Child batch contains duplicate binding ${JSON.stringify(request.bindingId)}`,
+        `Child batch contains duplicate required binding ${JSON.stringify(request.bindingId)}`,
       )
     }
     seenBindings.add(request.bindingId)
@@ -427,7 +428,6 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
     }
     seenTaskIds.add(request.taskId)
 
-    const binding = findBinding(parentTemplate, request.bindingId)
     const template = findTemplate(method, binding.templateId, parsed.exploration)
 
     assertChildLimitsWithinParent(parent.limits, request.limits)

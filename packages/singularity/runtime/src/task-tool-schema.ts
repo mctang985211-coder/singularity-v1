@@ -50,7 +50,7 @@ export const planningInputSchema: ToolDefinition['parameters'] = {
 export const decomposeParameters = {
   action: { type: 'string', required: true, description: '"prepare" reads an example; "commit" admits a prepared batch.' },
   bindingId: { type: 'string', description: 'NodeView childOptions bindingId for prepare.' },
-  children: { type: 'json', description: 'Use previewRef.digest as ackPreview, once per binding per batch. Probe bindings may recur in later batches. Copy complete authorized input refs; exampleText is illustrative. Required outputs are inherited; localOutputs adds supporting outputs or [].' },
+  children: { type: 'json', description: 'Use previewRef.digest as ackPreview. Probe bindings allow multiple children per batch and later batches; required bindings allow one per batch. Copy complete authorized input refs; exampleText is illustrative. Required outputs are inherited; localOutputs adds supporting outputs or [].' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)

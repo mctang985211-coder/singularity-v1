@@ -479,7 +479,7 @@ void test('S4-B2 commit admits one host-derived child and appends exactly one fa
     assert.equal(result.batchId, `batch:${sessionId}:commit-1`)
     assert.equal(result.children.length, 1)
     assert.deepEqual(result.children[0], {
-      taskId: `child:${computeDigest('object', { parentTaskId: 'task-s4b2', batchId: `batch:${sessionId}:commit-1`, bindingId: 'b1' }).slice(7)}`,
+      taskId: `child:${computeDigest('object', { parentTaskId: 'task-s4b2', batchId: `batch:${sessionId}:commit-1`, bindingId: 'b1', index: 0 }).slice(7)}`,
       bindingId: 'b1',
       join: 'probe',
     })
@@ -847,7 +847,7 @@ void test('S4-B2 commit rejects an active batch, unauthorized inputs, and invali
   })
 })
 
-void test('S4-B2 commit enforces maxTasks, maxDepth, and unique bindings before the fact', async () => {
+void test('S4-B2 commit enforces maxTasks and maxDepth before the fact', async () => {
   await withScenario({ maxTasks: 2 }, async (scenario) => {
     const { prepared, preparedSecond } = await prepareBoth(scenario)
     const args = {
@@ -889,6 +889,9 @@ void test('S4-B2 commit enforces maxTasks, maxDepth, and unique bindings before 
     assert.equal(scenario.service.facts().length, 2)
   })
 
+})
+
+void test('S4-B2 one preview admits distinct same-probe instances and replays the original batch', async () => {
   await withScenario({}, async (scenario) => {
     const { prepared } = await prepareBoth(scenario)
     const args = {
@@ -909,11 +912,21 @@ void test('S4-B2 commit enforces maxTasks, maxDepth, and unique bindings before 
       prepareResult(1, 1, 1, 'prepare-1', prepared.response),
       commitCall(2, 1, 2, 'commit-1', args),
     ], [1])
-    await assert.rejects(
-      commitDecomposeBatch(commitInput(scenario, session, args)),
-      errorCode('INVALID_ARGUMENT'),
-    )
-    assert.equal(scenario.service.facts().length, 2)
+    const result = await commitDecomposeBatch(commitInput(scenario, session, args))
+    assert.equal(result.children.length, 2)
+    assert.notEqual(result.children[0]?.taskId, result.children[1]?.taskId)
+    assert.deepEqual(result.children.map(child => [child.bindingId, child.join]), [['b1', 'probe'], ['b1', 'probe']])
+    assert.deepEqual(result.deliveryReceiptRefs, [prepared.deliveryReceiptRef, prepared.deliveryReceiptRef])
+    assert.equal(scenario.service.facts().length, 3)
+    const replay = await commitDecomposeBatch(commitInput(scenario, session, args))
+    assert.deepEqual(replay.children, result.children)
+    assert.equal(replay.fact.digest, result.fact.digest)
+    assert.equal(scenario.service.facts().length, 3)
+    const state = await scenario.service.taskRunState([])
+    assert.equal(state.tasks.size, 3)
+    assert.equal(state.runs.size, 1)
+    if (result.fact.type !== 'task/children-admitted') assert.fail('expected child admission')
+    assert.equal(result.fact.data.children.reduce((sum, child) => sum + child.budgetReservation.tokens, 0), 90_000)
   })
 })
 

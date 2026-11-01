@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–011 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–012 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -560,7 +560,7 @@ Summary Worker 的工具面只有读取已注入合同和提交摘要对象；�
 join 在 Method 的 child binding 上固定，Task worker 不能在 commit 中改。每一个 `required` binding 是当前 parent Run 的一个 obligation，按 `bindingId` 计算；模板若不需要该义务必须把 binding 声明为 `probe` 或不提供该 binding：
 
 - required：该 binding 必须有一个 verified winner，parent 才能提交成功。
-- probe：探索性尝试，失败不自动否定 parent；parent 仍要通过自己的验收。同一 probe binding 可在后续 batch 承接新的子问题；已有 verified child 不锁定该入口，新 probe 不自动替换或 supersede 历史 child。winner 与自动 replacement 限制仅适用于 required obligation。
+- probe：探索性尝试，失败不自动否定 parent；parent 仍要通过自己的验收。同一 probe binding 可在同一 batch 创建多个独立 Task，也可在后续 batch 承接新的子问题；多个实例可确认同一个已交付的 preview；已有 verified child 不锁定该入口，新 probe 不自动替换或 supersede 历史 child。winner 与自动 replacement 限制仅适用于 required obligation。
 - 一个 required obligation 的 winner 是同一 parent Run 中、该 binding 下、已 terminal、`closed(verified)` 且未被 replacement supersede 的 child Task。一个 obligation 同时最多有一个 active child；替换只在旧 child terminal 后发生。
 - 所有已准入 child Task 都须 terminal 后，parent 才能提交或成功关闭；失败/取消记录必须保留。
 
@@ -663,10 +663,10 @@ prepare 不创建 Task，不消耗 child 数，不写 domain fact。预览保存
 core + adapter 的准入顺序：
 
 1. active Run、当前 epoch 的 PlanningSketch receipt、预算、深度、Task 数和“当前无 active batch”检查。
-2. 每个 bindingId 确实是本层可见 child binding 或已准入 fallback。
+2. 每个 bindingId 确实是本层可见 child binding 或已准入 fallback；同批 required binding 只出现一次，probe binding 可重复实例化。
 3. ackPreview 必须等于当前 Run **已经持久交付**的 previewRef.digest，且对应同一 prepare result；必须在后续模型 step，不能在同一次 tool batch 中猜测 ack。
 4. instanceSchema、proposal 输入授权、路径和资源总额检查；host 按 §4.2.1 合并 template requiredCriteria/requiredOutputs/acceptancePolicy，把 localCriteria 写入 `TaskSpec.localGuidance`，把 localOutputs 转成 `required=false`、`role='supporting'` 的输出，拒绝模型提交 `required`、acceptance provider/verifier/scorer、deliverable role、重复 ID/path、保留 ID/path 或 draft role/path。
-5. 由宿主生成 TaskSpec、taskId、parentId、parentRunId、batchId、Method/template refs、bindings、acceptance；若该 batch 是 feedback replan，host 根据 binding 和已 terminal failure 派生 `feedbackRef` 与 `supersedesChildIds`，模型不能提交这两个字段。
+5. 由宿主生成 TaskSpec、taskId、parentId、parentRunId、batchId、Method/template refs、bindings、acceptance；taskId 由 parentTaskId、batchId、bindingId 和 children 数组内的 index 确定，同命令重放稳定、同批实例不同；若该 batch 是 feedback replan，host 根据 binding 和已 terminal failure 派生 `feedbackRef` 与 `supersedesChildIds`，模型不能提交这两个字段。
 6. append 一个 task/children-admitted fact，含完整 children contracts、join 规则、预算预留。
 7. parent 进入 waiting-children 投影，当前 turn 结束；释放执行槽。
 8. child dispatch 在 fact 已持久提交后发生，使用 fact 中已准入的 child 身份与合同。
@@ -2284,7 +2284,7 @@ C-24 single-case gain with validation regression is not improved
 
 实现默认沿 DSH 公开接口或现成库完成。保留自定义层必须提供具体原生调用路径，并比较本项目实际接入后的状态、分支和适配；只有明确证明原生方案更复杂时才保留。“暂不能证明等价”“库存在不代表可替代”都不能单独充当保留理由。可由操作者保证的条件在启动前固定，runtime 不为环境违约另建探测、恢复或兜底系统。输入不符合合同或权限时返回对应错误，普通执行失败按现有分类结束。改变公开字段、状态或 authority 时提出 amendment；独立正常功能继续推进。
 
-当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011 为准）：
+当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012 为准）：
 
 | Amendment | 状态 | 纳入内容 |
 |---|---|---|
@@ -2300,6 +2300,8 @@ C-24 single-case gain with validation regression is not improved
 | 010 | 2026-11-01 用户要求 bbdev 使用标准 MCP、前置 Nix 环境并复用 DSH 参数失败；已纳入本文 | 领域 MCP 在所选 checkout 内激活环境；完成的非法工具参数走原生校验，保留错误并附 failed/极简完整用例；不修复 JSON、不做文字匹配或 provider 重试。锁定 alpha2 适配器补丁修正该错误分类，不新增 Task 状态或恢复层 |
 
 | 011 | 2026-11-02 用户要求停止浅层 BB 轮次、修改 workflow 引导并重开；已纳入本文 | 初始草图经资源探索后细化；长链按职责、产物和检查边界分解，串行阶段用后续批次；每层只组织直属任务并承担本地技术工作和集成；叶节点为有界可直接验证单元。保留结构校验与既有预算，无语义门禁、固定分解树或新增状态 |
+
+| 012 | 2026-11-02 用户要求继续修复并持续监测，授权修改框架 | 同一 probe binding 可在同批创建多个独立 Task，共用已读 preview；required 每批仍一实例、每 obligation 一 winner。宿主以 parentTaskId/batchId/bindingId/index 派生稳定实例 ID，不增加模型输入字段或运行状态 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

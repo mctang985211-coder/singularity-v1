@@ -401,7 +401,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
     assert.equal(result.sessionId, sessionId)
     assert.equal(result.batchId, expectedBatchId)
     assert.deepEqual(result.childTaskIds, [
-      `child:${computeDigest('object', { parentTaskId: taskId, batchId: expectedBatchId, bindingId: S4B2_BINDING }).slice(7)}`,
+      `child:${computeDigest('object', { parentTaskId: taskId, batchId: expectedBatchId, bindingId: S4B2_BINDING, index: 0 }).slice(7)}`,
     ])
     assert.equal(fixture.requests.length, 4, 'commit must conclude the turn without buying another request')
     assert.deepEqual(createdSessions, [sessionId], 'commit must not create a child Agent session')

@@ -159,3 +159,12 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 现有 worker card、exploration guidance、Task 协议资源、BB guide/TaskSpec 与框架 §6.3/§7/§13 同步为：资源探索后细化初始草图；长链按职责、产物与检查边界组织直属 workflow；串行阶段用后续批次；每层承担有界本地技术工作与集成；叶目标为有界可直接验证单元。没有增加状态、语义复杂度校验器、树深/child 数门禁或预置芯片分解树。worker+exploration card 共 1918 bytes，保持 2 KiB 原上限。实际自主递归和芯片实现收益仍需新轮次证明，不以文本或 fixture 通过替代实跑。
 
 本次最终根 `pnpm verify` 全通过：439/439（protocol 203、runtime 134、app 89、domain 13），0 fail、0 skipped，project/build/typecheck/lint 通过；原生 fixture 的 prompt/tool surface 上限与递归执行保持通过。日志 `artifacts/workflow-guidance-20261102-final-verify.log`；没有为文本改动增加实现镜像测试。
+
+
+### BB 同批 probe 实例修复（2026-11-02，amendment 012）
+
+`artifacts/buckyball-cosyvoice3-live-20261102-025241` 的 root 自主提出 reference、芯片拓扑、HiFT IP、model recipe 四路分解，但同一 fallback binding 被 admission 的重复 binding 检查拒绝；root 随后只创建一个 reference child，自行承担剩余长链。prompt 修订未解决此真实协议限制，旧测试也错误要求拒绝同批多个 probe。停止时计量为 252 次已结算请求、35,513,418 reported tokens、unknown=1（操作者取消了进行中的请求）；未得到完整 root 验收或 RSI 结果，组件软件检查与 RTL elaboration 不升级为芯片成功。旧根保留归档，后代进程已停止。
+
+修订 admission/reducer：required 仍每批一实例；probe 可同批多实例并共用已交付 preview。runtime 的稳定 Task ID 加入数组 index，命令重放保持原实例与单事实，没有新模型字段、状态或恢复 helper。回归覆盖重复 required/Task ID 拒绝、同 probe 多实例预算与幂等，以及原生 DSH 的单槽逐 child 执行、整批 terminal 唤醒和 parent 集成验收。完整验证与新轮次结果随后以实际记录补充。
+
+本次根 `pnpm verify` 443/443（protocol 205、runtime 135、app 90、domain 13），0 fail/skip；project/build/typecheck/lint 通过。日志 `artifacts/probe-batch-20261102-verify.log`，原生两子任务单槽回归见 `artifacts/probe-batch-native-20261102.log`。尚不以 fixture 代表新 BB 实跑成功。

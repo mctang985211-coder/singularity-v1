@@ -557,16 +557,16 @@ function applyChildrenAdmitted(
         `Child ${JSON.stringify(child.taskId)} origin does not match the parent admission`,
       )
     }
-    if (pendingBindings.has(origin.bindingId)) {
+    const binding = resolveChildBinding(parentTemplate, origin, fact)
+    if (binding.join === 'required' && pendingBindings.has(origin.bindingId)) {
       fail(
         'CHILD_DUPLICATE',
         fact,
-        `Binding ${JSON.stringify(origin.bindingId)} appears more than once in one batch`,
+        `Required binding ${JSON.stringify(origin.bindingId)} appears more than once in one batch`,
       )
     }
     pendingBindings.add(origin.bindingId)
 
-    const binding = resolveChildBinding(parentTemplate, origin, fact)
     if (
       child.method.id !== parent.contract.method.id ||
       child.method.digest !== parent.contract.method.digest
