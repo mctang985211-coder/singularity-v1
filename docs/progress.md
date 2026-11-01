@@ -102,3 +102,13 @@ I/J 最终累计 1068 请求边界／1067 已结算步骤／15,707,337 reported 
 以上 A–J 历史轨迹没有祖先查询/Summary Worker、领域 MCP 或 MCP 资产演化证据；H 的 skill 调用来自旧适配。本次已补齐祖先查询、Summary、原生 skill/MCP、三层 sketch 和新 skill 正式演化；MCP 目录只生成说明稿，可执行 MCP 演化由原生 fixture 证明。当前 profile 关闭自动 compaction；独立 compaction 请求的 usage 未计入，不能直接开启并声称预算完整。
 
 后续领域工作包括芯片适配、真实私有部署与 MCP 可执行资产演化；不为制造计数添加恢复机制或无用工具。验证入口仍为根 `pnpm verify`；有界真实模型入口及配置见 README，前次计量只用于新执行根的累计预算，不续跑旧事实或会话。
+
+### Buckyball / CosyVoice3 前端准备（2026-11-01）
+
+用户将真实项目范围明确为芯片 frontend，排除所有全芯片仿真、P2E 和物理后端。[准备说明](buckyball-cosyvoice3-frontend.md) 固定源码/checkpoint、空 Method 资源视图、根任务五项验收和较高的节点限制；示例 TaskSpec 工厂与预算只在 examples，不向 runtime 添加芯片逻辑。每轮累计上限为 3 小时 / 4 亿 tokens / 4000 请求，单 Run 4096 步、树深 8、256 Task、单批 8 child。
+
+已创建独立源码副本并保留原仓库已有修改，下载固定公开模型资产并核对 6 个大文件与官方 SHA-256；现有 bbdev 原生配置安装成功，裁剪的 FastMCP stdio surface 为 9 tools / 4620 bytes，真实 `validate(toy)` 返回 passed。VCS `-full64 -ID` 与 DC `-version`、license 状态读取完成。官方 CosyVoice3 CPU 原始软件推理完成单输入 smoke，生成 24kHz / 21120 样本的有限 FP32 音频，未声称听感、额外文本规范化或数值等价。这些是启动环境证据，不能升级为 RTL/芯片验收。原始文件位于本地忽略目录 `artifacts/buckyball-cosyvoice3-20261101/`。
+
+bbdev MCP 的仓库路径按源码位置固定，因此该 probe 不绑定给多 Run 的共享写入；正式领域操作选择现有 bbdev CLI，由 DSH 原生 shell 在各自副本执行，不新增 MCP 路由层。TaskSpec/TaskLimits schema 检查通过；使用已验证的官方 Node 24.9.0 完成根 `pnpm verify`，432/432、0 fail/skip。Buckyball Nix Node 24.18.0 的 DSH 原生 addon 启动失败日志保留，未添加产品兼容分支。
+
+本次尚未启动新的付费模型 campaign，未产生芯片 Evidence、芯片领域 comparison 或 activation。正式启动前要接好独立领域 verifier/冻结评测 case，并把原生 compaction 请求纳入预算后开启长任务自动压缩；不以模型自报或 schema 通过替代领域验收。

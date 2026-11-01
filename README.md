@@ -30,3 +30,5 @@ The optional previous root supplies cumulative usage counters only. It does not 
 The JSON config accepts `scenario: "warehouse-network"`, `initialMethod: "empty" | "guided"`, `publicResources: true`, and `activateWinners: true`. Public resources supply a native skill and inventory MCP. Winner activation uses the completed comparison and expected previous head in the isolated example domain; subsequent rounds and a final work Task consume the active head. Set absolute `deadlineAt`, `maxRequests`, `maxReportedTokens` and Task/Round budgets before launch. When the environment requires its configured HTTP proxy, pass Node's native `--use-env-proxy` flag.
 
 [The 2026-11-01 validation report](docs/validation-20261101.md) distinguishes actual model runs, local fixtures, failures and remaining domain validation.
+
+[Buckyball / CosyVoice3 frontend preparation](docs/buckyball-cosyvoice3-frontend.md) fixes the real project scope, public assets, empty-Method Task specification and long-task budgets. It excludes full-chip simulation, P2E and physical backend work; preparation is distinct from a completed chip campaign.
