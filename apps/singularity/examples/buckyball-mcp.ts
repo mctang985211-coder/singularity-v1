@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { join,resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
@@ -25,18 +25,19 @@ export function createBuckyballMcp(baseline = process.env.BUCKYBALL_BASELINE) {
   }, async ({ project }, extra) => {
     await mkdir(project)
     await promisify(execFile)('cp', ['--archive', '--reflink=auto', `${baseline}/.`, project], { signal: extra.mcpReq.signal })
-    return runBbdev(project, ['config', '--install'], extra.mcpReq.signal)
+    return runBbdev(project, ['config', '--install'], extra.mcpReq.signal, baseline)
   })
   server.registerTool('bbdev', { description: bbdevDescription,
     inputSchema: fromJsonSchema<{ project: string; args: string[] }>(bbdevParameters),
-  }, ({ project, args }, extra) => runBbdev(project, args, extra.mcpReq.signal))
+  }, ({ project, args }, extra) => runBbdev(project, args, extra.mcpReq.signal, baseline))
   return server
 }
 
-function runBbdev(project: string, args: string[], signal: AbortSignal) {
+function runBbdev(project: string, args: string[], signal: AbortSignal, baseline: string) {
   return new Promise<{ isError: boolean; content: { type: 'text'; text: string }[]; structuredContent: Record<string, unknown> }>(resolveResult => {
     execFile('nix', ['develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', ...args],
-      { cwd: project, signal, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+      { cwd: project, signal, maxBuffer: 8 * 1024 * 1024,
+        env: { ...process.env, BUCKYBALL_LLVM_BUILD: join(baseline, 'stack/compiler/thirdparty/buddy-mlir/llvm/build') } }, (error, stdout, stderr) => {
         const result = { exit: error?.code ?? 0, stdout, stderr, ...(error === null ? {} : { error: error.message }) }
         resolveResult({ isError: error !== null, content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result })
       })

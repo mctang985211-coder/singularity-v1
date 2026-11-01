@@ -2224,7 +2224,7 @@ C-24 single-case gain with validation regression is not improved
 
 ## 22. 发布冻结与版本治理
 
-本 V1 发布版冻结 C1–C3、A–F、amendment 001–009 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
+本 V1 发布版冻结 C1–C3、A–F、amendment 001–013 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
 
 ### 22.1 冻结内容
 
@@ -2245,7 +2245,7 @@ C-24 single-case gain with validation regression is not improved
 
 ~~~text
 版本：V1 发布规范
-修订：2026-11-01 纳入 amendment 006/007/008/009/010（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 复用与原生工具参数失败）
+修订：2026-11-02 纳入 amendment 006–013（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 多实例、原生工具参数失败、局部 workflow 与探索目标验收）
 权威文件：docs/framework.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威

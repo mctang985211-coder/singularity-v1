@@ -30,6 +30,7 @@ void test('domain MCP copies prepared dependencies, reports CLI failure and forw
     await writeFile(join(bin, 'nix'), `#!/usr/bin/env python3
 import os, pathlib, signal, sys
 p = pathlib.Path.cwd()
+(p / 'llvm-toolchain').write_text(os.environ['BUCKYBALL_LLVM_BUILD'])
 if sys.argv[-1] == 'wait':
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     try:
@@ -62,6 +63,7 @@ else:
     try {
       assert.equal((await call('checkout', { project })).isError, false)
       assert.equal(await readFile(join(project, 'bbdev/api/.venv/prepared'), 'utf8'), 'operator dependencies')
+      assert.equal(await readFile(join(project, 'llvm-toolchain'), 'utf8'), join(baseline, 'stack/compiler/thirdparty/buddy-mlir/llvm/build'))
       await writeFile(join(project, 'bbdev/api/.venv/prepared'), 'independent copy')
       assert.equal(await readFile(join(baseline, 'bbdev/api/.venv/prepared'), 'utf8'), 'operator dependencies')
       assert.equal((await call('checkout', { project })).isError, true, 'a new checkout never merges with an existing directory')

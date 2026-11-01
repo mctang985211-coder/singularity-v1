@@ -1,0 +1,12 @@
+diff --git a/flake.nix b/flake.nix
+index 71e91ec..c052451 100644
+--- a/flake.nix
++++ b/flake.nix
+@@ -37,6 +37,7 @@
+             pkgs.patchelf
+           ];
+ 
++          NIX_LDFLAGS = "-rpath ${pkgs.zlib}/lib";
+           UVM_HOME = "${uvm12}";
+           UVM_VERSION = "1.2";
+           VCS_UVM_ARGS = "+incdir+${uvm12}/src ${uvm12}/src/uvm.sv ${uvm12}/src/dpi/uvm_dpi.cc -CFLAGS -DVCS";

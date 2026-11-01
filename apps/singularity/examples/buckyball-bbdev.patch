@@ -1,3 +1,16 @@
+diff --git a/api/steps/compiler/scripts/build.py b/api/steps/compiler/scripts/build.py
+index a453007..412c9b2 100644
+--- a/api/steps/compiler/scripts/build.py
++++ b/api/steps/compiler/scripts/build.py
+@@ -70,6 +70,8 @@ def compiler_python(repo: str | Path) -> str:
+ def build_llvm(
+     repo: str | Path, *, logger: object | None = None, task_scope: str | None = None
+ ) -> Path:
++    if prepared := os.environ.get("BUCKYBALL_LLVM_BUILD"):
++        return Path(prepared)
+     root = Path(repo).resolve()
+     buddy = root / "stack" / "compiler" / "thirdparty" / "buddy-mlir"
+     llvm_src = buddy / "llvm" / "llvm"
 diff --git a/api/steps/config/01_install_event.step.py b/api/steps/config/01_install_event.step.py
 index 0012a32..235bb9f 100644
 --- a/api/steps/config/01_install_event.step.py

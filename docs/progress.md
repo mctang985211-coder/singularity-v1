@@ -175,3 +175,12 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 实跑中 fallback 的 requiredCriteria 为空，导致 child 正常提交后可获得空 criteria 的 verified，这只能证明协议退出，不能证明完成局部目标。固定 explore-child 现继承 required `task-goal`，领域 verifier 根据冻结 goal/deliverable/scope/constraints 检查实际输出；BB reviewer 同步说明。localCriteria 保持指导用途。协议回归同时检查空 receipt invalid、目标未完成 failed 和完成 verified；原生三级探索回归检查 child/grandchild 实际继承同一标准。无新工具、字段、状态或 runtime 语义判定器。
 
 本次根 `pnpm verify` 444/444（protocol 206、runtime 135、app 90、domain 13），project/build/typecheck/lint 通过，0 fail/skip；日志 `artifacts/explore-goal-20261102-verify.log`。该检查验证当前协议与原生接线，不替代新 BB 轮次的目标验收。
+
+
+### 领域依赖前置准备与真实 MCP 复测（2026-11-02）
+
+准备副本预编译 LLVM/MLIR 与 toy compiler 成功。领域 bbdev 的 build_llvm 支持操作者明确提供的 `BUCKYBALL_LLVM_BUILD`；MCP 传入准备副本路径。LLVM build 移至准备目录并在基线保留 symlink，原生 cp 复制引用；芯片专用 compiler、RTL、验证产物仍各自构建。没有将安装、恢复或进程管理放回 runtime。固定 Buckyball `974e7e6d`、bbdev `d0795ad`、verify `636e311`，源码补丁随 examples 提供，原用户 BB 仓库未改。
+
+真实原生 DSH MCP 复测：checkout 15.820 秒成功；新副本 compiler build 273.646 秒成功，零 LLVM rebuild；前次 libnovas 的缺失依赖被精确复现为 libz.so.1，verify Nix shell 声明 zlib rpath。带 VERDI_HOME 的 AXIS arbiter VCS/UVM 43.808 秒成功，UVM_ERROR/UVM_FATAL 均 0，libnovas 动态依赖解析成功。首次 UVM 预检遗漏操作者 EDA PATH，实际报 vcs-not-found，按指南补齐后重测；未为此增加产品探测或 fallback。证据 `artifacts/buckyball-cosyvoice3-20261102/{compiler-preparation.log,mcp-preflight-toolchain,mcp-preflight-verdi,toolchain-readiness.json}`，0 模型请求；不作为 CosyVoice3/PPA 验收。
+
+最终根 `pnpm verify` 444/444，project/build/typecheck/lint 全通过、0 fail/skip；日志 `artifacts/goal-toolchain-final-20261102-verify.log`。原生 MCP fixture 同时检查工具链路径从领域 MCP 传入。全流程实跑及 PR/合并仍以实际结果为条件。
