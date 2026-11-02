@@ -162,7 +162,9 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     await mkdir(join(baseline, '.agents/skills', name), { recursive: true })
     await writeFile(join(baseline, '.agents/skills', name, 'SKILL.md'), `# ${name}\nRead current domain sources.\n`)
   }
-  await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: baseline } }))
+  await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: baseline },
+    publicSeed: { archive: 'prior-public.tar.gz', description: 'Recorded incomplete public artifacts; not an accepted chip.' } }))
+  await writeFile(join(prepared, 'prior-public.tar.gz'), 'frozen public seed fixture')
   const bin = join(directory, 'bin')
   await mkdir(bin)
   await writeFile(join(bin, 'nix'), '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > "$PWD/nix-argv.txt"\nprintf "fixture bbdev help\\n"\n')
@@ -205,7 +207,7 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     if (!calls.includes('mcp__buckyball__bbdev')) return call('mcp__buckyball__bbdev', { project: baseline, args: ['--help', 'literal;$(false)'] })
     if (!calls.includes('bash')) {
       assert.match(messageTexts(request).join('\n'), /frontend/)
-      return call('bash', { description: 'Create an explicitly incomplete fixture output.', command: "mkdir -p frontend\nprintf 'Incomplete fixture, no chip implementation.\\n' > frontend/report.md" })
+      return call('bash', { description: 'Inspect public seed and create incomplete output.', command: "test \"$(cat public-seed.tar.gz)\" = 'frozen public seed fixture' && mkdir -p frontend && printf 'Incomplete fixture, no chip implementation.\\n' > frontend/report.md" })
     }
     return call('singularity_submit', { outputIds: ['frontend'], includeLearningDrafts: false })
   })
@@ -229,6 +231,17 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   assert.equal(result.usage.requests, fixture.requests.length)
   assert.equal(result.usage.completed, fixture.requests.length)
   assert.equal(result.usage.unknown, 0)
+  const launch = JSON.parse(await readFile(join(root, 'launch.json'), 'utf8')) as {
+    sourceSpec: { inputs: { id: string; object: { digest: string } }[]; goal: { constraints: string[] } }
+    cases: { spec: { inputs: { id: string; object: { digest: string } }[]; goal: { constraints: string[] } } }[]
+  }
+  const seedInput = launch.sourceSpec.inputs.find(value => value.id === 'public-seed')
+  assert.ok(seedInput)
+  assert.equal(await readFile(join(root, 'domain/objects', seedInput.object.digest.slice('sha256:'.length)), 'utf8'), 'frozen public seed fixture')
+  for (const { spec } of launch.cases) {
+    assert.deepEqual(spec.inputs.find(value => value.id === 'public-seed'), seedInput, 'both arms use each frozen case with the identical seed')
+    assert.ok(spec.goal.constraints.some(value => value.includes('prior verdicts do not establish')))
+  }
   assert.deepEqual((await readFile(join(baseline, 'nix-argv.txt'), 'utf8')).trimEnd().split('\n'),
     [baseline, 'develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', '--help', 'literal;$(false)'])
 })

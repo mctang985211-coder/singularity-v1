@@ -246,3 +246,10 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 
 
 11:24巡检：2280请求全结算，input355109522/output2993937/unknown0；仍为12Tasks四层树，8Task verified、1Task failed。新增HiFT/LLM exact-semantics两child通过；Flow child预算耗尽后submit被拒，形成no-submission ExecutionRecord并terminal failed，未伪造领域Evidence。recipe parent已被整批terminal唤醒、读取直属结果并提交Run3；reference parent也完成整合提交，两个父任务都在独立review。root仍等直属批次，尚无root验收或RSI；剩余约27分钟/42M reported tokens，继续截止附近核对结算和trace。证据operator-monitor-20261102-1124.json及原生sessions。
+
+
+### 后续实验的公开冻结产物输入（2026-11-02）
+
+连续BB轮次从零重复参考/组件工作，source已占据大部分共享窗口，尚未留出完整paired evaluation。示例入口允许操作者在准备project.json提供publicSeed归档；原始字节只通过既有CAS/Task input固定，source与三个case用相同Ref，baseline/candidate仍独立实现和验收。归档须记录来源Run/digest/verdict/缺口，只含公开冻结产物和公开receipt，不导入旧事实、session、可写workspace或旧验收结论；没有runtime字段、恢复逻辑或预置workflow。首次从零与后续复用实验应分别报告；当前08:52轮仍使用bef5907已加载版本，没有中途替换资产或扩大3h/400M/4000。
+
+原生领域fixture核对三次fresh retry均读取冻结seed、所有评测定义与source的seed Ref完全一致；旧的failed/no-proposal语义保持。定向4/4、类型/lint通过；根pnpm verify **445/445**（protocol206、runtime135、app91、domain13），project/build/typecheck/lint通过、0fail/skip，日志artifacts/public-seed-20261102-verify.log。真实seed整理与下一根使用待当前轮结算。

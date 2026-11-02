@@ -31,7 +31,10 @@ const skillDescriptions: Record<string, string> = {
 
 /** One trusted public experiment, using existing Task/RSI APIs without chip branches in runtime. */
 export async function runBuckyballCampaign(root: string, prepared: string) {
-  const project = JSON.parse(await readFile(join(prepared, 'project.json'), 'utf8')) as { source: { destination: string } }
+  const project = JSON.parse(await readFile(join(prepared, 'project.json'), 'utf8')) as {
+    source: { destination: string }
+    publicSeed?: { archive: string; description: string }
+  }
   const baseline = project.source.destination
   const startedAt = Date.now(), deadlineAt = startedAt + BUCKYBALL_FRONTEND_CAMPAIGN.maxWallClockMs
   await mkdir(root)
@@ -103,10 +106,19 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
           mcpServers: view.tools.map(id => { const asset = [...revision.tools, ...tools].find(value => value.id === id); if (asset === undefined) throw new Error(`Missing tool ${id}`); return asset.server.bundle }) },
         acceptance: provider, environment: { seed, profile }, limits: { ...BUCKYBALL_FRONTEND_CAMPAIGN.task, deadlineAt } })
     }
+    const publicSeed = project.publicSeed === undefined ? undefined : await service.putObject('buckyball:public-seed', await readFile(resolve(prepared, project.publicSeed.archive)))
+    const specFor = (input: Ref) => {
+      const spec = buckyballFrontendTaskSpec(input)
+      spec.inputs.push({ id: 'experiment-guide', object: guide, path: 'experiment-guide.json', access: 'copy-to-work' })
+      spec.goal.constraints.push('Read experiment-guide.json before domain work; its operator scope overrides the public skills.')
+      if (publicSeed !== undefined) {
+        spec.inputs.push({ id: 'public-seed', object: publicSeed, path: 'public-seed.tar.gz', access: 'copy-to-work' })
+        spec.goal.constraints.push('Inspect public-seed.tar.gz and its provenance.json before implementation. These are prior public artifacts, including recorded failures, for reuse and correction. Complete the full frontend goal; prior verdicts do not establish this Run\'s acceptance. Baseline and candidate receive the same frozen seed.')
+      }
+      return spec
+    }
     const projectRef = await put('buckyball:project', { ...project, status: 'launched', remaining: [], campaign: { startedAt, deadlineAt }, ppaWeights: PPA_WEIGHTS })
-    const sourceSpec = buckyballFrontendTaskSpec(projectRef)
-    sourceSpec.inputs.push({ id: 'experiment-guide', object: guide, path: 'experiment-guide.json', access: 'copy-to-work' })
-    sourceSpec.goal.constraints.push('Read experiment-guide.json before domain work; its operator scope overrides the public skills.')
+    const sourceSpec = specFor(projectRef)
     // Frozen workload cases specify inputs/goals, never a workflow tree or implementation.
     const definitions = [
       { id: 'llm-prefill', detail: 'Representative batch=1 LLM prompt prefill of 16 and 64 tokens; preserve Qwen2 grouped-query attention/cache semantics and report representative static PPA conditions.' },
@@ -116,8 +128,7 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
     const cases: { spec: TaskSpec; ref: Ref }[] = []
     for (const definition of definitions) {
       const input = await put(`buckyball:case-input:${definition.id}`, { ...project, remaining: [], status: 'evaluation-case', case: definition, ppaWeights: PPA_WEIGHTS })
-      const spec = buckyballFrontendTaskSpec(input)
-      spec.inputs.push({ id: 'experiment-guide', object: guide, path: 'experiment-guide.json', access: 'copy-to-work' })
+      const spec = specFor(input)
       spec.goal.constraints.push(definition.detail)
       const contract = await contractFor(`buckyball:definition:${definition.id}`, spec, method, 'evaluation', profile)
       cases.push({ spec, ref: await freezeEvaluationCase(service, `buckyball:case:${definition.id}`, evaluationCaseFromContract(contract)) })

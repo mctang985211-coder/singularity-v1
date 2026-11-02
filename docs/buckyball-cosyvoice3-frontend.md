@@ -128,6 +128,8 @@ node apps/singularity/examples/buckyball-campaign.ts <全新 execution root> <�
 
 启动记录为 `launch.json`，原生请求累计记录为 `requests.jsonl`，标准输出留 `campaign.log`，每轮及最终结果为 `round-N.json`、`result.json`。执行根不会重启；失败保留原始错误。按用户最新要求每半小时只读巡检树、交付、验收、RSI 和累计用量；需要修订时先停止旧根，提交修改后从新根启动，不中途修改冻结运行资产。
 
+后续独立实验可在准备目录的 `project.json` 指定 `publicSeed: {archive, description}`。操作者将已归档执行的公开冻结产物和公开验收意见整理为 tar.gz，内含 `provenance.json` 记录来源 Run、digest、原 verdict 与已知缺口；`archive` 相对准备目录。启动时把归档原始字节冻结为普通 Task input `public-seed.tar.gz`，source 和全部评测 case 使用同一个 Ref。模型自行检查、选择复用并修正；新 Run 仍按完整原合同独立验收。不得加入私有 receipt、验证集答案、旧 transcript 或可写 workspace，也不导入旧事实/状态/verdict。此输入是公开实验起点，不是 Method、恢复机制或预置 workflow；报告应区分首次从零探索与基于真实产物继续设计。仍守每执行根 3h/400M/4000。
+
 ## 首次实跑失败与参数边界修正
 
 首次实跑 `artifacts/buckyball-cosyvoice3-live-20261101-1502/execution` 持续 157.788 秒，21 次请求、746746 reported tokens。只有 root opened，没有 child admission、芯片提交、验收或 RSI；产物仍不满足任何芯片成果声明。
