@@ -234,3 +234,6 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 
 
 09:23首次巡检：8Tasks、depth2（三层树）、两批自主分解；root四路reference/recipes/IP/PPA，reference再分LLM/Flow/HiFT。660请求/658已完成，input102394354/output765753/unknown0，四提交、两Run因真实领域验收失败而闭合，尚无terminal Task/root验收/RSI。PPA reviewer独立复现发现未固定源文件读取顺序导致mapped结果变化；LLM reviewer重跑原始权重fixtures成功，但发现合同要求的name-sorted权重fingerprint不匹配。当前执行槽由另外两审查与Flow/HiFT占用，失败Run等待既有retry调度；未发现框架异常。下一次约09:53，继续查公开反馈消费与修正，未把失败/调用次数当作覆盖通过。证据execution root的operator-monitor-20261102-0923.json及公开receipts。
+
+
+09:53巡检：9Tasks、depth3（四层树）、三批自主分解；1244请求全结算，input187076863/output1462445/unknown0。LLM reference Task在Run2 verified：真实模型先以旧runId读取公开evidence、再读CAS挂载attempts/，修正name-sorted fingerprint等发现；独立review重新推导115项/0失败、原始权重fixtures全等且逐文件再生一致。PPA/IP/recipes的Run2也已真实读取公开receipt和旧冻结产物（长receipt跟进4096 cursor），未读取旧workspace；原生工具结果显示tokens73%/time77%等累计预算，未重置成100%。这些是amendment015真实效果，尚不是root成功。Flow节点实际发出input-invalid feedback，指出共享合同里三处维度/缓存事实错误并给出测量；HiFT进一步创建window/phase探测child等待容量。七次提交、五Run结算、一个Task terminal verified；root仍等待直属批次，无RSI/比较/赢家。证据operator-monitor-20261102-0953.json和对应原生session/公开receipt；继续约10:23巡检。
