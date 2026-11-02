@@ -286,3 +286,10 @@ root Run1真实验收仅model-reference/delivery通过，其余失败：recipes�
 14:25:06独立快照按时落盘：9Tasks、depth2（三层树）、两批自主分解，8Run opened/4提交/2Task verified；606请求/605结算，input68254723/output622704/unknown0。root以旧公开失败为输入，自主分解Flow精确语义、recipe修正、专用cosyvoice拓扑与实际Ball的匹配PPA；recipe再分LLM/Flow/HiFT/host四路，显式传递冻结seed。Flow精确语义子任务已独立验证99 tensors、补充11组非预设输入、负控均通过；LLM修正11fixtures/56outputs及独立134checks通过，真实checkpoint而非随机权重。二进制seed已用原生bash解包消费，未再因UTF-8接口误用退出，框架仍正常运行。
 
 随后14:30读取到拓扑child的公开receipt：其局部config/elaboration目标verified，实际创建cosyvoice双tile/7core并生成447个SV；review同时实测发现异构chip的UVM filelist选错BallDomainDecoder，且depthwise Conv1d不等同于原HiFT/Flow grouped conv，明确留给parent修正，不能把该child通过说成完整frontend实现。MCP首次checkout因模型未建work父目录返回ENOENT，模型创建后成功；后两工具失败为上述真实领域测试，工具均正常返回，无harness兜底。root仍等直属批次，尚无root提交/RSI/比较/赢家。下一快照14:55。证据operator-monitor-20261102-1425.json及对应公开receipts/原生sessions。
+
+
+14:55、15:25独立快照均按时落盘。15:25为1196请求全结算，input146425733/output1251870/unknown0；9Tasks三层树、11Run opened/10提交/9Run closed，7Task verified，recipe Run2在独立review、root仍等待直属批次。Flow/DiT子任务重新生成15组原始fixtures逐字节一致，52项检查及7组额外输入bit-exact；HiFT Run1的47/54失败确由raw weight-norm因子挂载位置错误引起，读取公开反馈后的Run2真实修正，独立审查20fixtures/54outputs及47项额外检查通过。匹配Conv1dBall的三top PPA独立重跑报告相同，并从liberty/netlist重算area、用独立OpenSTA脚本复算delay/power；仍只代表组件边界，不能替代最终chip前端PPA。
+
+recipe Run1虽已合并四路真实数值参考，仍因plan/graphs参数路径、rotary buffer和main.cpp host路径未集成而failed；公开receipt给出可复现命令与具体原因，Run2已读取并返工。没有root提交、RSI、candidate或赢家，不把7个局部verified升级为全线贯通。证据operator-monitor-20261102-{1455,1525}.json及对应公开receipts。
+
+实验时长评估：先前08:52轮3小时已消耗391379971 reported tokens而未完成root第二次验收；当前复用公开seed的轮次90分钟仍在root前置集成。示例的source、proposer、三个case各两arm的六棵顺序执行树与发布后验证共用同一campaign窗口，maxActive=4只用于每棵树内部。6小时可增加深层集成/RSI入口观察，完整对照与发布验证宜从12小时评估，并同步扩大总token/request上限；该判断不是通过保证，也未扩大当前已冻结的3h/400M/4000或16:55:05截止。没有为扩大实验增加runtime预算账本或调度器。
