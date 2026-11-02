@@ -15,7 +15,7 @@ export interface MountedSkillResource extends FrozenSkillResource {
   readonly resourceBase: { readonly kind: 'directory'; readonly path: string }
 }
 
-/** The same Run path is recreated on resume so historical skill results stay usable. */
+/** Scoped resources live under this Run workspace. */
 export async function createSkillResourceRoot(workspace: string): Promise<string> {
   const parent = join(workspace, '.singularity')
   await mkdir(parent, { recursive: true, mode: 0o700 })

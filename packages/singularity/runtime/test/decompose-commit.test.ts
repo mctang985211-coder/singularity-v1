@@ -1,3 +1,4 @@
+import {checkPolicy,putCheckAssets,describeCheck,checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp,rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -174,7 +175,7 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
   try {
     const taskId = options.taskId ?? 'task-s4b2'
     const guidance = await putValue(service, { v: 1, text: 'Follow the frozen guidance.' }, 'guidance')
-    const example = await putValue(service, {
+    const example = await putValue(service, {acceptanceChecks: [],
       goal: {
         summary: 'Inspect the supplied sample and produce one result.',
         deliverable: 'One result and a local note.',
@@ -185,7 +186,8 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
       inputs: [{ id: 'sample', exampleText: 'sample input' }],
       localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
     }, 'child-example')
-    const acceptancePolicy = await putValue(service, { v: 1, kind: 'fixture-policy' }, 'acceptance-policy')
+    await putCheckAssets(service)
+    const acceptancePolicy = await putValue(service, { v: 1, kind: 'fixture-policy', ...checkPolicy }, 'acceptance-policy')
     const skillBundle = await putTreeBundle(service, 'skill-bundle', [
       { path: 'SKILL.md', content: '# S4-B2 fixture skill\n\nUse the authorized sample.\n' },
     ])
@@ -200,14 +202,14 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
         type: 'object',
         required: ['goal', 'localCriteria', 'inputs', 'localOutputs'],
         additionalProperties: false,
-        properties: {
+        properties: {acceptanceChecks: {type:"array"},
           goal: { type: 'object', required: ['summary', 'deliverable', 'scope', 'constraints'] },
           localCriteria: { type: 'array' },
           inputs: { type: 'array' },
           localOutputs: { type: 'array' },
         },
       },
-      requiredCriteria: [{ id: 'template-criterion', statement: 'Use the authorized input.', required: true }],
+      requiredCriteria: [{checks: [{checkId: 'template-criterion', recipeRef: checkRecipeRef,params:{}}], id: 'template-criterion', statement: 'Use the authorized input.', required: true }],
       requiredOutputs: [],
       acceptancePolicy,
       skills: ['skill:fixture'],
@@ -256,7 +258,7 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
           scope: ['s4b2'],
           constraints: [],
         },
-        criteria: [],
+        criteria: childTemplate.requiredCriteria,
         inputs: [{ id: 'source', object: parentInput, path: 'input.txt', access: 'read' }],
         outputs: [{ id: 'out', path: 'out.txt', kind: 'file', role: 'deliverable', required: true }],
       },
@@ -370,7 +372,7 @@ async function withScenario<T>(
 }
 
 function proposal(scenario: Scenario, overrides: Partial<TaskProposal> = {}): TaskProposal {
-  return {
+  return {acceptanceChecks: [],
     goal: {
       summary: 'Inspect the authorized sample and report one result.',
       deliverable: 'One result.',
@@ -394,7 +396,7 @@ async function prepareBoth(scenario: Scenario): Promise<{
   readonly preparedSecond: PrepareDecomposeOutput
 }> {
   const epoch = initialContextEpoch(sessionId)
-  const base = {
+  const base = {describeCheck,
     contract: scenario.contract,
     runId: parentRunId,
     sessionId,
@@ -429,7 +431,7 @@ function commitInput(
     readonly planningSketchRef?: Ref
   } = {},
 ): CommitDecomposeInput {
-  return {
+  return {describeCheck,
     contract: scenario.contract,
     parentRunId,
     sessionId,

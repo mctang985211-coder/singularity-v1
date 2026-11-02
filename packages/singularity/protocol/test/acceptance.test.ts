@@ -34,18 +34,18 @@ const expectation: PublicReceiptExpectation = {
   contractDigest: digestB,
   inputDigests: [digestC, digestD],
   outputDigests: [digestE],
-  requiredCriteria: ['criterion-a', 'criterion-b'],
+  requiredCriteria: ['criterion-a', 'criterion-b'].map(id => ({id, statement: id, required: true, checks: []})),
 }
 
 const passingCriteria: PublicCriterionResult[] = [
-  {
+  {checks: [],
     id: 'criterion-a',
     verdict: 'pass',
     reason: 'The public result satisfies the declared criterion.',
     metric: { name: 'accuracy', unit: 'ratio', value: 1 },
     score: 1,
   },
-  {
+  {checks: [],
     id: 'criterion-b',
     verdict: 'pass',
     reason: 'The public result is reproducible.',
@@ -134,7 +134,7 @@ void test('exit code zero is necessary but not sufficient for verified', () => {
     sealedReceipt({
       criteria: [
         ...passingCriteria,
-        { id: 'local-guidance', verdict: 'pass', reason: 'Not a required acceptance criterion.' },
+        {checks: [], id: 'local-guidance', verdict: 'pass', reason: 'Not a required acceptance criterion.' },
       ],
     }),
     expectation,
@@ -159,7 +159,7 @@ void test('exit code zero is necessary but not sufficient for verified', () => {
 
 void test('a criterion fail is failed even with exit zero or a non-zero exit code', () => {
   const failingCriteria: PublicCriterionResult[] = [
-    { id: 'criterion-a', verdict: 'fail', reason: 'The public result misses the threshold.' },
+    {checks: [], id: 'criterion-a', verdict: 'fail', reason: 'The public result misses the threshold.' },
     passingCriteria[1],
   ]
 
@@ -175,7 +175,7 @@ void test('a criterion fail is failed even with exit zero or a non-zero exit cod
 
 void test('an invalid criterion, timeout, or signal always wins as invalid', () => {
   const invalidCriterion: PublicCriterionResult[] = [
-    { id: 'criterion-a', verdict: 'invalid', reason: 'The public fixture could not run.' },
+    {checks: [], id: 'criterion-a', verdict: 'invalid', reason: 'The public fixture could not run.' },
     passingCriteria[1],
   ]
 
@@ -184,7 +184,7 @@ void test('an invalid criterion, timeout, or signal always wins as invalid', () 
 
   const withFailAndTimeout = validatePublicReceipt(
     sealedReceipt({
-      criteria: [{ id: 'criterion-a', verdict: 'fail', reason: 'The public result misses.' }, passingCriteria[1]],
+      criteria: [{checks: [], id: 'criterion-a', verdict: 'fail', reason: 'The public result misses.' }, passingCriteria[1]],
       timedOut: true,
     }),
     expectation,
@@ -193,7 +193,7 @@ void test('an invalid criterion, timeout, or signal always wins as invalid', () 
 
   const withFailAndSignal = validatePublicReceipt(
     sealedReceipt({
-      criteria: [{ id: 'criterion-a', verdict: 'fail', reason: 'The public result misses.' }, passingCriteria[1]],
+      criteria: [{checks: [], id: 'criterion-a', verdict: 'fail', reason: 'The public result misses.' }, passingCriteria[1]],
       exit: { code: null, signal: 'SIGTERM' },
     }),
     expectation,
@@ -251,7 +251,7 @@ void test('metric and score are finite, only on pass/fail, and score requires me
     sealPublicReceipt(
       receiptPayload({
         criteria: [
-          {
+          {checks: [],
             id: 'criterion-a',
             verdict: 'pass',
             reason: 'Non-finite public metric.',
@@ -266,7 +266,7 @@ void test('metric and score are finite, only on pass/fail, and score requires me
     sealPublicReceipt(
       receiptPayload({
         criteria: [
-          {
+          {checks: [],
             id: 'criterion-a',
             verdict: 'pass',
             reason: 'Infinite public metric.',
@@ -281,7 +281,7 @@ void test('metric and score are finite, only on pass/fail, and score requires me
     sealPublicReceipt(
       receiptPayload({
         criteria: [
-          { id: 'criterion-a', verdict: 'pass', reason: 'Score without a metric.', score: 1 },
+          {checks: [], id: 'criterion-a', verdict: 'pass', reason: 'Score without a metric.', score: 1 },
           passingCriteria[1],
         ],
       }),
@@ -291,7 +291,7 @@ void test('metric and score are finite, only on pass/fail, and score requires me
     sealPublicReceipt(
       receiptPayload({
         criteria: [
-          {
+          {checks: [],
             id: 'criterion-a',
             verdict: 'invalid',
             reason: 'Invalid criteria must not carry public scores.',
@@ -307,7 +307,7 @@ void test('metric and score are finite, only on pass/fail, and score requires me
     sealPublicReceipt(
       receiptPayload({
         criteria: [
-          {
+          {checks: [],
             id: 'criterion-a',
             verdict: 'pass',
             reason: 'Empty metric identity.',
@@ -335,7 +335,7 @@ void test('non-finite numbers are rejected by the validator as invalid even when
   const malformed = {
     ...payload,
     criteria: [
-      {
+      {checks: [],
         id: 'criterion-a',
         verdict: 'pass',
         reason: 'Non-finite public metric.',
@@ -370,7 +370,7 @@ void test('a missing or duplicated required criterion and unknown criterion are 
     sealedReceipt({
       criteria: [
         ...passingCriteria,
-        { id: 'criterion-unknown', verdict: 'pass', reason: 'Unknown public criterion.' },
+        {checks: [], id: 'criterion-unknown', verdict: 'pass', reason: 'Unknown public criterion.' },
       ],
     }),
     expectation,

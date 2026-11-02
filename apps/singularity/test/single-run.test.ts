@@ -1,3 +1,4 @@
+import { describeFixtureCheck, fixtureCheck, fixtureCriterionResults, fixturePolicyFields, seedFixtureRecipe } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { access,mkdtemp,readFile,readdir,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -127,13 +128,15 @@ async function makeScenario(
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
   try {
+    await seedFixtureRecipe(store)
     const guidance = await seedObject(store, 'guidance:s3b2', { v: 1, text: 'Write the declared output.' })
     const example = await seedObject(store, 'example:s3b2', { v: 1, goal: 'fixture example' })
-    const acceptancePolicy = await seedObject(store, 'acceptance-policy:s3b2', { v: 1, kind: 'fixture-policy' })
+    const acceptancePolicy = await seedObject(store, 'acceptance-policy:s3b2', { v: 1, kind: 'fixture-policy', ...fixturePolicyFields })
     const verifierObject = seal('object', {
       v: 1,
       kind: 'verifier-identity',
       name: PROVIDER_ID,
+      ...fixturePolicyFields,
     })
     await store.putObject(PROVIDER_ID, jsonBytes(verifierObject), 'object')
     const provider: Ref = { id: PROVIDER_ID, digest: verifierObject.digest }
@@ -183,7 +186,7 @@ async function makeScenario(
             `${OUTPUT_PATH} must contain exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline`,
           ],
         },
-        criteria: [{
+        criteria: [{ checks: [fixtureCheck()],
           id: CRITERION_ID,
           statement: `The declared output ${OUTPUT_PATH} exists and contains exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline.`,
           required: true,
@@ -601,7 +604,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
       reservation: { steps: live ? MAX_STEPS_PER_RUN : 4 },
     })
     const activeScenario = scenario
-    const verifier: RunVerifier = {
+    const verifier: RunVerifier = { describeCheck: describeFixtureCheck,
       provider: activeScenario.provider,
       async verify(request: VerifierRequest) {
         assert.equal(request.operationId, `${runId}:verify`)
@@ -632,12 +635,12 @@ void test('single Run verified: self-read, plan, native bash output, independent
           contractDigest: request.task.digest,
           inputDigests: request.inputs.map(ref => ref.digest),
           outputDigests: request.outputs.map(ref => ref.digest),
-          criteria: [{
+          criteria: await fixtureCriterionResults(request, storeRoot, [{
             id: CRITERION_ID,
             verdict: 'pass',
             reason: 'The frozen output matches the declared fixture bytes.',
             metric: { name: 'exit', unit: 'code', value: 0 },
-          }],
+          }]),
           exit: { code: 0, signal: null },
           timedOut: false,
         })
@@ -842,7 +845,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
         contractDigest: activeScenario.contract.digest,
         inputDigests: activeScenario.contract.spec.inputs.map(input => input.object.digest),
         outputDigests: frozenOutputRefs.map(ref => ref.digest),
-        requiredCriteria: [CRITERION_ID],
+        requiredCriteria: activeScenario.contract.spec.criteria.filter(criterion => criterion.required),
       })
       assert.equal(receiptValidation.verdict, 'verified')
       if (live) {
@@ -904,7 +907,7 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
           admission: scenario.runAdmission, composition: scenario.composition,
           agentOptions: agentOptions(), maxOutputBytes: 1024,
           clock: () => now,
-          verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+          verifier: { describeCheck: describeFixtureCheck, provider: scenario.provider, verify() { throw new Error('no submission') } },
         })
         assert.ok(result.kind === 'settled')
         assert.equal(fixture.requests.length - firstRequest, 1)
@@ -930,7 +933,7 @@ void test('oversized visible tool schemas are rejected before the first model re
       sessionId: `${taskId}:session`, runId: `${taskId}:run`,
       admission: scenario.runAdmission, composition: scenario.composition,
       agentOptions: agentOptions(), maxOutputBytes: 1024,
-      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+      verifier: { describeCheck: describeFixtureCheck, provider: scenario.provider, verify() { throw new Error('no submission') } },
     }), /visible tool schemas/)
 
     assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 0)
@@ -949,7 +952,7 @@ void test('single Run deadline cancels an in-flight DSH request', { timeout: 20_
       sessionId: `${taskId}:session`, runId: `${taskId}:run`,
       admission: scenario.runAdmission, composition: scenario.composition,
       agentOptions: agentOptions(), maxOutputBytes: 1024,
-      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+      verifier: { describeCheck: describeFixtureCheck, provider: scenario.provider, verify() { throw new Error('no submission') } },
     })
     assert.ok(result.kind === 'settled')
     assert.equal(fixture.requests.length, 1)
@@ -975,7 +978,7 @@ void test('unknown failed request cannot buy an internal DSH retry', { timeout: 
       sessionId: `${taskId}:session`, runId: `${taskId}:run`,
       admission: scenario.runAdmission, composition: scenario.composition,
       agentOptions: agentOptions(), maxOutputBytes: 1024,
-      verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+      verifier: { describeCheck: describeFixtureCheck, provider: scenario.provider, verify() { throw new Error('no submission') } },
     }), /fixture|request|error|500/i)
 
     assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 0)
@@ -1007,7 +1010,7 @@ void test('single Run no-submission settles failed ExecutionRecord without a rec
       composition: scenario.composition,
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
-      verifier: {
+      verifier: { describeCheck: describeFixtureCheck,
         provider: scenario.provider,
         verify() {
           verifierCalls += 1
@@ -1092,9 +1095,9 @@ async function runInvalidVerifierCase(mode: 'invalid-criterion' | 'timeout'): Pr
       composition: activeScenario.composition,
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
-      verifier: {
+      verifier: { describeCheck: describeFixtureCheck,
         provider: activeScenario.provider,
-        verify(request: VerifierRequest) {
+        async verify(request: VerifierRequest) {
           verifierCalls += 1
           if (mode === 'invalid-criterion') {
             return Promise.resolve(sealPublicReceipt({
@@ -1104,11 +1107,11 @@ async function runInvalidVerifierCase(mode: 'invalid-criterion' | 'timeout'): Pr
               contractDigest: request.task.digest,
               inputDigests: request.inputs.map(ref => ref.digest),
               outputDigests: request.outputs.map(ref => ref.digest),
-              criteria: [{
+              criteria: await fixtureCriterionResults(request, storeRoot, [{
                 id: CRITERION_ID,
                 verdict: 'invalid',
                 reason: 'The fixture verifier could not evaluate the criterion.',
-              }],
+              }]),
               exit: { code: 0, signal: null },
               timedOut: false,
             }))
@@ -1120,11 +1123,11 @@ async function runInvalidVerifierCase(mode: 'invalid-criterion' | 'timeout'): Pr
             contractDigest: request.task.digest,
             inputDigests: request.inputs.map(ref => ref.digest),
             outputDigests: request.outputs.map(ref => ref.digest),
-            criteria: [{
+            criteria: await fixtureCriterionResults(request, storeRoot, [{
               id: CRITERION_ID,
               verdict: 'pass',
               reason: 'The fixture criterion passed before the timeout.',
-            }],
+            }]),
             exit: { code: null, signal: null },
             timedOut: true,
           }))
@@ -1233,7 +1236,7 @@ void test('symlinked declared output is rejected before manifest and settles fai
       composition: activeScenario.composition,
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
-      verifier: {
+      verifier: { describeCheck: describeFixtureCheck,
         provider: activeScenario.provider,
         verify() {
           verifierCalls += 1
@@ -1311,7 +1314,7 @@ void test('Task resource CAS failure aborts without asking the model to repair h
         runId: 'host-fault-run', sessionId: 'host-fault-session', admission: scenario.runAdmission,
         composition: scenario.composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
         actor: { kind: 'runtime', id: 'host-fault-test' },
-        verifier: { provider: scenario.provider, verify() { assert.fail('no submission must not invoke verifier') } },
+        verifier: { describeCheck: describeFixtureCheck, provider: scenario.provider, verify() { assert.fail('no submission must not invoke verifier') } },
       }, service), /fixture CAS storage unavailable/)
 
       assert.equal(injected, true)

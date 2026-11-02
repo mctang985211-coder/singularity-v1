@@ -374,7 +374,7 @@ export const S4B1_BINDING = 'binding:s4b1-probe'
 export const S4B1_EXAMPLE_MARKER = 'S4B1 complete frozen child example'
 
 export function s4b1Example(): TaskExample {
-  return {
+  return { acceptanceChecks: [],
     goal: {
       summary: `${S4B1_EXAMPLE_MARKER}: inspect the supplied sample and report one result.`,
       deliverable: 'A short result and a local note.',
@@ -407,7 +407,7 @@ export const S4B2_BINDING = 'binding:s4b2-probe'
 export const S4B2_EXAMPLE_MARKER = 'S4B2 complete frozen child example'
 
 export function s4b2Example(): TaskExample {
-  return {
+  return { acceptanceChecks: [],
     goal: {
       summary: `${S4B2_EXAMPLE_MARKER}: inspect the supplied sample and report one result.`,
       deliverable: 'A short result and a local note.',

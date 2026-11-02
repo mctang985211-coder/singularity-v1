@@ -12,6 +12,7 @@ import {
   EXPLORATION_CARD,
   NODE_VIEW_MAX_BYTES,
   WORKER_CARD,
+  WORKER_PERSONA,
   WORKER_CARD_MAX_BYTES,
   clampPercent,
   renderNodeView,
@@ -73,7 +74,7 @@ void test('worker card and NodeView stay inside the fixed prompt budgets', () =>
   const plain = renderWorkerCard(false)
   assert.ok(new TextEncoder().encode(plain).byteLength <= WORKER_CARD_MAX_BYTES)
   assert.ok(new TextEncoder().encode(renderWorkerCard(true)).byteLength <= WORKER_CARD_MAX_BYTES)
-  assert.ok(new TextEncoder().encode(`${WORKER_CARD}\n\n${EXPLORATION_CARD}`).byteLength <= WORKER_CARD_MAX_BYTES)
+  assert.ok(new TextEncoder().encode(`${WORKER_PERSONA}\n\n${WORKER_CARD}\n\n${EXPLORATION_CARD}`).byteLength <= WORKER_CARD_MAX_BYTES)
   assert.deepEqual([...new Set(plain.match(/singularity_\w+/g))].sort(), [
     'singularity_decompose',
     'singularity_feedback',
@@ -85,7 +86,7 @@ void test('worker card and NodeView stay inside the fixed prompt budgets', () =>
   assert.ok(plain.includes('ackPreview'), 'the current card must explain the commit acknowledgement')
   assert.ok(plain.includes('children'), 'the current card must explain the commit batch')
   assert.ok(!plain.includes('Child commit is not available yet'), 'the card must match the implemented commit tool')
-  assert.ok(renderWorkerCard(true).includes('Local exploration is enabled'))
+  assert.ok(renderWorkerCard(true).includes('Instantiate executable checks'))
 
   const rendered = renderNodeView(makeView())
   assert.ok(new TextEncoder().encode(rendered).byteLength <= NODE_VIEW_MAX_BYTES)

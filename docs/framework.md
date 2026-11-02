@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–015 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–016 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；可执行验收合同、逐项公开报告及其 host 分类。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -173,6 +173,7 @@ interface TaskSpec {
     readonly id: string
     readonly statement: string
     readonly required: boolean
+    readonly checks: readonly ExecutableCheck[]
   }[]
   /** Model-supplied local guidance; never an acceptance obligation. */
   readonly localGuidance?: readonly LocalCriterion[]
@@ -195,8 +196,19 @@ interface LocalOutput {
 interface TaskProposal {
   readonly goal: TaskSpec['goal']
   readonly localCriteria?: readonly LocalCriterion[]
+  readonly acceptanceChecks: readonly ProposedCriterionChecks[]
   readonly inputs: readonly InputRef[]
   readonly localOutputs?: readonly LocalOutput[]
+}
+
+interface ExecutableCheck {
+  readonly checkId: string
+  readonly recipeRef: ObjectRef
+  readonly params: JsonObject
+}
+interface ProposedCriterionChecks {
+  readonly criterionId: string
+  readonly checks: readonly ExecutableCheck[]
 }
 
 interface TaskContract {
@@ -307,13 +319,19 @@ base outputs
 
 ### 4.3 AcceptanceRef 的权威
 
-Root 的 criteria、verifier、scorer 来自用户授权的 domain case/operator，不属于 Method。
+Root 的 criteria、checks、verifier、oracle 与 scorer 来自用户授权的 domain case/operator，不属于 Method。
 
-Child 的 goal、inputs 以及模板允许的局部 guidance 可以由父模型提交 TaskProposal；模板 requiredCriteria、requiredOutputs 和 acceptancePolicy 由宿主强制合并，它们不是 root 的评分标准。`localCriteria` 只进入 TaskSpec.localGuidance，`localOutputs` 只能由 host 按 §4.2.1 转成 `required=false`、`role='supporting'` 的附加输出；二者都不能改变受信 acceptance。child 的验收 provider 由固定 domain acceptance policy 根据冻结业务 spec 解析，模型提供的是实例化数据，不是可执行代码或任意命令。
+Child 的 goal、inputs、检查实例和模板允许的局部 guidance 由父模型提交 TaskProposal；模板 requiredCriteria、requiredOutputs 和 acceptancePolicy 由宿主强制合并。`localCriteria` 只进入 TaskSpec.localGuidance，`localOutputs` 只能由 host 按 §4.2.1 转成 `required=false`、`role='supporting'` 的附加输出。正式局部验收只通过必填 `acceptanceChecks` 追加，不能通过 guidance 取得验收权。provider 与通过规则来自固定 domain policy；父模型选择授权配方及实例参数，不提交任意命令或检查代码。
+
+每个 Task 至少有一个 required criterion，且每个 required criterion 都有非空 checks。模板允许空 checks 槽位，完整 TaskExample 必须给出可实例化检查。合并先保留模板 checks，再按 proposal 顺序追加：criterionId 只能指向模板中已有的 required criterion；重复 criterionId、空检查组、未知 criterion 和全 Task 重复 checkId 均拒绝。父模型不能覆盖模板检查、语句、阈值或 provider；没有追加项时仍传 `acceptanceChecks:[]`。root 由 operator/domain 直接提供 criteria[].checks。结构、policy 授权、配方/依赖 Ref、参数 schema、输入输出路径与执行限制在准入 fact 前验证，失败不写半个 Task、不占预算。live Task 及 retry 保持合同不变。
+
+冻结 acceptance policy 的 `checkRecipes: ObjectRef[]` 列出允许的完整配方身份，`checkResources: ObjectRef[]` 列出公开检查资源；沿现有 CAS/资源读取，不建立 CheckRegistry。配方包含固定 entrypoint、dependencies、paramsSchema、resultSchema、publicDataPolicy、passRule 和 maxWallClockMs，领域负责命令派生、数据授权和参数/产物约束。公开名称不是授权，只有 recipeRef 的 id/digest 与 policy 匹配才可执行。`displayCommand`/`expectedReport` 由同一配方和冻结参数派生，只作 self/prepare 预览，不进入 proposal 或第二份合同。
+
+worker 在工作期间用已有 bash/领域 MCP 重复自检并取得覆盖量、实际数据、失败定位与身份；最终 provider 在自己的环境对冻结输入输出按相同配方独立重跑。数值/实现失败给出领域 fail；环境、runner、provider、CAS 故障保留原始原因。领域负责 oracle、阈值与充分性；框架不能从自然语言自动推导可靠检查。有限检查全通过后，独立 review 仍可因真实缺陷否决，不能覆盖失败检查。
 
 `TaskContract.acceptance` 是 `object` domain 的 `AcceptanceRef`，冻结 acceptance policy 与 provider identity；`resolveAcceptance` 不得返回未列 domain 或裸 digest。host 解析出的 provider 必须与 `PublicReceipt.provider`、`Evidence.verification.provider` 在 `id` 和 `digest` 上完全一致；不匹配按 `invalid` 结算，不能补写 closure。`AcceptanceRef` 的对象 schema 仍由领域发布声明，本规范只冻结 ref domain、身份比较和 receipt 绑定规则。
 
-因此 RSI 可以改 child template 的目标、预填 criteria、输出结构和分解关系；**不能改已经准入的 Task，不能改 root case、root verifier 或 scorer**。不得把“不能修改 live contract”误解成“不能改未来 child template 的验收描述”。
+因此 RSI 可以在固定领域 policy 允许的配方/参数范围内改未来 child template 的目标、检查组织、预填 criteria、输出结构和分解关系；**不能改已经准入的 Task，不能改 root case、root verifier 或 scorer**。不得把“不能修改 live contract”误解成“不能改未来 child template 的验收描述”。
 
 Child contract 的 schema 合法不证明子任务自然语言目标一定足够支持父目标。最终仍由 parent 的独立验收负责，框架不声称能做语义蕴含证明。
 
@@ -340,6 +358,7 @@ interface TaskTemplate {
     readonly id: string
     readonly statement: string
     readonly required: boolean
+    readonly checks: readonly ExecutableCheck[]
   }[]
   readonly requiredOutputs: readonly OutputSpec[]
   readonly acceptancePolicy: AssetRef
@@ -394,39 +413,64 @@ interface ToolAsset {
 
 ### 5.1 预填写 Task 用例
 
-example 是完整业务用例，而不是占位 scaffold。必须包含真实可理解的 goal、criteria、输入样本说明和输出格式，不得只写空对象、TODO 或 ${variable}。
+example 是完整业务用例，而不是占位 scaffold。必须包含真实可理解的 goal、正式 acceptanceChecks、输入样本说明和输出格式；模板已有完整检查时 acceptanceChecks 可为空，不得只写空对象、TODO 或 ${variable}。
 
 所有模型可见的 worker/RSI card、Method guidance、example、skill 正文、MCP tool description 和协议错误都采用正向结构：当前目标、可执行动作、下一步和剩余预算百分比。权限、边界和终结条件由 schema、guard、scope 与 verifier 执行；模型界面只展示完成当前动作所需的信息。
 
-示例：仿真子任务模板的 example（**仅解释协议，不规定领域实现**）：
+示例：领域发布的因果 INT8 Conv1D 流式接口用例（只固定接口和精确整数规则，不规定解法树）。配方 Ref 由对应领域 policy 授权；其正式资源发布必须与此身份一致。
 
 ~~~json
 {
   "goal": {
-    "summary": "验证一个 4 位无符号加法器的功能",
-    "deliverable": "生成 sim-result.json 和完整仿真日志",
-    "scope": ["单个组合逻辑模块", "功能仿真"],
-    "constraints": ["将被测 RTL 作为只读输入", "覆盖全部输入组合"]
+    "summary": "实现因果整数 Conv1D 的流式适配器，保证跨 chunk 保留所需历史，并与相同输入的 batch 结果精确一致。",
+    "deliverable": "result/candidate.py：单次进程的 JSON 输入输出程序，接受 op=stream、x、kernel、dilation、chunks，返回 {y:[int32,...]}。",
+    "scope": [
+      "chunk 边界的历史状态与因果左侧补零",
+      "dilation=1/2/3，kernel size=1/2/3/5",
+      "空输入、短输入、INT8 极值及多 chunk 划分",
+      "Workflow position: consumes the frozen kernel and produces a stream adapter for parent all-suite integration."
+    ],
+    "constraints": [
+      "可复用已传入的冻结 kernel；从本地授权输入读取，不依赖 parent 工作目录。",
+      "输入与权重为 int8，累加输出精确 int32，不饱和、不截断。",
+      "公开 checker 的任何通过结论只覆盖相应 case 和接口。",
+      "Parent retains root all-suite integration acceptance; this unit is accepted on stream behavior."
+    ]
   },
   "localCriteria": [
     {
-      "id": "exhaustive",
-      "statement": "对 256 对输入逐一检查 sum 等于 a+b 的低 4 位且 carry 等于第 5 位"
-    },
-    {
-      "id": "traceable",
-      "statement": "结果文件给出测试总数、失败数和日志 artifact 引用"
+      "id": "stream-notes",
+      "statement": "Explain the cross-chunk state and integration interface; this text is guidance, while acceptanceChecks contains formal acceptance."
     }
   ],
   "inputs": [
     {
-      "id": "rtl-example",
-      "exampleText": "module add4(input [3:0] a,b,output [3:0] sum,output carry); assign {carry,sum}=a+b; endmodule"
+      "id": "kernel",
+      "exampleText": "一个已通过 kernel 检查、可由此适配器导入的冻结内核；实际派发时使用完整授权 InputRef。"
+    },
+    {
+      "id": "check-spec",
+      "exampleText": "冻结数值规范、公开验证命令及 JSON CLI schema；正式任务中由领域包提供。"
     }
   ],
-  "localOutputs": [
-    { "id": "result", "path": "sim-result.json", "kind": "file", "description": "仿真统计与公开结果" },
-    { "id": "log", "path": "simulation.log", "kind": "file", "description": "完整仿真日志" }
+  "localOutputs": [],
+  "acceptanceChecks": [
+    {
+      "criterionId": "task-goal",
+      "checks": [
+        {
+          "checkId": "stream",
+          "recipeRef": {
+            "id": "example:causal-int8-conv1d:recipe",
+            "digest": "sha256:62ee0fb450d4826d96c1430fb1854a4debbf4e9a5fd67f12267db930f50add31"
+          },
+          "params": {
+            "suite": "stream",
+            "candidate": "result/candidate.py"
+          }
+        }
+      ]
+    }
   ]
 }
 ~~~
@@ -453,7 +497,7 @@ explore-child 创建的 child                    → 开始时再独立获得同
 
 所以“只一级”是**每个模型只组织自己的直接下一层**，不是“任务树总深度只能为一”。fallback 可递归，仍受根 maxDepth/maxTasks 限制。
 
-平台 explore-child 固定一个 required criterion `task-goal`：提交的产物与可复现证据须完成本 Task 冻结的 goal、deliverable、scope 和 constraints。领域 verifier 按本地目标检验；不要求研究子任务实现整个 root，也不以空 criteria 或进程正常退出代表完成。每个探索 child 继承固定 required deliverable `{id:'result', path:'result', kind:'tree'}`，将实际产物与可复现证据放进 `result/`，以 output ID `result` 提交；省略 localOutputs 也有完整交付出口。localOutputs 仍只追加 supporting 输出，不得覆盖 result；root 保持 operator/domain 自己的 outputs。模型 localCriteria 仍只作指导，不改变该标准。平台 explore-child 提供一个通用、填写完整的示例与固定简短说明；它不是可演化领域模板，执行时仍 pin method-empty 或所在 Method revision。
+平台 explore-child 固定一个 required criterion `task-goal`：提交的产物与可复现证据须完成本 Task 冻结的 goal、deliverable、scope 和 constraints。领域 verifier 按本地目标检验；不要求研究子任务实现整个 root，也不以空 criteria 或进程正常退出代表完成。每个探索 child 继承固定 required deliverable `{id:'result', path:'result', kind:'tree'}`，将实际产物与可复现证据放进 `result/`，以 output ID `result` 提交；省略 localOutputs 也有完整交付出口。localOutputs 仍只追加 supporting 输出，不得覆盖 result；root 保持 operator/domain 自己的 outputs。模型 localCriteria 仍只作指导，不改变该标准。平台 explore-child 保留固定 task-goal 与 result/，由冻结 global snapshot 的 fallbackExample 指向领域提供的完整 TaskExample，其中 acceptanceChecks 实例化 task-goal 的授权配方；删除无配方的旧通用示例。固定简短说明仍属平台，不预置领域解法树；执行时 pin method-empty 或所在 Method revision。
 
 平台 `explore-child` fallback 的默认 join 是 `probe`；只有 root/domain admission 明确把该 fallback binding 固定为 required 时，才建立 required obligation。模型不能把 fallback 从 probe 改成 required。
 
@@ -638,6 +682,8 @@ current planningSketchRef / remaining budget percentages
 
 prepare 不创建 Task，不消耗 child 数，不写 domain fact。预览保存在 DSH tool result；receipt 记录父 Run、Method/template digest、tool call ID 和 model step。
 
+样本输入在检查预览中以 `samples/${encodeURIComponent(input.id)}` 路径表示；这些路径只对应内嵌 exampleText，不携带 Ref 或输入权限。领域 describeCheck 接收这些路径以派生完整命令；commit 时 parent 必须替换为实际授权的 InputRef。
+
 同一 Run 重复 prepare 同一 binding 可返回相同 previewRef，避免正文重复；主动重读或 compaction 后可重新获取全文。
 
 ### 8.2 commit 才原子准入
@@ -651,6 +697,7 @@ prepare 不创建 Task，不消耗 child 数，不写 domain fact。预览保存
       "ackPreview": "sha256:<preview object>",
       "task": {
         "goal": { "summary": "当前实例的目标", "deliverable": "本次结果", "scope": [], "constraints": [] },
+        "acceptanceChecks": [],
         "localCriteria": [ { "id": "traceable", "statement": "结果应能追溯到本次输入" } ],
         "inputs": [],
         "localOutputs": [ { "id": "log", "path": "result.log", "kind": "file", "description": "辅助执行日志" } ]
@@ -660,12 +707,14 @@ prepare 不创建 Task，不消耗 child 数，不写 domain fact。预览保存
 }
 ~~~
 
+该示例假定模板已提供完整 required checks；若模板留有空槽位，必须在 `acceptanceChecks` 中按 §4.3 填入授权配方和参数。
+
 core + adapter 的准入顺序：
 
 1. active Run、当前 epoch 的 PlanningSketch receipt、预算、深度、Task 数和“当前无 active batch”检查。
 2. 每个 bindingId 确实是本层可见 child binding 或已准入 fallback；同批 required binding 只出现一次，probe binding 可重复实例化。
 3. ackPreview 必须等于当前 Run **已经持久交付**的 previewRef.digest，且对应同一 prepare result；必须在后续模型 step，不能在同一次 tool batch 中猜测 ack。
-4. instanceSchema、proposal 输入授权、路径和资源总额检查；host 按 §4.2.1 合并 template requiredCriteria/requiredOutputs/acceptancePolicy，把 localCriteria 写入 `TaskSpec.localGuidance`，把 localOutputs 转成 `required=false`、`role='supporting'` 的输出，拒绝模型提交 `required`、acceptance provider/verifier/scorer、deliverable role、重复 ID/path、保留 ID/path 或 draft role/path。
+4. instanceSchema、proposal 输入授权、路径和资源总额检查，按 §4.3 合并检查并在 fact 前解析配方/policy、参数和时限；host 按 §4.2.1 合并 template requiredCriteria/requiredOutputs/acceptancePolicy，把 localCriteria 写入 `TaskSpec.localGuidance`，把 localOutputs 转成 `required=false`、`role='supporting'` 的输出，拒绝模型提交 `required`、acceptance provider/verifier/scorer、deliverable role、重复 ID/path、保留 ID/path 或 draft role/path。
 5. 由宿主生成 TaskSpec、taskId、parentId、parentRunId、batchId、Method/template refs、bindings、acceptance；taskId 由 parentTaskId、batchId、bindingId 和 children 数组内的 index 确定，同命令重放稳定、同批实例不同；若该 batch 是 feedback replan，host 根据 binding 和已 terminal failure 派生 `feedbackRef` 与 `supersedesChildIds`，模型不能提交这两个字段。
 6. append 一个 task/children-admitted fact，含完整 children contracts、join 规则、预算预留。
 7. parent 进入 waiting-children 投影，当前 turn 结束；释放执行槽。
@@ -1004,7 +1053,7 @@ type FactPayload = FactPayloadMap[FactType]
   1. 操作者确认 goal、criteria、输入、输出与预算；有歧义先澄清
   2. 冻结输入、公开资源 snapshot、领域 acceptance identity、seed
   3. 显式选择 MethodRef；无现有方法则选择 method-empty
-  4. resolve 本层模板与 bindings；验证 profile 真实具备所需能力
+  4. resolve 本层模板与 bindings；验证 profile 能力与每项检查的配方、授权、参数及执行限制
   5. append task/admitted（只引用冻结 contract；不把摘要写回 contract）
   6. 按根预算进入本进程 dispatch
 ~~~
@@ -1107,7 +1156,7 @@ async function verifyAndClose(runId: string, finalSessionSnapshot: SessionSnapsh
 }
 ~~~
 
-`domain.verify` 接收 §15.3 的 `VerifyRequest` 并返回 strict `PublicReceipt`。`validateReceipt` 必须检查：provider 与 host 从冻结合同解析出的 acceptance provider 及 `Evidence.verification.provider` 在 `id`/`digest` 上完全相等；`operationId` 等于 `runId + ':verify'` 且与 request/Evidence 一致；`contractDigest` 等于冻结合同；`inputDigests`/`outputDigests` 与授权输入/冻结输出逐位相等；criteria ID 集合恰等于 required criteria 且每条一次；verdict 合法；`reason` 为公开安全文本；metric/score 满足 §15.3 规则；`exit`/`timedOut` 形状合法。
+`domain.verify` 接收 §15.3 的 `VerifyRequest` 并返回 strict `PublicReceipt`。`validateReceipt` 必须检查：provider 与 host 从冻结合同解析出的 acceptance provider 及 `Evidence.verification.provider` 在 `id`/`digest` 上完全相等；`operationId` 等于 `runId + ':verify'` 且与 request/Evidence 一致；`contractDigest` 等于冻结合同；`inputDigests`/`outputDigests` 与授权输入/冻结输出逐位相等；criteria ID 集合恰等于 required criteria 且每条一次，逐 check 的公开 CAS 报告与冻结合同、输入输出和结果一致；verdict 合法；`reason` 为公开安全文本；metric/score 满足 §15.3 规则；`exit`/`timedOut` 形状合法。
 
 host 分类、exit 与 timeout 的完整规则见 §15.3；本 procedure 只消费 `validateReceipt` 的结果，不在 runtime 另写第二套判定。exit=0 本身不足以 verified，verifier 自报总 verdict 也不被接受。
 
@@ -1249,6 +1298,8 @@ children/<taskId>/<outputId>/...
 
 不 overlay parent 代码，不导入 child 的临时文件或孙节点目录。需要整合时父模型复制或改写为自己的声明产物。挂载 refs 和 asOf 进入当次 context snapshot；最终 Evidence.inputs 包含初始输入及这些追加的 direct outputs。
 
+read(children) 的 outputs 直接返回标准 InputRef：file 对应一个 `copy-to-work` Ref，tree 按冻结 manifest 的顺序展开为各文件的 `copy-to-work` Ref，保留嵌套路径。父层可原样传给后续直属 Task；后者从 CAS 物化自己的输入副本，不依赖祖先或 sibling 目录。树 manifest 仍是提交的输出身份，传递和 verifier 的追加输入使用实际获准的叶对象；不猜测普通输入内容是否为 tree，也不在 InputRef 上附加非协议字段。
+
 `Evidence.inputs` 必须与 verifier 授权输入由同一 snapshot 派生，并逐位相等；不得加入未给 verifier 的 audit-only 输入，也不得让 verifier 只收到初始输入而 Evidence.inputs 记录 direct child outputs。`PublicReceipt.inputDigests` 与 `Evidence.inputs[].digest` 逐位相等；`PublicReceipt.outputDigests` 与 `Evidence.outputs[].digest` 逐位相等，后者按 §15.3 的冻结输出顺序派生。digest 相等不是读取授权。
 
 ### 12.4 每种模型视图
@@ -1266,43 +1317,50 @@ children/<taskId>/<outputId>/...
 
 ## 13. System prompt：固定短 card，领域内容外置
 
+profile 的 personaPrefix 为 `You are running in Singularity. Follow the role and frozen instructions assigned to this session.`，includeHarnessIdentity=false，personaSuffix 为空。四角色在第一请求前用原生同名 `deployment:persona-prefix` scoped section 覆盖，order 取 `scope.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX')`，interpolate=false；不改全局 prompt，不建第二 renderer。worker composition 使用同一 worker persona 常量计算冻结 prompt。
+
+| 角色 | scoped personaPrefix |
+|---|---|
+| worker | You are a Singularity Task worker and workflow member. Own this Task's technical work and result integration. |
+| reviewer | You are Singularity's independent acceptance reviewer. Reproduce checks against frozen artifacts and report findings under the fixed policy. |
+| proposer | You are Singularity's RSI proposer. Use sealed evidence to propose reusable Method changes within the fixed evaluation policy. |
+| summary | You are Singularity's contract summarizer. Extract only the supplied frozen contract into the declared read-only summary schema. |
+
+summary 不加载领域 workflow；reviewer 使用本实验适配后冻结的 skill；proposer 按需读取 Method/trace，不继承 worker card 和会话。四个实际 scoped assembly 须用无付费原生 fixture 检查。
+
 下列 worker card 为 V1 规范的完整平台正文。它提供当前目标、可执行动作和下一步；schema、guard 和结算负责协议约束。模板 guidance 和 skill 与该 card 冲突时，平台义务优先。
 
 ~~~text
-You own one Task's local workflow, technical work and direct-result integration.
-Start with singularity_read(kind="self"); follow all nextCursor pages, then
-submit an initial singularity_plan. Read relevant documents, skills and source
-to refine it before sustained implementation. Plan levels [0,1] or [0,1,2]:
-0=this Task, 1=direct children, 2=possible grandchildren. Create only level 1;
-each child plans deeper work. Use current contextEpoch and visible bindingIds.
-
-For a long chain, delegate stages with distinct outputs and checks to direct
-children, including sequential stages in successive batches. Decomposition
-sets responsibility and interfaces as well as parallelism. Do bounded local
-analysis, implementation, checking and integration yourself. Work directly as
-a leaf when the goal is one bounded, directly verifiable unit. Replan when
-discovery exposes further stages or an overly broad scope.
-
-Call singularity_decompose(action="prepare", bindingId=...) to read the full
-frozen example. On a later model step commit children with bindingId,
-ackPreview=previewRef.digest, and task goal/localCriteria/inputs/localOutputs.
-Commit ends this turn; wait for the batch. Read direct results and feedback,
-integrate, then prepare the next batch. Refresh stale previews via
-singularity_read(kind="status"). Use authorized inputs, workspace, skills and
-MCP tools. Public-resource work may use inputs:[].
-Read ancestor summaries when useful; send direct-parent suggestions with
-singularity_feedback and continue. On retry, read lastAttempt.runId evidence
-and reuse its frozen outputsPath. Call singularity_submit when
-declared outputs are ready for independent verification, or singularity_stop
-with a concrete blocker when the goal cannot be completed.
+Call singularity_read(kind="self"); follow every page, then submit an initial
+singularity_plan with current identities, contextEpoch and visible bindingIds.
+Inspect relevant frozen inputs, source and skills. Refine the completion path,
+dependencies, retained technical work and handoffs before sustained implementation.
+Choose the nearest next layer of work units with consumable outputs and direct
+checks. Each unit owns its scope and plans deeper work. Work locally when the
+goal is bounded and directly verifiable. Create only direct children; use
+successive batches for dependent stages.
+Read your executable checks in self and run public checks during work.
+Before admitting units, bind checks for every required criterion through
+TaskProposal.acceptanceChecks. Use returned data to correct your result.
+Call singularity_decompose(action="prepare", bindingId=...) for the full example.
+On a later model step commit bindingId, ackPreview=previewRef.digest and task.
+Commit ends this turn. After the batch, read direct results and feedback,
+integrate and check the real consumer; replan before the next batch.
+Pass complete authorized InputRefs. Use inputs:[] only for public-resource work
+independent of Task artifacts. Use the frozen scope and native tools. Read
+ancestor summaries when useful; send concerns with singularity_feedback.
+On retry read lastAttempt.runId evidence; identify failed criteria and disproved assumptions.
+Reuse authorized frozen outputsPath; replan local corrections, batches or a blocker.
+Submit declared outputs with singularity_submit for independent verification,
+or singularity_stop with a concrete blocker. A unit's local pass does not complete this Task.
 ~~~
 
 探索模式只追加：
 
 ~~~text
-Local exploration is enabled at every eligible level. Discover the local
-workflow from frozen public resources, use explore-child for its direct
-stages, and preserve useful skill/tool drafts. RSI registers later revisions.
+Discover this Task's workflow from frozen public resources. Create next-layer
+units through explore-child when useful. Keep reusable skill/tool drafts for RSI.
+Instantiate executable checks for every unit before admission.
 ~~~
 
 首条 wake：
@@ -1316,8 +1374,11 @@ parent wake：
 
 ~~~text
 Task <id>; Run <id>; reason=children-terminal; batch=<id>;
-remaining-budget=<tokens>/<steps>/<time>/<tasks>%.
-Read direct child results and feedback, then resume this level's workflow.
+remainingBudgetPct=<JSON>.
+Read direct results, failed criteria/check reports and feedback.
+Update the completion path and disproved assumptions; correct locally, create a
+new bounded batch or report a blocker. Integrate outputs and check the real
+consumer before submit.
 ~~~
 
 不给每个节点注入 journal 历史、架构解释、RSI 规则全文、verifier 使用手册或整段 Method 库。平台不通过越来越长的“请遵守协议”文字来替代 guard。
@@ -1331,8 +1392,8 @@ singularity_read
   input: { kind: self | status | resource | children | evidence | ancestor | feedback,
            id?, cursor?, page? }
   output: { data, objectRef?, nextCursor?, asOf, remainingBudgetPct }
-  resource 文本分页只接受 UTF-8；合法 CAS 的二进制输入返回 INVALID_ARGUMENT 与已物化路径，模型使用原生文件工具读取/解包。此调用失败不终止 Run；实际 CAS 读取错误仍保留宿主异常。
-  self 返回完整 TaskSpec、acceptance 公开描述、own guidance、输入/输出路径
+  resource 文本分页只接受 UTF-8；合法 CAS 的二进制输入返回 INVALID_ARGUMENT，指出 self 中的完整授权 InputRef 与已物化路径，模型使用原生文件工具读取/解包。此调用失败不终止 Run；实际 CAS 读取错误仍保留宿主异常。
+  self 返回完整授权 InputRef（含 object.id/digest）、TaskSpec、公开检查配方及派生命令/规则、acceptance 公开描述、own guidance、输入/输出路径
   evidence 以 direct child ID/result Ref ID 或 lastAttempt.runId 返回分页 JSON text {result, publicReceipt?}；result 为公开 Evidence/ExecutionRecord，publicReceipt 包含真实 criteria/reason，去除 privateReceipt；连续拼接 data 页后解析，不截断 findings
   ancestor 按祖先 contractDigest 返回 ContractSummary；摘要未生成时返回 SUMMARY_PENDING；feedback 返回 direct child 的结构化反馈
 
@@ -1393,7 +1454,7 @@ guard 同时覆盖 DSH scoped、global 和 MCP server tools。模型一次返回
 
 | 内容 | 最大值 | 超限处理 |
 |---|---:|---|
-| 固定 worker card，含探索追加 | 2 KiB | 平台 build gate |
+| 固定 worker persona/card，含探索追加 | 2 KiB | 平台 build gate |
 | NodeView，含所有当层资源/child briefs | 8 KiB | 实际渲染时校验，超限报告并调整公开配置；不丢失条目 |
 | own guidance | 8 KiB | Method precheck 拒绝 |
 | 单个 child example | 12 KiB | Method precheck 拒绝 |
@@ -1561,6 +1622,11 @@ interface PublicCriterionResult {
   readonly id: string
   readonly verdict: 'pass' | 'fail' | 'invalid'
   readonly reason: string
+  readonly checks: readonly {
+    readonly checkId: string
+    readonly verdict: 'pass' | 'fail' | 'invalid'
+    readonly reportRef: ObjectRef
+  }[]
   readonly metric?: {
     readonly name: string
     readonly unit: string
@@ -1626,7 +1692,7 @@ interface SubmissionManifest {
 3. `operationId` 非空，必须等于 `VerifyRequest.operationId` 和 `Evidence.verification.operationId`；固定值 `runId + ':verify'`。同一活跃 Run 内命令幂等返回不得重新生成；新 Run 使用新的 `runId + ':verify'`。
 4. `contractDigest` 必须等于冻结 `TaskContract.digest` 和 `Evidence.contractDigest`。
 5. `inputDigests` 是 verifier 授权输入 `ObjectRef` 的 digest 有序数组，包含冻结合同输入及已授权的 direct child outputs，必须与 `Evidence.inputs[].digest` 逐位相等并来自同一 snapshot。`outputDigests` 是从 `SubmissionManifest` 派生给 verifier 的冻结输出 `ObjectRef` 的 digest 有序数组，必须与 `Evidence.outputs[].digest` 逐位相等。不排序、不去重、不补默认值。
-6. `criteria` 的 ID 集合必须恰好等于 `TaskSpec.criteria` 中 `required=true` 的 ID 集合；每条恰好一次；缺项、重复、未知 ID、非 required criterion 均拒绝。空 required set 是否允许准入由既有 admission policy 决定；不得增加“空 criterion 自动 verified”的放宽。
+6. `criteria` 的 ID 集合必须恰好等于 `TaskSpec.criteria` 中 `required=true` 的 ID 集合；每条恰好一次；缺项、重复、未知 ID、非 required criterion 均拒绝。Task 准入至少一个 required criterion，其每项 checks 均非空。每个结果的 checks 按冻结合同顺序恰好覆盖一次；缺失、重复、额外或顺序不匹配均 invalid。
 7. `reason` 对所有 verdict 必填且必须是公开可读文本；不得包含隐藏用例答案、fixture 内部路径、golden data 或 private verifier recipe。
 8. `metric`/`score` 只允许出现在 `pass`/`fail` criterion；`invalid` criterion 不得携带 `metric` 或 `score`。`metric.name`/`metric.unit` 非空，`metric.value` 与 `score` 必须是有限 number（拒绝 `NaN`、`Infinity`、字符串和超出 JSON 数值模型的输入）。`score` 必须同时出现 `metric`。
 9. `exit` 是原始进程终止状态：`code` 为整数或 `null`，`signal` 为字符串或 `null`；对实际产生终止状态且未超时的进程，恰好一个非 `null`。`signal` 只记录真实 signal，不能用来表达 timeout。两者都为 `null` 且 `timedOut=false` 使 receipt 无效。
@@ -1634,6 +1700,10 @@ interface SubmissionManifest {
 11. receipt 不包含 `at`/`asOf`/随机 ID/agent ID/usage；这些要么属于 Evidence/DSH 记录，要么会破坏内容寻址和重放幂等。
 12. `digest` 是 `object` domain 的最外层 seal，不是新的业务字段；`PublicReceipt` 本身不是 Evidence，host 把它放入 `Evidence.verification.publicReceipt` 后才形成验收证据。
 13. receipt 不设总 verdict 字段；`verified`/`failed`/`invalid` 只由 host 按本节规则派生，避免 verifier 用总 verdict 绕过逐 criterion 校验。
+14. 每项 `reportRef` 引用 object-domain `PublicCheckReport`，共同头为 `v,operationId,contractDigest,criterionId,checkId,recipeRef,inputDigests,outputDigests,exit,timedOut,verdict`，另含配方 resultSchema 约束的 `data` 和外层 `digest`。host 校验报告 CAS 身份、合同与 receipt 身份、检查顺序及 verdict 一致性。数据记录覆盖量、实际指标和公开失败定位；空用例、少跑、缺报告由领域规则判定，不能以 exit=0 替代。
+15. provider 的宿主代码通过已有 CasObjectWriter 发布公开报告，VerifierRequest 只给 readObject 和取消信号；review Agent 没有 CAS writer，也不能填写任意 reportRef。失败 check 不得被 review 改为 pass；checks 全 pass 后 review 仍可给 criterion fail。报告只随已授权 own/direct-child/lastAttempt receipt 与公共 RSI trace 派生读取权，不开放任意 CAS。
+
+`SubmissionManifest.checks` 继续只证明文件冻结检查，与业务 executable checks 分开。检查报告没有新 fact、表、激活、独立重试、wake 或计费；无提交/取消沿 ExecutionRecord，不伪造检查执行。
 
 **Host 分类、exit 与 timeout**
 
@@ -2108,7 +2178,7 @@ interface DomainAdapter {
 }
 ~~~
 
-verify 的实现与可信级别由部署在启动前确定：公开可信案例可使用进程内领域函数；私有 fixtures、不可信 worker/MCP 或必须强停的 verifier，必须先用现成 OS/容器/固定 broker 建立真实读取、网络和进程边界，不能由 harness 的目录/HOME/metadata 检查替代。adapter 必须转发宿主 deadline 与 operator 取消合并后的 AbortSignal 并等待自己拥有的工作退出；外部取消复用子树取消结算，只有本次宿主 deadline 才分类 verifier-timeout，上游同名 TimeoutError 保留原异常；任意不合作进程内函数不在强停保证内。verify 接收 §15.3 的 `VerifyRequest` 并返回 strict `PublicReceipt`；receipt 中公开 criterion 与 metric，不公开 private fixtures。`resolveAcceptance` 返回 §4.0 `object` domain 的冻结 acceptance/provider identity，`PublicReceipt.provider` 必须与其及 `Evidence.verification.provider` 完全相等。host 校验 receipt 身份、digest、criteria、`exit`、`timedOut` 并按 §15.3 派生 outcome；verifier 自报总 verdict 或 exit code 不是验收权威。`privateReceipt` 保持 opaque，不进入 worker/RSI/模型视图。compare 只能读取 public Evidence；它不能发 journal fact、创建 Agent、修改 Method 或改变 plan；invalid/missing evidence 不得作为零分。
+verify 的实现与可信级别由部署在启动前确定：公开可信案例可使用进程内领域函数；私有 fixtures、不可信 worker/MCP 或必须强停的 verifier，必须先用现成 OS/容器/固定 broker 建立真实读取、网络和进程边界，不能由 harness 的目录/HOME/metadata 检查替代。adapter 必须转发宿主 deadline 与 operator 取消合并后的 AbortSignal 并等待自己拥有的工作退出；外部取消复用子树取消结算，只有本次宿主 deadline 才分类 verifier-timeout，上游同名 TimeoutError 保留原异常；任意不合作进程内函数不在强停保证内。verify 接收 §15.3 的 `VerifyRequest` 并返回 strict `PublicReceipt`；receipt 中公开 criterion 与 metric，不公开 private fixtures。`resolveAcceptance` 返回 §4.0 `object` domain 的冻结 acceptance/provider identity，`PublicReceipt.provider` 必须与其及 `Evidence.verification.provider` 完全相等。host 校验 receipt 身份、digest、criteria、逐 check 报告、`exit`、`timedOut` 并按 §15.3 派生 outcome；verifier 自报总 verdict 或 exit code 不是验收权威。`privateReceipt` 保持 opaque，不进入 worker/RSI/模型视图。compare 只能读取 public Evidence；它不能发 journal fact、创建 Agent、修改 Method 或改变 plan；invalid/missing evidence 不得作为零分。
 
 领域包发布要带：
 
@@ -2252,7 +2322,7 @@ C-24 single-case gain with validation regression is not improved
 
 ~~~text
 版本：V1 发布规范
-修订：2026-11-02 纳入 amendment 006–015（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 多实例、原生工具参数失败、局部 workflow、探索目标验收与固定产物出口）
+修订：2026-11-02 纳入 amendment 006–016（前置条件、原生优先、完整 Ref、角色说明、可执行验收合同与公开 CAS 报告）
 权威文件：docs/framework.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威
@@ -2291,7 +2361,7 @@ C-24 single-case gain with validation regression is not improved
 
 实现默认沿 DSH 公开接口或现成库完成。保留自定义层必须提供具体原生调用路径，并比较本项目实际接入后的状态、分支和适配；只有明确证明原生方案更复杂时才保留。“暂不能证明等价”“库存在不代表可替代”都不能单独充当保留理由。可由操作者保证的条件在启动前固定，runtime 不为环境违约另建探测、恢复或兜底系统。输入不符合合同或权限时返回对应错误，普通执行失败按现有分类结束。改变公开字段、状态或 authority 时提出 amendment；独立正常功能继续推进。
 
-当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014/015 为准）：
+当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006–016 为准）：
 
 | Amendment | 状态 | 纳入内容 |
 |---|---|---|
@@ -2315,6 +2385,12 @@ C-24 single-case gain with validation regression is not improved
 | 014 | 2026-11-02 用户授权持续修复实跑与框架；修复实跑发现的探索产物丢失 | explore-child 静态继承 required result/ tree 与 output ID result；localOutputs 可省略且只追加 supporting 输出。root 仍由 operator/domain 定义输出；不增加运行中合同修改、动态注册或恢复逻辑 |
 
 | 015 | 2026-11-02 用户授权持续修复实跑与框架；修复实跑发现的盲重试与预算误报 | 复用 evidence 读取向 direct parent/retry 公开分页 receipt findings；本 Task 最近 closed Run 的冻结输出经现有挂载器提供，NodeView 加 derived outputsPath。预算百分比沿冻结 Task 总量和首次 Run 时间累计，slots/depth 反映实际剩余；不增加 fact、工具、恢复状态或预算账本 |
+
+| 016 | 2026-11-02 用户明确按模型工作能力修复规划和任务契约范例启动修复，授权子代理、删旧路径、测试后 PR | 完整授权 InputRef；四角色 scoped persona 与一致工作指引；TaskProposal.acceptanceChecks、required criterion 非空 checks、领域授权 recipeRef 与冻结 params；self/prepare 派生预览；公开自检和冻结独立复验；PublicReceipt.criteria[].checks 与 CAS 报告身份。无新 authority、fact、工具、调度器或账本；新执行根使用新合同，删除旧生产路径，不兼容历史合同。 |
+
+amendment 016 对应 §4–§8、§11–§15、§17–§20：此前 InputRef 可见性不全、只写文字 criterion 和局部产物误判通过，无法表达派发者的可执行验收职责。用户本次明确要求依据两份规划完成实现，构成本修订授权；不把文档草案自身当批准记录。parent 在发现下一层责任时定义输入、可消费输出与检查，准入前冻结；root oracle/scorer、live 合同与隐藏数据不可演化。首轮保留 PlanningSketch 原结构、probe/required 与多批语义；不新增 workflow/dependency/position schema、任意检查代码发布或 trace 语义判定器。
+
+复杂度与迁移：只扩现有合同、模板、公开资源和 receipt，沿 DSH lifecycle/registry/MCP、现有 CAS writer 与读授权。新字段强制迁移所有生产消费者和测试；历史 execution root 保留原资产只读，不做新旧双写或兼容分支。阶段 A 是历史研究基线，完成 B 后只发布 B 文本。预算沿唯一总账与绝对 deadline，用户本轮测试上限覆盖旧配置为 12 小时、1,000,000,000 reported tokens、4,000 次调用，每半小时核实进度及实际修改效果。规范实施与模型收益证据分别记录，不以 fixture 推断模型内部认知或芯片改善。
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

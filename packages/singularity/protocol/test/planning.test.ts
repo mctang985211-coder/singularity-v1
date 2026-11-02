@@ -191,7 +191,7 @@ void test('PlanningSketch rejects model-supplied authority fields at the sketch 
     ['required', true],
     ['role', 'deliverable'],
     ['join', 'required'],
-    ['criteria', [{ id: 'criterion-model', statement: 'model acceptance', required: true }]],
+    ['criteria', [{checks: [{checkId: 'criterion-model', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'criterion-model', statement: 'model acceptance', required: true }]],
     ['digest', digestA],
   ]
 
@@ -213,7 +213,7 @@ void test('PlanningSketch rejects authority fields inside planning levels', () =
     ['join', 'required'],
     ['required', true],
     ['role', 'deliverable'],
-    ['criteria', [{ id: 'criterion-model', statement: 'model acceptance', required: true }]],
+    ['criteria', [{checks: [{checkId: 'criterion-model', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'criterion-model', statement: 'model acceptance', required: true }]],
     ['taskId', 'task-model'],
     ['digest', digestA],
   ]

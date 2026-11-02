@@ -7,7 +7,7 @@ import { canonicalize,contractSummarySchema,parseProtocolValue } from '@singular
 
 import { snapshotSession } from './agent.ts'
 import { DecomposeError,throwCollectedErrors } from './errors.ts'
-import { assertPromptBudget } from './prompt.ts'
+import { assertPromptBudget,SUMMARY_PERSONA } from './prompt.ts'
 import { withToolExample } from './tool-example.ts'
 import type { TaskReadQuery,TaskReadResult } from './tools.ts'
 import { createWakeMessage } from './wake.ts'
@@ -192,6 +192,8 @@ export class ContractSummaryService {
             }
             return next()
           })
+          ctx.systemPrompt.section({ name: 'deployment:persona-prefix',
+            order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'), text: SUMMARY_PERSONA, interpolate: false })
           ctx.systemPrompt.section({ name: 'singularity:contract-summary', order: 100, text: SUMMARY_CARD, interpolate: false })
           ctx.systemPrompt.section({ name: 'singularity:worker-card', order: 100, text: '', interpolate: false })
           ctx.tools.register(withToolExample(defineTool({

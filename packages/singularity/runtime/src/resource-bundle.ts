@@ -63,6 +63,22 @@ export async function readTreeBundle(
   ref: Ref,
   maxBytes: number,
 ): Promise<TreeBundle> {
+  const manifest = await readTreeManifest(reader, ref, maxBytes)
+  const contents = new Map<string, Uint8Array>()
+  for (const file of manifest.files) {
+    const bytes = await readObject(reader, file.object)
+    if (bytes.byteLength !== file.bytes) {
+      throw new TreeBundleError(
+        `tree bundle file ${JSON.stringify(file.path)} is ${String(bytes.byteLength)} bytes, expected ${String(file.bytes)}`,
+      )
+    }
+    contents.set(file.path, bytes)
+  }
+  return { manifest, contents }
+}
+
+/** Resolve declared tree leaves without loading every file into a model view. */
+export async function readTreeManifest(reader: CasObjectReader, ref: Ref, maxBytes: number): Promise<SealedTreeManifest> {
   const manifestBytes = await readObject(reader, ref)
   let manifest: SealedTreeManifest
   try {
@@ -73,26 +89,11 @@ export async function readTreeBundle(
   if (computeDigest('object', manifest) !== manifest.digest || manifest.digest !== ref.digest) {
     throw new TreeBundleError('tree bundle manifest digest does not match its structured object ref')
   }
-  const { files, digest } = manifest
-
-  const declaredBytes = files.reduce((sum, file) => sum + file.bytes, 0)
+  const declaredBytes = manifest.files.reduce((sum, file) => sum + file.bytes, 0)
   if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maxBytes) {
     throw new TreeBundleError(`tree bundle declares ${String(declaredBytes)} bytes, above the ${String(maxBytes)} byte cap`)
   }
-  const contents = new Map<string, Uint8Array>()
-  for (const file of files) {
-    const bytes = await readObject(reader, file.object)
-    if (bytes.byteLength !== file.bytes) {
-      throw new TreeBundleError(
-        `tree bundle file ${JSON.stringify(file.path)} is ${String(bytes.byteLength)} bytes, expected ${String(file.bytes)}`,
-      )
-    }
-    contents.set(file.path, bytes)
-  }
-  return {
-    manifest: { v: 1, kind: 'tree', files, digest },
-    contents,
-  }
+  return manifest
 }
 
 async function readObject(reader: CasObjectReader, ref: Ref): Promise<Uint8Array> {

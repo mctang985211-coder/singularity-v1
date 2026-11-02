@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { publicCheckResultSchema } from './checks.ts'
 
 import { digestSchema, seal, verifyDigest } from './digest.ts'
 import type { Digest } from './digest.ts'
@@ -8,7 +9,7 @@ import { refSchema, sameRef } from './refs.ts'
 import type { Ref } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
 import { verifyTaskContract } from './task.ts'
-import type { OutputSpec, TaskContract } from './task.ts'
+import type { OutputSpec, TaskContract, TaskCriterion } from './task.ts'
 
 /**
  * `TaskContract.acceptance` is a frozen acceptance policy/provider identity.
@@ -36,6 +37,7 @@ export const publicCriterionResultSchema = closedObject({
   id: z.string().min(1),
   verdict: z.enum(['pass', 'fail', 'invalid']),
   reason: z.string().min(1),
+  checks: z.array(publicCheckResultSchema),
   metric: publicMetricSchema.optional(),
   score: finiteNumberSchema.optional(),
 }).superRefine((criterion, ctx) => {
@@ -138,7 +140,7 @@ export interface PublicReceiptExpectation {
   readonly contractDigest: Digest
   readonly inputDigests: readonly Digest[]
   readonly outputDigests: readonly Digest[]
-  readonly requiredCriteria: readonly string[]
+  readonly requiredCriteria: readonly TaskCriterion[]
 }
 
 /** Host-derived receipt classification; no total verdict exists in the receipt. */
@@ -190,7 +192,7 @@ export function validatePublicReceipt(
     return invalidReceipt('receipt outputDigests do not match the frozen output snapshot')
   }
 
-  const requiredIds = new Set(expected.requiredCriteria)
+  const requiredIds = new Set(expected.requiredCriteria.map(criterion => criterion.id))
   if (requiredIds.size !== expected.requiredCriteria.length) {
     return invalidReceipt('expected required criteria contain duplicate ids')
   }
@@ -210,6 +212,18 @@ export function validatePublicReceipt(
   for (const id of counts.keys()) {
     if (!requiredIds.has(id)) {
       return invalidReceipt(`receipt contains non-required criterion ${JSON.stringify(id)}`)
+    }
+  }
+
+  for (const criterion of expected.requiredCriteria) {
+    const actual = receipt.criteria.filter(result => result.id === criterion.id)[0]
+    if (actual.checks.length !== criterion.checks.length
+      || actual.checks.some((check, index) => check.checkId !== criterion.checks[index].checkId)) {
+      return invalidReceipt(`criterion ${criterion.id} checks do not exactly match the frozen contract order`)
+    }
+    if (actual.checks.some(check => check.verdict === 'invalid')) return invalidReceipt(`criterion ${criterion.id} has an invalid check`)
+    if (actual.verdict === 'pass' && actual.checks.some(check => check.verdict !== 'pass')) {
+      return invalidReceipt(`criterion ${criterion.id} passed despite a failed check`)
     }
   }
 

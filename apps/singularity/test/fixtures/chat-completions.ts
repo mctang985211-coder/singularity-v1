@@ -1,6 +1,9 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
+import { computeDigest } from '@singularity/protocol'
+import type { JsonValue } from '@singularity/protocol'
+
 /** One model response the fixture emits for a captured request. */
 export interface FixtureReply {
   readonly reasoning?: string
@@ -71,6 +74,19 @@ export function wireText(content: WireChatMessage['content']): string {
   if (typeof content === 'string') return content
   if (content === null || content === undefined) return ''
   return content.map(part => part.text ?? '').join('')
+}
+
+/** Operator preflight records the actual scoped request without publishing its text. */
+export function roleSurfaceDiagnostic(role: 'worker' | 'reviewer' | 'proposer' | 'summary', request: CapturedChatRequest, persona: string): string {
+  const messages = (request.messages ?? []).filter(message => message.role === 'system' || message.role === 'developer')
+    .map(message => ({ role: message.role ?? '', text: wireText(message.content) }))
+  if (!messages.some(message => message.text.includes(persona))) throw new Error(`The actual ${role} system prompt lacks its frozen persona`)
+  return `SINGULARITY_ROLE_SURFACE ${JSON.stringify({ v: 1, role,
+    personaDigest: computeDigest('object', { v: 1, text: persona }),
+    promptDigest: computeDigest('object', { v: 1, messages }),
+    toolSchemaDigest: computeDigest('object', { v: 1, tools: (request.tools ?? []) as unknown as JsonValue }),
+    tools: toolSchemaNames(request), model: request.model, reasoningEffort: request.reasoning_effort,
+  })}`
 }
 
 /** All non-empty message text and tool-call argument text in a captured request. */

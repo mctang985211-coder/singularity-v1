@@ -20,6 +20,7 @@ import { sameRef } from './skill-resources.ts'
 import type { CasDigestDomain } from './store.ts'
 import { publicVerificationOf } from './verification.ts'
 import type { CasObjectReader } from './workspace.ts'
+import { readAcceptanceChecks } from './checks.ts'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
@@ -100,6 +101,12 @@ export async function sealPublicTrace(request: SealPublicTraceRequest): Promise<
   const usage: UsageRecord = { inputTokens: 0, outputTokens: 0, steps: 0, unknownRequests: 0 }
   const totals = { ...usage }
   const method = parseProtocolValue(methodRevisionSchema, await readJson(service, root.contract.method, 'method'))
+  for (const acceptance of [root.contract.acceptance, ...method.templates.map(template => template.acceptancePolicy)]) {
+    await authorize(acceptance)
+    const checks = await readAcceptanceChecks(service, acceptance)
+    for (const asset of checks.recipes) await authorize(asset.ref)
+    for (const resource of checks.policy.checkResources) await authorize(resource)
+  }
   await authorize(root.contract.method, 'method')
   for (const template of method.templates) {
     await authorize(template.guidance)
@@ -119,6 +126,10 @@ export async function sealPublicTrace(request: SealPublicTraceRequest): Promise<
     await authorize(exploration)
     for (const document of resources.documents) await authorize(document.object)
     for (const ref of [...resources.baseTools, resources.fallbackAcceptance]) await authorize(ref)
+    await authorize(resources.fallbackExample)
+    const checks = await readAcceptanceChecks(service, resources.fallbackAcceptance)
+    for (const asset of checks.recipes) await authorize(asset.ref)
+    for (const resource of checks.policy.checkResources) await authorize(resource)
     for (const skill of resources.skills) await authorizeTree(service, skill.bundle, authorize)
     for (const tool of resources.tools) {
       await authorizeTree(service, tool.server.bundle, authorize)
@@ -142,10 +153,11 @@ export async function sealPublicTrace(request: SealPublicTraceRequest): Promise<
       const receipt = validatePublicReceipt(publicReceipt, {
         provider: original.verification.provider, operationId: original.verification.operationId,
         contractDigest: task.contract.digest, inputDigests: original.inputs.map(ref => ref.digest),
-        outputDigests: original.outputs.map(ref => ref.digest), requiredCriteria: task.contract.spec.criteria.filter(criterion => criterion.required).map(criterion => criterion.id),
+        outputDigests: original.outputs.map(ref => ref.digest), requiredCriteria: task.contract.spec.criteria.filter(criterion => criterion.required),
       })
       if (receipt.verdict === 'invalid' || receipt.verdict !== close.classification) throw new Error('Run public receipt does not match its terminal classification')
       await authorize(original.verification.publicReceipt)
+      for (const criterion of receipt.receipt.criteria) for (const check of criterion.checks) await authorize(check.reportRef)
       // The original Evidence remains operator/evaluator scoped; expose its public projection.
       evidence.push({ evidenceRef: close.evidenceRef, evidence: {
         v: original.v, task: original.task, runId: original.runId, contractDigest: original.contractDigest,

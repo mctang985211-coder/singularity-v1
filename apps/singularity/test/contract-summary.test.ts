@@ -2,18 +2,23 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type { ContractSummary, TaskRunState } from '@singularity/protocol'
-import { ContractSummaryService, DomainStore } from '@singularity/runtime'
+import { ContractSummaryService, DomainStore, SUMMARY_PERSONA, WORKER_PERSONA } from '@singularity/runtime'
 
 import { agentOptions, fixtureUsage, makeScenario } from './task-fixture.ts'
 import type { Scenario } from './task-fixture.ts'
 import { withHarness } from './run-fixture.ts'
-import { messageTexts } from './fixtures/chat-completions.ts'
+import { messageTexts,roleSurfaceDiagnostic } from './fixtures/chat-completions.ts'
 
-void test('ancestor cache miss runs one independent scoped summary session and settles source usage', { timeout: 120_000 }, async () => {
+void test('ancestor cache miss runs one independent scoped summary session and settles source usage', { timeout: 120_000 }, async t => {
   let scenario: Scenario | undefined
   let source: ContractSummary | undefined
   await withHarness((request, index) => {
     assert.ok(scenario)
+    const systemText = messageTexts(request).join('\n')
+    assert.ok(systemText.includes(SUMMARY_PERSONA))
+    assert.equal(systemText.includes(WORKER_PERSONA), false)
+    assert.equal(systemText.includes('helpful software engineer assistant'), false)
+    if (index === 0) t.diagnostic(roleSurfaceDiagnostic('summary', request, SUMMARY_PERSONA))
     if (index === 0) return { toolCalls: [{ id: 'bad-summary', name: 'singularity_summary_submit', arguments: '{"summary":' }], usage: fixtureUsage(index) }
     assert.equal(index, 1)
     assert.match(messageTexts(request).join('\n'), /"status":"failed"/)

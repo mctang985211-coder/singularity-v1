@@ -1,3 +1,4 @@
+import { inventoryCheck } from './index.ts'
 import { computeDigest, sealMethodRevision } from '@singularity/protocol'
 import type { JsonValue, MethodRevision, Ref, TaskExample } from '@singularity/protocol'
 
@@ -29,12 +30,12 @@ export function inventoryGuidedBaseline(acceptance: Ref, scenario: 'single-csv' 
     goal: { summary: 'Reconcile all signed inventory transactions and produce the exact report.', deliverable: 'report.json',
       scope: ['Sum signed deltas by SKU and retain every SKU.'], constraints: ['Use integer arithmetic and ascending SKU order.'] },
     inputs: [{ id: 'transactions', exampleText: 'sku,delta\nBOLT,4\nBOLT,-4\nNUT,-2\n' }],
-    localCriteria: [], localOutputs: [],
+    localCriteria: [], localOutputs: [], acceptanceChecks: [],
   }
   const exampleRef = asset('inventory:example:report', example as unknown as JsonValue)
   const obligations = {
     instanceSchema: {},
-    requiredCriteria: [{ id: 'inventory-exact', statement: 'The frozen report contains the exact row count and sorted per-SKU integer totals for the frozen input CSV.', required: true }],
+    requiredCriteria: [{ id: 'inventory-exact', statement: 'The frozen report contains the exact row count and sorted per-SKU integer totals for the frozen input CSV.', required: true, checks: [inventoryCheck()] }],
     requiredOutputs: [{ id: 'report', path: 'report.json', kind: 'file' as const, role: 'deliverable' as const, required: true }],
     acceptancePolicy: acceptance, skills: [], tools: [],
   }

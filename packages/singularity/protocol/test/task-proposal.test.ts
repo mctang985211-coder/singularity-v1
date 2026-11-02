@@ -32,7 +32,7 @@ const goal = {
   constraints: ['treat the RTL as a read-only input', 'cover every input combination'],
 }
 
-const baseProposal: TaskProposal = {
+const baseProposal: TaskProposal = {acceptanceChecks: [],
   goal,
   localCriteria: [
     { id: 'traceable', statement: 'Results should be traceable to this input' },
@@ -88,7 +88,7 @@ const forbiddenProposalFields: readonly (readonly [string, unknown])[] = [
   ['supersedesChildIds', ['child-1']],
   ['feedbackRef', ref('feedback-1')],
   ['digest', digestA],
-  ['criteria', [{ id: 'criterion-1', statement: 'model-supplied acceptance', required: true }]],
+  ['criteria', [{checks: [{checkId: 'criterion-1', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'criterion-1', statement: 'model-supplied acceptance', required: true }]],
 ]
 
 const proposalUnknownFields: readonly {
@@ -126,7 +126,7 @@ const proposalUnknownFields: readonly {
 void test('TaskProposal accepts a complete proposal and a minimal proposal', () => {
   assert.deepEqual(parseProtocolValue(taskProposalSchema, baseProposal), baseProposal)
 
-  const minimal: TaskProposal = { goal, inputs: [] }
+  const minimal: TaskProposal = {acceptanceChecks: [], goal, inputs: [] }
   const parsed = parseProtocolValue(taskProposalSchema, minimal)
   assert.deepEqual(parsed, minimal)
   assert.equal('localCriteria' in parsed, false)
@@ -189,7 +189,7 @@ void test('local values keep the frozen value constraints', () => {
 })
 
 void test('TaskExample is derived from TaskProposal with embedded example inputs', () => {
-  const example: TaskExample = {
+  const example: TaskExample = {acceptanceChecks: [],
     goal,
     localCriteria: baseProposal.localCriteria,
     inputs: [
@@ -218,7 +218,7 @@ void test('TaskExample is derived from TaskProposal with embedded example inputs
 })
 
 void test('TaskExample rejects unknown fields, fake refs, and missing example text', () => {
-  const example: TaskExample = {
+  const example: TaskExample = {acceptanceChecks: [],
     goal,
     localCriteria: baseProposal.localCriteria,
     inputs: [{ id: 'rtl-example', exampleText: 'module add4; endmodule' }],
@@ -289,7 +289,7 @@ void test('decompose prepare and commit inputs accept their frozen shapes', () =
     action: 'commit',
     children: [
       commitChild,
-      { bindingId: 'second-binding', ackPreview: digestB, task: { goal, inputs: [] } },
+      { bindingId: 'second-binding', ackPreview: digestB, task: {acceptanceChecks: [], goal, inputs: [] } },
     ],
   }
   assert.deepEqual(parseProtocolValue(decomposeInputSchema, ordered), ordered)
@@ -408,7 +408,7 @@ void test('decompose commit accepts only TaskProposal, never a complete TaskCont
       action: 'commit',
       children: [{
         ...commitChild,
-        task: { ...baseProposal, criteria: [{ id: 'c', statement: 's', required: true }] },
+        task: { ...baseProposal, criteria: [{checks: [{checkId: 'c', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'c', statement: 's', required: true }] },
       }],
     }),
   )

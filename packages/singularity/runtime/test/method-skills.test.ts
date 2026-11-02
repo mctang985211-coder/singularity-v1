@@ -1,3 +1,4 @@
+import {checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -143,7 +144,7 @@ function contractFor(method: MethodRevision, skillRefs: readonly Ref[]): TaskCon
     taskId: 'task:skill',
     spec: {
       goal: { summary: 'Exercise one frozen skill.', deliverable: 'out.txt', scope: [], constraints: [] },
-      criteria: [],
+      criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:checkRecipeRef,params:{}}]}],
       inputs: [],
       outputs: [],
     },

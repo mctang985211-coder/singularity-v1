@@ -1,3 +1,4 @@
+import {checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -38,7 +39,7 @@ function contract(outputs: readonly OutputSpec[]): TaskContract {
         scope: [],
         constraints: [],
       },
-      criteria: [],
+      criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:checkRecipeRef,params:{}}]}],
       inputs: [],
       outputs: [...outputs],
     },

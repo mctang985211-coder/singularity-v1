@@ -13,13 +13,13 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId,SessionSeq } from '@deepseek-ai/dsh-session'
 import type { RoundPlan } from '@singularity/protocol'
 import type { PublicEvaluationEvidence } from '@singularity/runtime'
-import { createWakeMessage,snapshotSession } from '@singularity/runtime'
+import { createWakeMessage,snapshotSession,REVIEWER_PERSONA,WORKER_PERSONA } from '@singularity/runtime'
 
 import { runBuckyballCampaign } from '../examples/buckyball-campaign.ts'
 import { compareFrontendPpa } from '../examples/buckyball-acceptance.ts'
 import { BUCKYBALL_FRONTEND_CAMPAIGN } from '../examples/buckyball-frontend-task.ts'
 import { nativeAccounting } from '../examples/native-accounting.ts'
-import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
+import { messageTexts,roleSurfaceDiagnostic,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
 import { withHarness } from './run-fixture.ts'
 import { agentOptions } from './task-fixture.ts'
 
@@ -143,8 +143,8 @@ void test('PPA comparator normalizes units and rejects incomplete correctness or
   const caseRef = { id: 'frontend-case', digest: `sha256:${'a'.repeat(64)}` }
   const plan = { cases: [caseRef], validationCases: [], trialsPerCase: 1 } as unknown as RoundPlan
   const trial = (arm: 'baseline' | 'candidate', factor: number, conditions = 'smic180/tt/1.8V/25C/activity=.1/top=same') => {
-    const ppa = { power: 10 * factor, delay: 2 * factor, area: 100 * factor, conditions, evidence: 'independently reproduced synthesis report' }
-    return { caseRef, arm, verdict: 'verified', receipt: { criteria: [{ id: 'ppa-evidence', verdict: 'pass', reason: JSON.stringify(ppa),
+    const ppa = { power: 10 * factor, delay: 2 * factor, area: 100 * factor, conditionsDigest: conditions, design: { config: arm }, boundary: { workload: 'same' }, report: { path: 'synthesis.rpt', digest: `sha256:${'b'.repeat(64)}` }, command: ['synthesize'] }
+    return { caseRef, arm, verdict: 'verified', checkReports: [{ criterionId: 'ppa-evidence', verdict: 'pass', data: { ppa } }], receipt: { criteria: [{ id: 'ppa-evidence', verdict: 'pass', reason: JSON.stringify(ppa),
       metric: { name: 'ppa-weighted-cost', unit: 'mW^0.3 ns^0.4 um2^0.3', value: ppa.power ** 0.3 * ppa.delay ** 0.4 * ppa.area ** 0.3 } }] } } as unknown as PublicEvaluationEvidence
   }
   const good = compareFrontendPpa(plan, [trial('baseline', 1), trial('candidate', 0.5)])
@@ -175,13 +175,24 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   const oldPath = process.env.PATH
   process.env.PATH = `${bin}:${oldPath ?? ''}`
   t.after(() => { if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath })
-  let reviews = 0, proposers = 0, exhaustReview = false
+  let reviews = 0, proposers = 0, exhaustReview = false, exhaustSource = false, operatorStop = false
+  const recordedRoles = new Set<string>()
   const fixture = await startChatCompletionsFixture((request, index) => {
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `chip-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
       usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
     if (toolSchemaNames(request).includes('buckyball_review_submit')) {
+      const prompt = messageTexts(request).join('\n')
+      assert.ok(prompt.includes(REVIEWER_PERSONA))
+      assert.ok(!prompt.includes(WORKER_PERSONA))
+      assert.ok(!prompt.includes('You are a helpful software engineer assistant.'))
+      if (!recordedRoles.has('reviewer')) {
+        t.diagnostic(roleSurfaceDiagnostic('reviewer', request, REVIEWER_PERSONA))
+        recordedRoles.add('reviewer')
+      }
       if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens,
         completionTokens: 10, totalTokens: BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens + 10 } }
+      if (exhaustSource) return { ...call('job_list', {}), usage: { promptTokens: BUCKYBALL_FRONTEND_CAMPAIGN.phases.source.maxTokens,
+        completionTokens: 10, totalTokens: BUCKYBALL_FRONTEND_CAMPAIGN.phases.source.maxTokens + 10 } }
       if (!toolNames(request).includes('buckyball_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
         name: 'buckyball_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
@@ -208,8 +219,13 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     const data = JSON.parse(pages.map(value => value.data).join('')) as { taskId: string; runId: string; contractDigest: string }
     if (!calls.includes('singularity_plan')) return call('singularity_plan', { sketch: { v: 1, taskId: data.taskId, runId: data.runId, sourceContract: data.contractDigest, contextEpoch: last.contextEpoch,
       objective: 'Deliver the incomplete fixture honestly.', levels: [0, 1].map(level => ({ level, purpose: 'Inspect local output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })), directPlan: [], assumptions: [] } })
+    if (operatorStop) return call('bash', { description: 'Wait for operator cancellation.', command: `printf started > '${join(directory, 'operator-started')}'; sleep 60` })
     if (!messageTexts(request).join('\n').includes('Resource is binary.')) return call('singularity_read', { kind: 'resource', id: 'public-seed' })
     assert.ok(toolSchemaNames(request).includes('mcp__buckyball__bbdev'), 'the frozen domain MCP is available in each fresh Run')
+    if (!recordedRoles.has('worker')) {
+      t.diagnostic(roleSurfaceDiagnostic('worker', request, WORKER_PERSONA))
+      recordedRoles.add('worker')
+    }
     if (!calls.includes('mcp__buckyball__bbdev')) return call('mcp__buckyball__bbdev', { project: baseline, args: ['--help', 'literal;$(false)'] })
     if (!calls.includes('bash')) {
       assert.match(messageTexts(request).join('\n'), /frontend/)
@@ -266,4 +282,48 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     assert.ok(facts.some(value => value.type === 'task/closed' && value.data.scope === 'subtree'))
     assert.equal(facts.some(value => value.type === 'rsi/round-opened'), false)
   } finally { db.close() }
+  exhaustReview = false
+  exhaustSource = true
+  const phaseRoot = join(directory, 'source-quota-exhausted')
+  await runBuckyballCampaign(phaseRoot, prepared)
+  const phaseResult = JSON.parse(await readFile(join(phaseRoot, 'result.json'), 'utf8')) as {
+    failure?: string; outcomes: { source: string }[]; usage: { requests: number; inputTokens: number; outputTokens: number; unknown: number }
+  }
+  assert.equal(phaseResult.failure, undefined)
+  assert.equal(phaseResult.outcomes.length, 3)
+  assert.ok(phaseResult.outcomes.every(value => value.source === 'cancelled'))
+  assert.equal(proposers, 6, 'source quota cancellation preserves the remaining campaign budget for RSI')
+  assert.equal(phaseResult.usage.unknown, 0, 'a refused stage request is not purchased or charged as unknown usage')
+  assert.ok(phaseResult.usage.inputTokens + phaseResult.usage.outputTokens < BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens)
+  exhaustSource = false
+  operatorStop = true
+  const cancellation = new AbortController(), operatorRoot = join(directory, 'operator-stopped')
+  const requestsBefore = fixture.requests.length, proposersBefore = proposers
+  const pending = runBuckyballCampaign(operatorRoot, prepared, {
+    deadlineAt: Date.now() + 60_000, maxRequests: 100, maxReportedTokens: 100_000,
+    signal: cancellation.signal,
+  })
+  for (let i = 0; i < 500; i += 1) {
+    if (await readFile(join(directory, 'operator-started'), 'utf8').catch(() => '') === 'started') break
+    await delay(20)
+  }
+  assert.equal(await readFile(join(directory, 'operator-started'), 'utf8'), 'started')
+  cancellation.abort('operator-stop')
+  await pending
+  const operatorResult = JSON.parse(await readFile(join(operatorRoot, 'result.json'), 'utf8')) as {
+    failure?: string; outcomes: unknown[]; usage: { requests: number; completed: number; unknown: number }
+  }
+  assert.equal(operatorResult.failure, undefined)
+  assert.deepEqual(operatorResult.outcomes, [])
+  assert.equal(operatorResult.usage.requests, fixture.requests.length - requestsBefore)
+  assert.equal(operatorResult.usage.completed, operatorResult.usage.requests)
+  assert.equal(operatorResult.usage.unknown, 0)
+  assert.equal(proposers, proposersBefore, 'operator cancellation does not buy an RSI request')
+  const operatorDb = new DatabaseSync(join(operatorRoot, 'domain/domain.sqlite'), { readOnly: true })
+  try {
+    const facts = operatorDb.prepare('SELECT payload FROM events ORDER BY seq').all()
+      .map(row => JSON.parse(row.payload as string) as { type: string; data: { scope?: string } })
+    assert.ok(facts.some(value => value.type === 'task/closed' && value.data.scope === 'subtree'))
+    assert.equal(facts.some(value => value.type === 'rsi/round-opened'), false)
+  } finally { operatorDb.close() }
 })

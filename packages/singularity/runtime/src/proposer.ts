@@ -11,7 +11,7 @@ import { DecomposeError,throwCollectedErrors } from './errors.ts'
 import { snapshotSession } from './agent.ts'
 import type { EvaluationComparison } from './evaluation.ts'
 import { MethodPatchRejection,submitMethodPatch } from './method-patch.ts'
-import { assertPromptBudget,clampPercent } from './prompt.ts'
+import { assertPromptBudget,clampPercent,PROPOSER_PERSONA } from './prompt.ts'
 import { readRoundObject,readRoundPlan } from './round.ts'
 import { commitFact } from './run-settlement.ts'
 import type { CommandService } from './service.ts'
@@ -35,8 +35,9 @@ If correctness is already saturated, extra correctness prose cannot raise it.
 Read previous-round feedback when present; revise an unsuccessful hypothesis
 using its measured result. Preserve useful assets and choose the smallest
 executable change that addresses the evidence. Children own their local workflow.
-Start with the indexed costliest Runs and read the trace pages that test your
-hypothesis; submit when the evidence supports a concrete change. Keep the patch
+Start with the root receipt's failed criteria. Follow related Task/Run evidence,
+children and planning pages, then examine relevant costliest Runs. Replan from
+the observed failure mechanism; submit when evidence supports a concrete change. Keep the patch
 concise: put each reusable instruction in one asset and refer to it from guidance.
 Use short guidance naming operations and their inputs/outputs; keep detailed code
 in one skill or MCP asset. Send one JSON object as the tool arguments.
@@ -152,6 +153,8 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
       } })
       ctx.on('agent/request-error', () => Promise.resolve(undefined), { prepend: true })
       ctx.on('agent/pre-step', (_payload, next) => available(true) ? next() : Promise.resolve({ kind: 'reject' as const }))
+      ctx.systemPrompt.section({ name: 'deployment:persona-prefix',
+        order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'), text: PROPOSER_PERSONA, interpolate: false })
       ctx.systemPrompt.section({ name: 'singularity:rsi-card', order: 100, text: RSI_PROPOSER_CARD, interpolate: false })
       ctx.systemPrompt.section({ name: 'singularity:worker-card', order: 100, text: '', interpolate: false })
       ctx.systemPrompt.context({
@@ -274,7 +277,8 @@ async function previousRoundFeedback(service: CommandService, roundId: string, b
       outcome: closed.data.outcome, ...(closed.data.reason === undefined ? {} : { reason: closed.data.reason }),
       ...(comparison === undefined ? {} : { complete: comparison.complete, metric: comparison.metric,
         aggregateDelta: comparison.aggregateDelta, worstRegression: comparison.worstRegression,
-        cost: comparison.cost, ...(comparison.reason === undefined ? {} : { reason: comparison.reason }) }) }
+        ...(comparison.cost === undefined ? {} : { cost: comparison.cost }),
+        ...(comparison.reason === undefined ? {} : { reason: comparison.reason }) }) }
   }
   return undefined
 }

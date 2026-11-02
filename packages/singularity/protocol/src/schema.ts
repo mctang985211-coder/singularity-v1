@@ -38,12 +38,12 @@ export function parseProtocolValue<Schema extends z.ZodType>(
 }
 
 /** Converts a protocol schema to JSON Schema only when input and output agree. */
-export function protocolJsonSchema(schema: z.ZodType): JsonObject {
+export function protocolJsonSchema(schema: z.ZodType, options: { readonly reused?: 'ref' } = {}): JsonObject {
   let input: JsonObject
   let output: JsonObject
   try {
-    input = toJsonObject(z.toJSONSchema(schema, { io: 'input' }))
-    output = toJsonObject(z.toJSONSchema(schema, { io: 'output' }))
+    input = toJsonObject(z.toJSONSchema(schema, { io: 'input', ...options }))
+    output = toJsonObject(z.toJSONSchema(schema, { io: 'output', ...options }))
   } catch (error) {
     throw new ProtocolSchemaError(
       'UNREPRESENTABLE_JSON_SCHEMA',

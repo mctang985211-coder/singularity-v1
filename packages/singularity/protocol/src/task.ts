@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { executableCheckSchema, proposedCriterionChecksSchema } from './checks.ts'
 
 import { digestSchema, seal, verifyDigest } from './digest.ts'
 import { refSchema } from './refs.ts'
@@ -30,9 +31,10 @@ const taskGoalSchema = closedObject({
 })
 
 export const taskCriterionSchema = closedObject({
-  id: z.string(),
+  id: z.string().min(1),
   statement: z.string(),
   required: z.boolean(),
+  checks: z.array(executableCheckSchema),
 })
 
 export type TaskCriterion = z.infer<typeof taskCriterionSchema>
@@ -88,6 +90,20 @@ export const taskSpecSchema = closedObject({
   localGuidance: z.array(localCriterionSchema).optional(),
   inputs: z.array(inputRefSchema),
   outputs: z.array(outputSpecSchema),
+}).superRefine((spec, ctx) => {
+  if (!spec.criteria.some(criterion => criterion.required)) {
+    ctx.addIssue({ code: 'custom', path: ['criteria'], message: 'a Task requires at least one required criterion' })
+  }
+  const ids = new Set<string>()
+  for (const [index, criterion] of spec.criteria.entries()) {
+    if (criterion.required && criterion.checks.length === 0) {
+      ctx.addIssue({ code: 'custom', path: ['criteria', index, 'checks'], message: 'required criteria need executable checks' })
+    }
+    for (const check of criterion.checks) {
+      if (ids.has(check.checkId)) ctx.addIssue({ code: 'custom', path: ['criteria', index, 'checks'], message: 'checkId must be unique within the Task' })
+      ids.add(check.checkId)
+    }
+  }
 })
 
 export type TaskSpec = z.infer<typeof taskSpecSchema>
@@ -98,6 +114,7 @@ export const taskProposalSchema = closedObject({
   localCriteria: z.array(localCriterionSchema).optional(),
   inputs: z.array(inputRefSchema),
   localOutputs: z.array(localOutputSchema).optional(),
+  acceptanceChecks: z.array(proposedCriterionChecksSchema),
 })
 
 export type TaskProposal = z.infer<typeof taskProposalSchema>

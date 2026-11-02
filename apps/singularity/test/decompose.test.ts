@@ -1,3 +1,4 @@
+import { describeFixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 
@@ -118,9 +119,9 @@ void test('S4-B1 prepare delivers a persisted preview and status reconstructs it
         composition: active.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: {
+        verifier: { describeCheck: describeFixtureCheck,
           provider: active.provider,
-          verify(request) {
+          async verify(request) {
             return Promise.resolve(sealPublicReceipt({
               v: 1,
               provider: active.provider,
@@ -128,13 +129,13 @@ void test('S4-B1 prepare delivers a persisted preview and status reconstructs it
               contractDigest: request.task.digest,
               inputDigests: request.inputs.map(ref => ref.digest),
               outputDigests: request.outputs.map(ref => ref.digest),
-              criteria: request.task.spec.criteria
+              criteria: await fixtureCriterionResults(request, storeRoot, request.task.spec.criteria
                 .filter(criterion => criterion.required)
                 .map(criterion => ({
                   id: criterion.id,
                   verdict: 'pass' as const,
                   reason: 'fixture criterion passed',
-                })),
+                }))),
               exit: { code: 0, signal: null },
               timedOut: false,
             }))
@@ -155,11 +156,13 @@ void test('S4-B1 prepare delivers a persisted preview and status reconstructs it
     assert.deepEqual(createdSessions, [sessionId])
     const firstRequest = fixture.requests[0] ?? {}
     assert.ok(toolSchemaNames(firstRequest).includes('singularity_decompose'))
-    const childrenSchema = protocolJsonSchema(decomposeCommitSchema.shape.children)
+    const childrenSchema = protocolJsonSchema(decomposeCommitSchema.shape.children, { reused: 'ref' })
     delete childrenSchema.$schema
+    const definitions = childrenSchema.$defs
+    delete childrenSchema.$defs
     assert.partialDeepStrictEqual(
       firstRequest.tools?.find(tool => tool.function?.name === 'singularity_decompose')?.function?.parameters,
-      { properties: { children: childrenSchema } },
+      { $defs: definitions, properties: { children: childrenSchema } },
       'the actual model request must expose the complete protocol TaskProposal structure',
     )
     assert.ok(contexts[0]?.includes(S4B1_BINDING))
@@ -285,10 +288,14 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
       const childId = childScenario.contract.taskId
       const first = selfReadAndPlan(request, index - 4, childScenario, childId, `${childId}:run`)
       if (first !== undefined) return first
+      if (index === 6) return {
+        toolCalls: [{ id: 'child-write', name: 'bash', arguments: JSON.stringify({ command: 'printf child-result > notes.txt' }) }],
+        usage: fixtureUsage(index),
+      }
       return {
         toolCalls: [{
           id: 'child-submit', name: 'singularity_submit',
-          arguments: JSON.stringify({ outputIds: [], includeLearningDrafts: false }),
+          arguments: JSON.stringify({ outputIds: ['s4b2-child-note'], includeLearningDrafts: false }),
         }],
         usage: fixtureUsage(index),
       }
@@ -319,7 +326,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
             children: [{
               bindingId: S4B2_BINDING,
               ackPreview,
-              task: {
+              task: { acceptanceChecks: [],
                 goal: {
                   summary: 'Inspect the authorized sample and report one result.',
                   deliverable: 'One result and a local note.',
@@ -380,7 +387,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
         composition: active.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: {
+        verifier: { describeCheck: describeFixtureCheck,
           provider: active.provider,
           verify() {
             throw new Error('an active child batch must not verify the parent')
@@ -452,7 +459,8 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
         id: 's4b2-child-criterion',
         statement: 'The local note records the observed sample.',
       }])
-      assert.deepEqual(child.contract.spec.criteria, [])
+      assert.deepEqual(child.contract.spec.criteria,
+        active.method.templates.find(template => template.id === child.contract.template.id)?.requiredCriteria)
       assert.deepEqual(child.contract.resources.baseTools, active.contract.resources.baseTools)
       assert.deepEqual(child.contract.resources.skills, active.contract.resources.skills)
       assert.equal(child.contract.resources.mcpServers.length, 0)
@@ -520,15 +528,20 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
       admission: { contract: child.contract, attempt: 1, budgetReservation: child.budgetReservation },
       composition: await currentComposition(spike.ctx, storeRoot, childScenario),
       agentOptions: agentOptions(), maxOutputBytes: 1024,
-      verifier: {
+      verifier: { describeCheck: describeFixtureCheck,
         provider: child.contract.acceptance,
-        verify(request) {
+        async verify(request) {
+          const note = request.outputs.find(ref => ref.id.endsWith(':output:s4b2-child-note'))
+          assert.ok(note)
+          assert.equal(new TextDecoder().decode((await request.readObject(note, 'object')).bytes), 'child-result')
           return Promise.resolve(sealPublicReceipt({
             v: 1, provider: child.contract.acceptance, operationId: request.operationId,
             contractDigest: request.task.digest,
             inputDigests: request.inputs.map(ref => ref.digest),
             outputDigests: request.outputs.map(ref => ref.digest),
-            criteria: [], exit: { code: 0, signal: null }, timedOut: false,
+            criteria: await fixtureCriterionResults(request, storeRoot, request.task.spec.criteria.filter(criterion => criterion.required)
+              .map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'The frozen child note has the requested exact bytes.' }))),
+            exit: { code: 0, signal: null }, timedOut: false,
           }))
         },
       },

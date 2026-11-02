@@ -1,3 +1,4 @@
+import { describeFixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { access,readFile,rm,writeFile } from 'node:fs/promises'
 
@@ -99,7 +100,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
       composition: await currentComposition(spike.ctx, storeRoot, active),
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
-      verifier: {
+      verifier: { describeCheck: describeFixtureCheck,
         provider: active.provider,
         verify() {
           throw new Error('the first attempt must not invoke the verifier')
@@ -302,11 +303,11 @@ void test('retry reads public criterion findings and reuses frozen output withou
     const first = await executeSingleRun({ ctx: spike.ctx, journalRoot: storeRoot, workspace,
       runId: firstRunId, sessionId: `${firstRunId}:session`, admission: active.runAdmission,
       composition: active.composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
-      verifier: { provider: active.provider, async verify(request) {
+      verifier: { describeCheck: describeFixtureCheck, provider: active.provider, async verify(request) {
         await writeFile(join(workspace, OUTPUT_PATH), 'mutable old workspace must not be reused\n')
         return sealPublicReceipt({ v: 1, provider: active.provider, operationId: request.operationId,
           contractDigest: active.contract.digest, inputDigests: request.inputs.map(ref => ref.digest),
-          outputDigests: request.outputs.map(ref => ref.digest), criteria: [{ id: CRITERION_ID, verdict: 'fail', reason }],
+          outputDigests: request.outputs.map(ref => ref.digest), criteria: await fixtureCriterionResults(request, storeRoot, [{ id: CRITERION_ID, verdict: 'fail', reason }]),
           exit: { code: 0, signal: null }, timedOut: false })
       } }, transientInvalidReasons: [] })
     assert.ok(first.kind === 'settled')
@@ -393,7 +394,7 @@ void test('live C-03 no-submission then fresh retry verified (fixture when LIVE=
         composition: await currentComposition(spike.ctx, storeRoot, active),
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: {
+        verifier: { describeCheck: describeFixtureCheck,
           provider: active.provider,
           verify() {
             throw new Error('the first attempt must not invoke the verifier')
@@ -669,7 +670,7 @@ for (const complete of [false, true]) {
           composition: scenario.composition,
           agentOptions: agentOptions(),
           maxOutputBytes: 1024,
-          verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
+          verifier: { describeCheck: describeFixtureCheck, provider: scenario.provider, verify() { throw new Error('no submission') } },
           transientInvalidReasons: [],
         })
         assert.ok(observed)

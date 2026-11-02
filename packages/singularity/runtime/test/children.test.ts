@@ -1,10 +1,11 @@
+import {checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { canonicalize, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
+import { canonicalize, sealEvidence, sealPublicCheckReport, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type { Ref, TaskState } from '@singularity/protocol'
 
 import { readChildData } from '../src/children.ts'
@@ -19,7 +20,7 @@ void test('parent reads public child Evidence while the private receipt stays ou
   const ref = (id: string): Ref => ({ id, digest: `sha256:${'a'.repeat(64)}` })
   const contract = sealTaskContract({
     v: 1, taskId: 'child', method: ref('method'), template: ref('template'),
-    spec: { goal: { summary: 'Child work', deliverable: 'Result', scope: [], constraints: [] }, criteria: [], inputs: [], outputs: [] },
+    spec: { goal: { summary: 'Child work', deliverable: 'Result', scope: [], constraints: [] }, criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:checkRecipeRef,params:{}}]}], inputs: [], outputs: [] },
     origin: { kind: 'child', parentId: 'parent', parentRunId: 'parent-run', batchId: 'batch', bindingId: 'work' },
     resources: { baseTools: [], skills: [], mcpServers: [] }, acceptance: ref('verifier'),
     environment: { seed: ref('seed'), profile: ref('profile') },
@@ -27,8 +28,12 @@ void test('parent reads public child Evidence while the private receipt stays ou
   })
   const privateReceipt = await service.putObject('private-receipt', new TextEncoder().encode('private verifier details'))
   const finding = `${'Observed boundary evidence. '.repeat(1000)}Fix the reset handshake.`
+  const report = sealPublicCheckReport({ v: 1, operationId: 'child-run:verify', contractDigest: contract.digest,
+    criterionId: 'boundary', checkId: 'boundary', recipeRef: checkRecipeRef, inputDigests: [], outputDigests: [],
+    exit: { code: 1, signal: null }, timedOut: false, verdict: 'fail', data: { casesRun: 4, mismatches: 1 } })
+  const reportRef = await service.putObject('child:boundary:report', new TextEncoder().encode(canonicalize(report)))
   const receipt = sealPublicReceipt({ v: 1, provider: contract.acceptance, operationId: 'child-run:verify',
-    contractDigest: contract.digest, inputDigests: [], outputDigests: [], criteria: [{ id: 'boundary', verdict: 'fail', reason: finding }], exit: { code: 0, signal: null }, timedOut: false })
+    contractDigest: contract.digest, inputDigests: [], outputDigests: [], criteria: [{checks: [{checkId:'boundary',verdict:'fail',reportRef}], id: 'boundary', verdict: 'fail', reason: finding }], exit: { code: 0, signal: null }, timedOut: false })
   const publicReceipt = await service.putObject('public-receipt', new TextEncoder().encode(canonicalize(receipt)))
   const evidence = sealEvidence({
     v: 1, task: { id: contract.taskId, digest: contract.digest }, runId: 'child-run', contractDigest: contract.digest,
@@ -58,6 +63,10 @@ void test('parent reads public child Evidence while the private receipt stays ou
   assert.ok(text.includes(publicReceipt.id))
   assert.ok(!text.includes('privateReceipt'))
   assert.ok(!text.includes(privateReceipt.id))
+  assert.deepEqual(JSON.parse((await readChildData(service, children, [], { kind: 'resource', id: reportRef.id })).data as string), report)
+  const noChildren: DirectChildren = { ...children, results: [], inputs: [] }
+  await assert.rejects(readChildData(service, noChildren, [], { kind: 'resource', id: reportRef.id }), { code: 'INPUT_NOT_AUTHORIZED' })
+  assert.ok((await readChildData(service, noChildren, [], { kind: 'resource', id: reportRef.id }, children.results[0])).data)
   await assert.rejects(readChildData(service, children, [], { kind: 'evidence', id: 'unrelated-run' }), { code: 'INPUT_NOT_AUTHORIZED' })
   await assert.rejects(readChildData(service, children, [], { kind: 'resource', id: privateReceipt.id }), { code: 'INPUT_NOT_AUTHORIZED' })
   assert.ok(new TextDecoder().decode((await service.readObject(evidenceRef, 'evidence')).bytes).includes(privateReceipt.id))

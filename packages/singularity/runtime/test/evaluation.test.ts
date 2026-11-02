@@ -1,3 +1,4 @@
+import {checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -28,7 +29,7 @@ function manifest(policy: RoundPlan = plan): EvaluationManifest {
   const slots: EvaluationSlotResult[] = frozenEvaluationSlots('round', policy, base, candidate).map(slot => {
     const receipt = sealPublicReceipt({
       v: 1, provider: ref('verifier'), operationId: slot.id, contractDigest: ref('contract').digest,
-      inputDigests: [], outputDigests: [], criteria: [{ id: 'quality', verdict: 'pass', reason: 'fixture', metric: { name: 'quality', unit: 'points', value: 1 } }],
+      inputDigests: [], outputDigests: [], criteria: [{checks: [], id: 'quality', verdict: 'pass', reason: 'fixture', metric: { name: 'quality', unit: 'points', value: 1 } }],
       exit: { code: 0, signal: null }, timedOut: false,
     })
     const evidence = sealEvidence({
@@ -39,7 +40,7 @@ function manifest(policy: RoundPlan = plan): EvaluationManifest {
     })
     return {
       slot, status: 'complete', usage,
-      publicEvidence: {
+      publicEvidence: {checkReports: [],
         slotId: slot.id, taskId: slot.taskId, caseRef: slot.caseRef, partition: slot.partition, arm: slot.arm, repetition: slot.repetition,
         verdict: 'verified', evidenceRef: ref(`${slot.id}:evidence`), evidence, receipt, usage,
       },
@@ -139,7 +140,7 @@ void test('slot accounting includes failed attempts, descendants and owned summa
   const requestRef = await service.putObject(slot.id, new TextEncoder().encode(canonicalize({ v: 1, roundId: slot.roundId, slot })))
   const contract = sealTaskContract({
     v: 1, taskId: slot.taskId, method: slot.method, template: ref('template'),
-    spec: { goal: { summary: 'fixture', deliverable: 'fixture', scope: [], constraints: [] }, criteria: [], inputs: [], outputs: [] },
+    spec: { goal: { summary: 'fixture', deliverable: 'fixture', scope: [], constraints: [] }, criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:checkRecipeRef,params:{}}]}], inputs: [], outputs: [] },
     origin: { kind: 'root', purpose: 'evaluation', requestRef },
     resources: { baseTools: [], skills: [], mcpServers: [] }, acceptance: ref('verifier'),
     environment: { seed: ref('seed'), profile: ref('profile') },

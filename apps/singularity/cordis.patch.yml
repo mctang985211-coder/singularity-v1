@@ -1,3 +1,9 @@
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false
+    personaPrefix: "You are running in Singularity. Follow the role and frozen instructions assigned to this session."
+    personaSuffix: ""
+
 - id: sdk-app-startup
   disabled: true
 - id: sdk-jsonrpc-server

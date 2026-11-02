@@ -3,6 +3,7 @@ Evidence,
 ExecutionRecord,
 JsonValue,
 PublicReceipt,
+PublicCheckReport,
 PublicReceiptValidation,
 Ref,
 SessionCut,
@@ -19,11 +20,14 @@ seal,
 sealEvidence,
 validateEvidence,
 validatePublicReceipt,
+parseJsonText, publicCheckReportSchema, sameRef, validateInstanceSchema,
 } from '@singularity/protocol'
 import { SingleRunError } from './errors.ts'
 
 import type { CasDigestDomain } from './store.ts'
 import type { CasObjectReader,CasObjectWriter } from './workspace.ts'
+import type { DescribeCheck } from './checks.ts'
+import { readAcceptanceChecks } from './checks.ts'
 
 /** Stable closure reasons used by the fixed retry policy. */
 export const VERIFIER_ERROR_REASON = 'verifier-error'
@@ -60,6 +64,7 @@ export interface VerifierRequest extends VerifyRequest {
 export interface RunVerifier {
   /** This host uses the frozen acceptance object itself as provider identity. */
   readonly provider: Ref
+  readonly describeCheck: DescribeCheck
   verify(request: VerifierRequest): Promise<PublicReceipt>
 }
 
@@ -114,7 +119,6 @@ export async function verifyRunSubmission(
   const operationId = `${input.runId}:verify`
   const requiredCriteria = input.contract.spec.criteria
     .filter(criterion => criterion.required)
-    .map(criterion => criterion.id)
 
   let receipt: PublicReceipt
   const remaining = input.contract.limits.deadlineAt - clock()
@@ -160,6 +164,9 @@ export async function verifyRunSubmission(
     return invalidFromValidation(validation, receipt)
   }
 
+  const reports = await readPublicCheckReports(input.reader, input.contract, validation.receipt)
+  if (!reports.valid) return { verdict: 'invalid', code: 'verification-invalid', reason: `verification-invalid: ${reports.reason}` }
+
   const receiptRef = await input.writer.putObject(
     `${input.runId}:receipt`,
     new TextEncoder().encode(canonicalize(receipt as unknown as JsonValue)),
@@ -178,6 +185,43 @@ export async function verifyRunSubmission(
     receipt: validation.receipt,
     receiptRef,
   }
+}
+
+/** Validate referenced reports without granting the provider a writable request. */
+export async function readPublicCheckReports(reader: CasObjectReader, contract: TaskContract, receipt: PublicReceipt): Promise<
+  { readonly valid: true; readonly reports: readonly PublicCheckReport[] }
+  | { readonly valid: false; readonly reason: string }
+> {
+  const resources = await readAcceptanceChecks(reader, contract.acceptance)
+  const requiredCriteria = contract.spec.criteria.filter(criterion => criterion.required)
+  const reports: PublicCheckReport[] = []
+  for (const criterion of receipt.criteria) {
+    const frozen = requiredCriteria.filter(item => item.id === criterion.id)[0]
+    for (const [index, check] of criterion.checks.entries()) {
+      const expected = frozen.checks[index]
+      const { bytes } = await reader.readObject(check.reportRef, 'object')
+      let report
+      try {
+        report = parseProtocolValue(publicCheckReportSchema, parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(bytes)))
+      } catch (error) {
+        return { valid: false, reason: `check report ${check.checkId} is malformed: ${errorMessage(error, 'unknown report error')}` }
+      }
+      const recipe = resources.recipes.filter(asset => sameRef(asset.ref, expected.recipeRef))[0]
+      const data = validateInstanceSchema(recipe.recipe.resultSchema, report.data)
+      if (report.digest !== check.reportRef.digest || report.operationId !== receipt.operationId
+        || report.contractDigest !== contract.digest || report.criterionId !== criterion.id
+        || report.checkId !== check.checkId || !sameRef(report.recipeRef, expected.recipeRef)
+        || canonicalize(report.inputDigests) !== canonicalize(receipt.inputDigests)
+        || canonicalize(report.outputDigests) !== canonicalize(receipt.outputDigests)
+        || report.verdict !== check.verdict || !data.valid
+        || (report.verdict !== 'invalid' && (report.timedOut || report.exit.signal !== null || report.exit.code === null))
+        || (report.verdict === 'pass' && report.exit.code !== 0)) {
+        return { valid: false, reason: `check report ${check.checkId} does not match its frozen check and receipt` }
+      }
+      reports.push(report)
+    }
+  }
+  return { valid: true, reports }
 }
 
 function invalidFromValidation(

@@ -7,7 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent,AgentOptions } from '@deepseek-ai/dsh-agent'
 import { loadProfileDirectory } from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
-import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { PERSONA_PREFIX_SECTION,renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { INSTALL_ANCHOR,runProfile } from '@deepseek-ai/dsh/profile-boot'
 import type { CompositionPayload,JsonValue,TaskContract } from '@singularity/protocol'
 import { canonicalize,computeDigest } from '@singularity/protocol'
@@ -23,6 +23,7 @@ mcpCompositionEntry,
 mcpPromptSections,
 renderWorkerCard,
 usesExploration,
+WORKER_PERSONA,
 } from '@singularity/runtime'
 
 const REQUIRED_DSH_VERSION = '0.2.2-alpha.2'
@@ -141,6 +142,8 @@ export async function buildSingleRunComposition(
     ...assembly,
     sections: assembly.sections.map(section => section.name === 'mcp-resource-servers'
       ? { ...section, text: resourceText }
+      : section.name === PERSONA_PREFIX_SECTION
+        ? { ...section, text: WORKER_PERSONA }
       : section.name === 'singularity:worker-card'
         ? { ...section, text: renderWorkerCard(usesExploration(methodResources)) } : section),
   })

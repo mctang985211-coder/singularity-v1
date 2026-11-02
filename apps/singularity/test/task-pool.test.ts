@@ -1,3 +1,4 @@
+import { describeFixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -44,13 +45,14 @@ for (const joinMode of ['required', 'probe'] as const) {
       if (index === 1 || (index >= 5 && index <= resumeIndex + 1 && (index - 5) % 4 === 0)) {
         const isChild = index >= 5 && index < resumeIndex
         const current = isChild ? children[(index - 5) / 4] : scenario.contract
-        assert.ok(current)
+        assert.ok(current, messageTexts(request).filter(text => text.includes('"code"') || text.includes('isError')).join("\n"))
         return planReply({ ...scenario, contract: current }, current.taskId,
           isChild ? `${current.taskId}:run:1` : runId, contextEpochFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) ?? '')
       }
+      if (index === 3) assert.ok(previewDigestFrom(request), messageTexts(request).slice(-3).join('\n'))
       if (index === 2) return call('singularity_decompose', { action: 'prepare', bindingId })
       if (index === 3) return call('singularity_decompose', {
-        action: 'commit', children: Array.from({ length: childCount }, (_, n) => ({ bindingId, ackPreview: previewDigestFrom(request), task: {
+        action: 'commit', children: Array.from({ length: childCount }, (_, n) => ({ bindingId, ackPreview: previewDigestFrom(request), task: { acceptanceChecks: [],
           goal: { summary: `Write the exact bytes for part ${String(n)} to child.txt.`, deliverable: 'child.txt', scope: [], constraints: [] },
           localCriteria: [], inputs: [],
           localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Frozen child result.' }],
@@ -77,7 +79,7 @@ for (const joinMode of ['required', 'probe'] as const) {
         childBinding: { bindingId, templateId: 'template:child', brief: 'Produce a direct result.', join: joinMode, example: s4b2Example() },
       })
       const active = scenario
-      const verifier = (contract: TaskContract): RunVerifier => ({
+      const verifier = (contract: TaskContract): RunVerifier => ({ describeCheck: describeFixtureCheck,
         provider: contract.acceptance,
         async verify(request) {
           assert.equal(new TextDecoder().decode((await request.readObject(request.outputs[0], 'object')).bytes), FROZEN_OUTPUT)
@@ -86,7 +88,7 @@ for (const joinMode of ['required', 'probe'] as const) {
           return sealPublicReceipt({
             v: 1, provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,
             inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-            criteria: contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Exact frozen bytes.' })),
+            criteria: await fixtureCriterionResults(request, storeRoot, contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Exact frozen bytes.' }))),
             exit: { code: 0, signal: null }, timedOut: false,
           })
         },

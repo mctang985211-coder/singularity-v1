@@ -42,7 +42,7 @@ export interface FrozenSkillResource {
 export async function readSkills(
   reader: CasObjectReader,
   method: Pick<MethodRevision, 'skills'>,
-  template: TaskTemplate,
+  template: Pick<TaskTemplate, 'skills'>,
   contractRefs: readonly Ref[],
 ): Promise<readonly FrozenSkillResource[]> {
   const catalog = validateSkillCatalog(method.skills)

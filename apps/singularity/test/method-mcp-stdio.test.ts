@@ -1,3 +1,4 @@
+import { describeFixtureCheck } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { readdir } from 'node:fs/promises'
 import { readFacts } from './run-fixture.ts'
@@ -255,7 +256,7 @@ void test('S4-A3 rejects an actual extra MCP tool before Agent or model', { time
         composition: scenario.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: {
+        verifier: { describeCheck: describeFixtureCheck,
           provider: scenario.provider,
           verify() { throw new Error('extra MCP tool must not verify') },
         },
@@ -306,7 +307,7 @@ void test('S4-A3 rejects frozen instructions that differ from the mounted server
         composition: scenario.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: {
+        verifier: { describeCheck: describeFixtureCheck,
           provider: scenario.provider,
           verify() { throw new Error('instruction mismatch must not verify') },
         },
@@ -367,7 +368,7 @@ void test('S4-A3 rolls back the first server when the second stdio server fails 
         composition: scenario.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: {
+        verifier: { describeCheck: describeFixtureCheck,
           provider: scenario.provider,
           verify() { throw new Error('failed second server must not verify') },
         },
@@ -448,7 +449,7 @@ void test('S4-A3 denies an unbound resource server while the bound server still 
       composition: active.composition,
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
-      verifier: {
+      verifier: { describeCheck: describeFixtureCheck,
         provider: active.provider,
         verify() { throw new Error('stopped guard run must not verify') },
       },
@@ -537,7 +538,7 @@ void test('S4-A3 uses native credential-name scrubbing and deployment environmen
         composition: active.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: {
+        verifier: { describeCheck: describeFixtureCheck,
           provider: active.provider,
           verify() { throw new Error('stopped env run must not verify') },
         },
@@ -607,7 +608,7 @@ void test('S4-A3 deadline uses native DSH cancellation and cleans MCP resources'
         composition: scenario.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: {
+        verifier: { describeCheck: describeFixtureCheck,
           provider: scenario.provider,
           verify() { throw new Error('timed-out acquisition must not verify') },
         },
@@ -694,7 +695,7 @@ void test('S4-A3 materializes every server before mount and isolates server root
       composition: active.composition,
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
-      verifier: {
+      verifier: { describeCheck: describeFixtureCheck,
         provider: active.provider,
         verify() { throw new Error('stopped two-server run must not verify') },
       },
@@ -827,7 +828,7 @@ for (const variant of [
           composition: scenario.composition,
           agentOptions: agentOptions(),
           maxOutputBytes: 1024 * 1024,
-          verifier: {
+          verifier: { describeCheck: describeFixtureCheck,
             provider: scenario.provider,
             verify() { throw new Error('surface mismatch must not verify') },
           },

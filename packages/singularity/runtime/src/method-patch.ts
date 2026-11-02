@@ -3,6 +3,7 @@ FactActor,JsonValue,MethodPatch,MethodRevision,Ref,TaskTemplate,
 } from '@singularity/protocol'
 import {
 assertTaskTemplateInterface,
+AdmissionError,
 canonicalize,
 computeDigest,
 computeDigestBytes,
@@ -12,6 +13,7 @@ parseMethodPatch,
 parseProtocolValue,
 seal,
 sealMethodRevision,
+resolveTaskProposalSpec,
 taskExampleSchema,
 validateInstanceSchema,
 } from '@singularity/protocol'
@@ -24,6 +26,7 @@ import { METHOD_GUIDANCE_MAX_BYTES,TASK_EXAMPLE_MAX_BYTES } from './resources.ts
 import type { CommandService } from './service.ts'
 import { readSkills,sameRef } from './skill-resources.ts'
 import { readPublicTrace } from './trace.ts'
+import { bindExecutableChecks, readAcceptanceChecks } from './checks.ts'
 
 export class MethodPatchRejection extends Error {
   override readonly name = 'MethodPatchRejection'
@@ -84,12 +87,15 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
   const base = parseProtocolValue(methodRevisionSchema, await readJson(service, opened.data.baseMethod, 'method'))
   if (base.id !== opened.data.baseMethod.id || base.digest !== opened.data.baseMethod.digest) throw new Error('Pinned base Method identity is invalid')
   const trace = await readPublicTrace(service, opened.data.sourceTrace)
+  const sourceState = await service.taskRunState([])
+  const policyRefs = [...base.templates.map(template => template.acceptancePolicy),
+    ...[...sourceState.tasks.values()].filter(task => task.rootTaskId === trace.rootTask.id).map(task => task.contract.acceptance)]
   let candidate: MethodRevision
   try {
     if (!sameRef(patch.base, opened.data.baseMethod)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')
-    candidate = await applyPatch(service, base, patch, trace.authorizedObjects.map(entry => entry.ref))
+    candidate = await applyPatch(service, base, patch, policyRefs)
   } catch (error) {
-    if (!(error instanceof MethodPatchRejection || error instanceof MethodResourceError || error instanceof ZodError)) throw error
+    if (!(error instanceof MethodPatchRejection || error instanceof MethodResourceError || error instanceof ZodError || error instanceof AdmissionError)) throw error
     const reason = error instanceof Error ? error.message : String(error)
     const precheckReceipt = await putJson(service, `round:${roundId}:precheck`, seal('object', {
       v: 1, roundId, patch: proposal.data.patch, accepted: false, reason,
@@ -119,7 +125,7 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
 }
 
 async function applyPatch(
-  service: CommandService, base: MethodRevision, patch: MethodPatch, publicRefs: readonly Ref[],
+  service: CommandService, base: MethodRevision, patch: MethodPatch, authorizedPolicies: readonly Ref[],
 ): Promise<MethodRevision> {
   const templates = new Map(base.templates.map(template => [template.id, template]))
   const skills = new Map(base.skills.map(skill => [skill.id, skill]))
@@ -127,7 +133,6 @@ async function applyPatch(
   if (templates.size !== base.templates.length || skills.size !== base.skills.length || tools.size !== base.tools.length) throw new MethodPatchRejection('Base Method contains duplicate asset IDs')
   let entry = base.entryTemplateId
   const modified = new Set<string>()
-  const allowed = [...publicRefs, ...base.templates.map(template => template.acceptancePolicy)]
   for (const change of patch.changes) {
     const id = change.op === 'set-entry' ? '' : 'id' in change ? change.id
       : change.op === 'put-template' ? change.template.id
@@ -146,7 +151,7 @@ async function applyPatch(
       case 'remove-mcp-server': tools.delete(change.id); break
       case 'put-template': {
         const { guidance, example, ...template } = change.template
-        if (!allowed.some(ref => sameRef(ref, template.acceptancePolicy))) throw new MethodPatchRejection('Template acceptancePolicy is outside the authorized public references')
+        if (!authorizedPolicies.some(ref => sameRef(ref, template.acceptancePolicy))) throw new MethodPatchRejection('Template acceptancePolicy is outside the authorized source/base policies')
         await service.readObject(template.acceptancePolicy)
         templates.set(template.id, {
           ...template,
@@ -202,7 +207,7 @@ async function applyPatch(
     const instance = { ...example, inputs: [] }
     const schema = validateInstanceSchema(template.instanceSchema, instance)
     if (!schema.valid) throw new MethodPatchRejection(`Template instanceSchema/example mismatch: ${schema.reason}`)
-    await service.readObject(template.acceptancePolicy)
+    bindExecutableChecks(resolveTaskProposalSpec(template, instance), await readAcceptanceChecks(service, template.acceptancePolicy))
   }
   // Reuse the same deterministic catalog/bundle schema checks as normal Task composition.
   const catalogTemplate: TaskTemplate = {
@@ -218,7 +223,7 @@ async function applyPatch(
 
 function assertProposalSchemaFields(schema: JsonValue): void {
   if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return
-  const allowed = ['goal', 'localCriteria', 'inputs', 'localOutputs']
+  const allowed = ['goal', 'localCriteria', 'inputs', 'localOutputs', 'acceptanceChecks']
   const properties = schema['properties']
   if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)
     && Object.keys(properties).some(key => !allowed.includes(key))) throw new MethodPatchRejection('Template instanceSchema can constrain only TaskProposal fields')

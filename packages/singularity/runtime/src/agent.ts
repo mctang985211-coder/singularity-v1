@@ -18,7 +18,7 @@ createSkillResourceRoot,
 materializeSkills,registerSkills,removeSkillResourceRoot,
 } from './agent-skills.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
-import { assertPromptBudget,renderWorkerCard } from './prompt.ts'
+import { assertPromptBudget,renderWorkerCard,WORKER_PERSONA } from './prompt.ts'
 import type { PlatformPromptRenderer } from './resources.ts'
 import {
 METHOD_GUIDANCE_ORDER,
@@ -186,6 +186,12 @@ function buildAgentSetup(
     agentCtx.on('agent/pre-step', async (_payload, next) => {
       if (!options.checkBudget(1, 1)) return { kind: 'reject' }
       return next()
+    })
+    agentCtx.systemPrompt.section({
+      name: 'deployment:persona-prefix',
+      order: agentCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
+      text: WORKER_PERSONA,
+      interpolate: false,
     })
     agentCtx.systemPrompt.section({
       name: 'singularity:worker-card',

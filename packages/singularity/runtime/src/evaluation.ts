@@ -13,6 +13,7 @@ import {
 import type {
   Evidence,
   PublicReceipt,
+PublicCheckReport,
   Ref,
   RoundPlan,
   TaskRunState,
@@ -23,7 +24,7 @@ import { closeRsiRound, readRoundObject, readRoundPlan, requireRound } from './r
 import type { RoundCommandContext } from './round.ts'
 import { evaluationCaseFromContract, readEvaluationCase } from './evaluation-case.ts'
 import type { CommandService } from './service.ts'
-import { publicVerificationOf } from './verification.ts'
+import { publicVerificationOf, readPublicCheckReports } from './verification.ts'
 
 export interface EvaluationSlot {
   readonly id: string
@@ -75,6 +76,7 @@ export interface PublicEvaluationEvidence {
     readonly verification: Omit<Evidence['verification'], 'privateReceipt'>
   }
   readonly receipt: PublicReceipt
+  readonly checkReports: readonly PublicCheckReport[]
   readonly usage: EvaluationUsage
 }
 
@@ -162,7 +164,7 @@ export async function readEvaluationManifest(
       contractDigest: task.contract.digest,
       inputDigests: evidence.inputs.map(ref => ref.digest),
       outputDigests: evidence.outputs.map(ref => ref.digest),
-      requiredCriteria: task.contract.spec.criteria.filter(criterion => criterion.required).map(criterion => criterion.id),
+      requiredCriteria: task.contract.spec.criteria.filter(criterion => criterion.required),
     })
     if (evidence.task.id !== slot.taskId || evidence.runId !== decisive?.runId
       || evidence.contractDigest !== task.contract.digest || !same(evidence.method, slot.method)
@@ -171,11 +173,16 @@ export async function readEvaluationManifest(
       continue
     }
     const verification = publicVerificationOf(evidence.verification)
+    const checkReports = await readPublicCheckReports(service, task.contract, receipt)
+    if (!checkReports.valid) {
+      results.push({ slot, status: 'invalid', usage, reason: checkReports.reason })
+      continue
+    }
     const publicEvidence: PublicEvaluationEvidence = {
       slotId: slot.id, taskId: slot.taskId, caseRef: slot.caseRef, partition: slot.partition,
       arm: slot.arm, repetition: slot.repetition,
       verdict: task.closed.outcome === 'verified' ? 'verified' : 'failed',
-      evidenceRef, evidence: { ...evidence, verification }, receipt, usage,
+      evidenceRef, evidence: { ...evidence, verification }, receipt, checkReports: checkReports.reports, usage,
     }
     results.push({ slot, status: 'complete', usage, publicEvidence })
   }

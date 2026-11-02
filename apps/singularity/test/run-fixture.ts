@@ -1,3 +1,4 @@
+import { describeFixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 
@@ -384,7 +385,7 @@ export function passingVerifier(
   workspace: string,
   calls: { readonly inputs: readonly Ref[]; readonly outputs: readonly Ref[] }[],
 ): RunVerifier {
-  return {
+  return { describeCheck: describeFixtureCheck,
     provider: scenario.provider,
     async verify(request: VerifierRequest) {
       assert.equal(request.operationId, `${runId}:verify`)
@@ -407,12 +408,12 @@ export function passingVerifier(
         contractDigest: request.task.digest,
         inputDigests: request.inputs.map(ref => ref.digest),
         outputDigests: request.outputs.map(ref => ref.digest),
-        criteria: [{
+        criteria: await fixtureCriterionResults(request, scenario.storeRoot, [{
           id: CRITERION_ID,
           verdict: 'pass',
           reason: 'The frozen output matches the declared fixture bytes.',
           metric: { name: 'exit', unit: 'code', value: 0 },
-        }],
+        }]),
         exit: { code: 0, signal: null },
         timedOut: false,
       })

@@ -283,7 +283,7 @@ root Run1真实验收仅model-reference/delivery通过，其余失败：recipes�
 代码673bba1，新根artifacts/buckyball-cosyvoice3-live-20261102-1355-seeded，PID3632562，截止16:55:05 +08；使用同一冻结seed/准备环境与全部原预算、模型、验收。首批真实请求正常。独立操作者只读watch已启动，每30分钟写operator-monitor与operator-watch.log，首次约14:25；它只做快照，不重启或改变运行。继续核对分解、完整frontend、RSI比较及发布后消费，未满足前不提交PR/合并。
 
 
-14:25:06独立快照按时落盘：9Tasks、depth2（三层树）、两批自主分解，8Run opened/4提交/2Task verified；606请求/605结算，input68254723/output622704/unknown0。root以旧公开失败为输入，自主分解Flow精确语义、recipe修正、专用cosyvoice拓扑与实际Ball的匹配PPA；recipe再分LLM/Flow/HiFT/host四路，显式传递冻结seed。Flow精确语义子任务已独立验证99 tensors、补充11组非预设输入、负控均通过；LLM修正11fixtures/56outputs及独立134checks通过，真实checkpoint而非随机权重。二进制seed已用原生bash解包消费，未再因UTF-8接口误用退出，框架仍正常运行。
+14:25:06独立快照按时落盘：9Tasks、depth2（三层树）、两批自主分解，8Run opened/4提交/2Task verified；606请求/605结算，input68254723/output622704/unknown0。root以旧公开失败为输入，自主分解Flow精确语义、recipe修正、专用cosyvoice拓扑与实际Ball的匹配PPA；recipe再分LLM/Flow/HiFT/host四路。事后核查：root四个child仅绑定project/experiment-guide，没有绑定public-seed；recipe四个child的inputs均为空，实际经祖先可写目录消费产物。这不是冻结Ref逐级传递成功的证据，不能作为新合同的回归通过。Flow精确语义子任务已独立验证99 tensors、补充11组非预设输入、负控均通过；LLM修正11fixtures/56outputs及独立134checks通过，真实checkpoint而非随机权重。二进制seed已用原生bash解包消费，未再因UTF-8接口误用退出，框架仍正常运行。
 
 随后14:30读取到拓扑child的公开receipt：其局部config/elaboration目标verified，实际创建cosyvoice双tile/7core并生成447个SV；review同时实测发现异构chip的UVM filelist选错BallDomainDecoder，且depthwise Conv1d不等同于原HiFT/Flow grouped conv，明确留给parent修正，不能把该child通过说成完整frontend实现。MCP首次checkout因模型未建work父目录返回ENOENT，模型创建后成功；后两工具失败为上述真实领域测试，工具均正常返回，无harness兜底。root仍等直属批次，尚无root提交/RSI/比较/赢家。下一快照14:55。证据operator-monitor-20261102-1425.json及对应公开receipts/原生sessions。
 
@@ -300,3 +300,44 @@ recipe Run1虽已合并四路真实数值参考，仍因plan/graphs参数路径�
 16:06:05首次root独立验收failed：model-reference/component-verification/delivery通过，design-contract/implementation失败。review复现447SV和组件测试，但发现专用芯片与poly recipe脱节、Conv1dBall未接入实际图、bank分配合同矛盾；root Run2已读取公开反馈并返工。该receipt还把未接入recipe的单个Conv1dBall PPA判作通过；由于root其他required项失败，没有比较/赢家。下一轮同步收紧既有TaskSpec的ppa-evidence与领域review说明，要求实际workload使用的加速边界、活跃实例/存储模型及独立复现，组件报告只作支持证据。没有新增runtime校验器、状态或恢复机制，当前已冻结review保持不变。
 
 用户明确选择下一轮12小时/1600000000 reported tokens/16000请求，仍是整轮共享上限；深度8、256Tasks、单Run4096steps、并发4和40k输出保持。BB example的Task/proposer/evaluation配额与worker/reviewer原生MCP timeout共用配置，阶段时间继续取整轮剩余deadline，不重新领取整轮额度。仅修改examples、既有fixture与领域文档，protocol/runtime源码不变。定向原生DSH4/4；最终根pnpm verify **445/445**（protocol206/runtime135/app91/domain13）、0fail/skip，project/build/typecheck/lint通过；日志artifacts/bb-12h-20261102-{targeted,final-verify}.log。12小时执行根尚未启动，当前根仍按16:55:05和原额度结算；不以配置或fixture通过声称复杂芯片RSI/PPA闭环完成。
+
+
+### amendment016 合同与工作流修复（2026-11-03）
+
+在备份提交 dac8c0e 后，按模型工作能力规划打通完整授权 InputRef、TaskProposal.acceptanceChecks、required criterion 的非空可执行检查、冻结 recipeRef/params 授权与参数验证、self/prepare 的派生检查预览、公开本地自检与冻结输出独立复验。逐项 PublicCheckReport 使用既有 CAS，通过公开 receipt 授权读取；不新增 authority、fact、工具或验收账本，不保留旧合同兼容路径。四类 scoped persona、工作卡、工具示例、fallback、retry 反馈与 trace 同步；Buckyball worker/reviewer 使用完整适配技能与原始支持资源。
+
+接手审查还修正了 reviewer 原生 skill 工具不可见、tree 产物在后续批次不能物化、prepare 样本输入预览丢失、领域参数越界错误分类、检查自身超时/外部取消区分以及合法 ID 的报告路径编码。tree 交付按可信 manifest 展开标准叶文件 InputRef，下游仅复制真实 read(children) 的返回值即可在独立目录消费，不猜测普通对象格式。Conv1D fixture 已移入受版本控制的 test/fixtures，根测试不再依赖 ignored artifacts。
+
+最终 pnpm verify 471/471（protocol210、runtime140、app106、inventory15），0 fail/cancelled/skipped，project/build/typecheck/lint 全通过；日志 artifacts/takeover-final-verify-20261103.log。原生 fixture 覆盖二进制输入从 self 连传两级、树叶跨批次传递与消费、逐 check CAS 身份/权限、recipe/报告负例、四角色真实请求、成功 RSI/比较/expected-head activation/新任务消费，以及真实检查子进程超时后的退出与原始取消原因。前述成功 RSI 属于本地合成 provider fixture，不是真实模型、芯片或 PPA 收益。
+
+用户已指定本轮真实模型连接为新 API 的 deepseek-flash/max、700000 context、40000 output；凭据仅在仓库外受限 launch env 中。真实小对照与 Buckyball 将共享一个最长12小时、10亿 reported tokens、4000调用窗口，先行消费从余额扣除，每半小时检查实际进度与修复效果；不对历史执行根续跑。真实运行结果另记于下方，当前尚无付费行为证据。
+
+启动前按用户要求再次逐项核验计划：P0-1 完整 Ref/二进制与树叶交接；P0-3 四角色/技能资产/职责说明；P0-4 与 §11 的准入、配方授权、派生预览、自检、独立复验及 receipt/CAS 权限主链均已落地。P1 使用原有计划与合同表达职责、依赖和上下游，多批次、probe/required 与 retry 语义保持一致。成功 RSI 全链由本地合成 provider 覆盖；真实模型的能力与 PPA 结果单独记录。条件项工作流 schema、父计划快照、专门 trace 索引和新预算政策未引入。重复的 self.acceptance.criteria 与协议文档中的完整 commit 副本已删除，旧文字验收生产路径没有兼容保留。
+
+复核 P0-2 时发现名称子串不足以证明实际接线，已删除该检查路径，改用原生 MLIR 可达操作、Chip.pb target registry 与 Yosys 层级实例及 Ball 类身份。正式 checker 从冻结 CAS 字节运行。真实工具极小 readiness 通过3项正检查，并拒绝注释/不可达 recipe、注释/不可达 mapped operation、无关已实例化模块、已注册但未实例化 Ball；这不是完整芯片或 PPA 收益。技能 compiler/UVM argv 同步实际 bbdev operation 参数形式。最终根 pnpm verify **476/476**（protocol210、runtime140、app111、inventory15），0 fail/cancelled/skipped，project/build/typecheck/lint 全通过，日志 artifacts/takeover-release-verify-20261103.log。四角色预检校验实际角色与工具边界，并记录实际 wire prompt/tool schema digest；不宣称所有动态装配文本与独立固定 hash 逐字相等。
+
+最后核对 reviewer 的真实读取路径时，补齐首次请求前从 CAS 物化 check-recipe.json（含完整 evidenceSchema）与 frozen-checker.ts；删除仍要求 reviewer 直接提交 PPA 数字的旧提示和无用中间变量。原生 fixture 在首次 reviewer 请求处核对两者字节，完整476项验证再次通过。规范 §13 的 retry/wake 与实现同步并更新锁。此后生产源码冻结，开始真实测试前只等待最终预检结果。
+
+最终操作者预检8/8通过，报告 artifacts/takeover-release-preflight-20261103.json：固定运行版本、源码/checkpoint/library、9技能23文件、真实 MCP checkout/参数失败/取消、toy compiler build与聚焦UVM、原生映射正负例、四角色实际wire边界及最小数值自检/独立复验。机器可读报告声明这仅是 readiness，不能替代芯片验收。
+
+真实共享窗口于2026-11-03 02:15:16 +08启动，截止14:15:16 +08，新根 artifacts/takeover-live-20261103-0216。先行四次Conv1D仅改变worker persona，其他合同/seed/checker/空Method/模型与预算固定，顺序control→worker、worker→control。前三次独立CAS复验通过（各58cases/512值/0差异）；第四次control在15调用上限取消，无正式receipt，比较器保留缺失、不计零，comparable=false/delta=null。总48调用、890823 reported tokens、unknown0；这不建立persona收益。随后Buckyball启动，共用原deadline及扣除小试验后的预算，并保留5M token在途尾部余量。半小时监控从整个共享窗口起点计时。
+
+
+03:40操作者审查发现尚未完成的领域覆盖：三个source child都只为task-goal绑定delivery，正式检查虽真实执行并冻结，但仅验证设计/文件身份；reference与compiler的技术比较来自reviewer临时重跑。两个局部成果的复现事实保留，不能升级为强task-goal checks已完整验证。按规划P0-4/11.3与范例第4节，这属于固定领域配方覆盖缺口，不属于延后的任意新脚本发布能力。停止该进程及其全部10个拥有进程，原根只归档，不续跑或改写合同。最终计量603调用、87844685 reported tokens、unknown0、pending0；原根无完整result、无root提交、无RSI/比较/activation。停止过程留下一个失败Run的sessionCut与最终持久化事件数不一致，archive audit明确failed，不修复归档或伪造闭合；该根不能作为完整成功证据。
+
+修复仅扩现有Buckyball配方的host-reference、compiler与synthesis范围，分别给原软件数值、MLIR/Chip.pb映射、独立RTL综合提供直接计算的数据，复用现有checker/CAS/receipt，无core领域推理或自然语言门禁。delivery仍检查交付文件身份，不能单独替代task-goal技术检查。另将操作者AbortSignal接入campaign既有取消链，避免下次以进程退出代替正常封存；原生fixture在bash实际运行后取消，断言子树终结、usage完整且不再购买RSI，定向4/4通过。后续真实新根继续使用原14:15:16绝对deadline和扣除上述消费后的余额，不领取新窗口。
+
+
+修订版根pnpm verify **497/497**（protocol210/runtime140/app132/inventory15），0fail/cancel/skip，project/build/typecheck/lint通过；日志artifacts/takeover-domain-release-verify-20261103.log。task-goal只有delivery会被领域准入预览拒绝，root的delivery项保持独立身份检查；无自然语言关键词判定。旧reference= numerical别名已删，root model-reference改用host-reference。新的compiler scope不要求RTL，synthesis scope允许本top路径“.”，直接比较整数时拒绝小数与不安全整数。对应正负例及成功RSI fixture迁移完成。
+
+另外实际运行极小8-bit寄存加法器的DC compile_ultra和Yosys，新增synthesis配方18项身份/边界/报告检查通过，覆盖1活跃实例/2模块，仅输出component metrics，不产出frontend PPA。原始报告保留；时间单位从原生power报告复制，面积按SMIC180惯例显式声明，未独立确认物理面积尺度。这仅验证真实工具报告接口与解析路径，不构成芯片/PPA比较或完整功率表征。证据artifacts/checker-real-synthesis-20261103。
+
+修订后启动前再次按计划逐项核验全部必做项、示例/消费者同步及冗余删除，机器可读记录artifacts/takeover-domain-prelaunch-review-20261103.json。最终预检8/8通过（artifacts/takeover-domain-preflight-20261103.json）；新增真实任务按计划C固定为原始软件参考+真实编译映射的有界集成回归，使用新的Task/Run/round身份，不将其结果冒充完整frontend/PPA/RSI收益。
+
+有界首根 artifacts/takeover-bounded-20261103-0412 已自主给两个 child 分别绑定 host-reference/compiler 并传完整 project/guide Ref，修正旧根仅 delivery 的领域覆盖缺口。模型流在 compaction 后出现 `Stream ended without finish_reason`、零 usage；计量器正常取消整树和在途 review。135调用全部结算、10233838 reported tokens、unknown2，3个Task/Run终结，唯一trace封存，终局审计complete/valid；无正式验收成功。原始归档不修写，发生顺序不证明 compaction 导致 provider 错误。
+
+新根 artifacts/takeover-bounded-20261103-0427 扣除共享738调用/98078523 reported tokens、两次未知请求1480000最大额度预留及5000000在途余量，维持原14:15:16截止。04:45半小时快照为本根121调用/17034497 tokens，shared859调用/115113020 tokens；源码哈希未变、审计partial/valid。root本地host-reference为12cases/29686值、0超容差，compiler为1route/173mapped operations，均不是正式receipt。root随后自主派发有界独立参考child，绑定host-reference、完整输入Ref与12个明确输入/固定FP32容差，禁止复用parent可写产物。等待child独立验收及parent冻结结果消费，未将局部自检升级为全线通过。最终报告见 docs/validation-20261103.md。
+
+05:07:04该有界根正式完成：root/child均verified，2个Task/Run全部关闭，唯一trace封存。root正式host-reference报告108checks/17cases/56186值/0超容差（maxAbsError976），compiler报告12checks/1route/173mapped operations；child正式78checks/12cases/29686值/0超容差（maxAbsError1040）。reviewer从固定原软件/checkpoint独立再生参考，在全新checkout构建toy compiler并重跑recipe，mapped MLIR逐字节相同。模型自主派发的child以58冻结叶交给parent，root正式Evidence.inputs恰为2合同Ref+58叶Ref=60，CAS身份和顺序全部核对。crosscheck展示ID的ba36/ba38手写笔误未进入正式输入链，原始产物保留并披露。
+
+终局审计artifacts/takeover-bounded-20261103-0427/operator-final-audit.json为complete/valid、issues=[]，生产源码哈希未变，sessionCut/usage、合同/manifest/receipt/逐check报告及trace权限全部通过。本根228调用/37114919 reported tokens、unknown0，shared966调用/135193442 reported tokens、pending0；历史unknown2另预留1480000 tokens，未重置窗口或预算。最终验证文档同时保留6个candidate排除输入及1个额外reviewer输入超FP32容差的观察，不把FP64归因当作原阈值通过；编译仅一个无bias epilogue的matmul，未覆盖RTL/完整frontend。该根无RSI Round/候选比较/赢家activation，不声称persona、完整芯片或PPA收益。完整497项门禁对应同一生产源码快照，此后仅补充审计文档。

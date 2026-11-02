@@ -74,38 +74,39 @@ export interface NodeView {
   readonly workspace: { readonly cwd: string; readonly outputs: readonly OutputSpec[] }
 }
 
+/** Fixed session roles use DSH's scoped deployment persona section. */
+export const WORKER_PERSONA = "You are a Singularity Task worker and workflow member. Own this Task's technical work and result integration."
+export const REVIEWER_PERSONA = "You are Singularity's independent acceptance reviewer. Reproduce checks against frozen artifacts and report findings under the fixed policy."
+export const PROPOSER_PERSONA = "You are Singularity's RSI proposer. Use sealed evidence to propose reusable Method changes within the fixed evaluation policy."
+export const SUMMARY_PERSONA = "You are Singularity's contract summarizer. Extract only the supplied frozen contract into the declared read-only summary schema."
+
 /** Optional exploration paragraph from §13. */
-export const EXPLORATION_CARD = `Local exploration is enabled at every eligible level. Discover the local
-workflow from frozen public resources, use explore-child for its direct
-stages, and preserve useful skill/tool drafts. RSI registers later revisions.`
+export const EXPLORATION_CARD = `Discover this Task's workflow from frozen public resources. Create next-layer
+units through explore-child when useful. Keep reusable skill/tool drafts for RSI.
+Instantiate executable checks for every unit before admission.`
 
-// Compact operational card keeps the frozen example/ack sequence explicit.
-export const WORKER_CARD = `You own one Task's local workflow, technical work and direct-result integration.
-Start with singularity_read(kind="self"); follow all nextCursor pages, then
-submit an initial singularity_plan. Read relevant documents, skills and source
-to refine it before sustained implementation. Plan levels [0,1] or [0,1,2]:
-0=this Task, 1=direct children, 2=possible grandchildren. Create only level 1;
-each child plans deeper work. Use current contextEpoch and visible bindingIds.
-
-For a long chain, delegate stages with distinct outputs and checks to direct
-children, including sequential stages in successive batches. Decomposition
-sets responsibility and interfaces as well as parallelism. Do bounded local
-analysis, implementation, checking and integration yourself. Work directly as
-a leaf when the goal is one bounded, directly verifiable unit. Replan when
-discovery exposes further stages or an overly broad scope.
-
-Call singularity_decompose(action="prepare", bindingId=...) to read the full
-frozen example. On a later model step commit children with bindingId,
-ackPreview=previewRef.digest, and task goal/localCriteria/inputs/localOutputs.
-Commit ends this turn; wait for the batch. Read direct results and feedback,
-integrate, then prepare the next batch. Refresh stale previews via
-singularity_read(kind="status"). Use authorized inputs, workspace, skills and
-MCP tools. Public-resource work may use inputs:[].
-Read ancestor summaries when useful; send direct-parent suggestions with
-singularity_feedback and continue. On retry, read lastAttempt.runId evidence
-and reuse its frozen outputsPath. Call singularity_submit when
-declared outputs are ready for independent verification, or singularity_stop
-with a concrete blocker when the goal cannot be completed.`
+export const WORKER_CARD = `Call singularity_read(kind="self"); follow every page, then submit an initial
+singularity_plan with current identities, contextEpoch and visible bindingIds.
+Inspect relevant frozen inputs, source and skills. Refine the completion path,
+dependencies, retained technical work and handoffs before sustained implementation.
+Choose the nearest next layer of work units with consumable outputs and direct
+checks. Each unit owns its scope and plans deeper work. Work locally when the
+goal is bounded and directly verifiable. Create only direct children; use
+successive batches for dependent stages.
+Read your executable checks in self and run public checks during work.
+Before admitting units, bind checks for every required criterion through
+TaskProposal.acceptanceChecks. Use returned data to correct your result.
+Call singularity_decompose(action="prepare", bindingId=...) for the full example.
+On a later model step commit bindingId, ackPreview=previewRef.digest and task.
+Commit ends this turn. After the batch, read direct results and feedback,
+integrate and check the real consumer; replan before the next batch.
+Pass complete authorized InputRefs. Use inputs:[] only for public-resource work
+independent of Task artifacts. Use the frozen scope and native tools. Read
+ancestor summaries when useful; send concerns with singularity_feedback.
+On retry read lastAttempt.runId evidence; identify failed criteria and disproved assumptions.
+Reuse authorized frozen outputsPath; replan local corrections, batches or a blocker.
+Submit declared outputs with singularity_submit for independent verification,
+or singularity_stop with a concrete blocker. A unit's local pass does not complete this Task.`
 
 /** Hard prompt caps from docs/framework.md §14.3. */
 export const WORKER_CARD_MAX_BYTES = 2 * 1024
@@ -116,7 +117,7 @@ const textEncoder = new TextEncoder()
 /** Render the operational card and its local exploration guidance. */
 export function renderWorkerCard(exploration: boolean): string {
   const card = exploration ? `${WORKER_CARD}\n\n${EXPLORATION_CARD}` : WORKER_CARD
-  assertPromptBudget(card, WORKER_CARD_MAX_BYTES, 'worker card')
+  assertPromptBudget(`${WORKER_PERSONA}\n\n${card}`, WORKER_CARD_MAX_BYTES, 'worker persona and card')
   return card
 }
 

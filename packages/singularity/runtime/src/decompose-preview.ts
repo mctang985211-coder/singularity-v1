@@ -10,6 +10,8 @@ import {
   remainingBudgetPctSchema,
   taskCriterionSchema,
   taskExampleSchema,
+  checkPreviewSchema,
+  checkRecipeSchema,
 } from '@singularity/protocol'
 import type { JsonValue, Ref } from '@singularity/protocol'
 
@@ -37,6 +39,8 @@ const previewSchema = closedObject({
   method: refSchema, brief: z.string(), exampleRef: refSchema, example: taskExampleSchema,
   interface: templateInterfaceSchema, resolved: resourceSummarySchema,
   sourceContract: digestSchema, digest: digestSchema,
+  acceptanceChecks: z.array(checkPreviewSchema),
+  checkRecipes: z.array(closedObject({ ref: refSchema, recipe: checkRecipeSchema })),
 })
 const deliverySchema = closedObject({
   v: z.literal(1), kind: z.literal('decompose-preview-delivery'), ...parentFields,
@@ -51,6 +55,8 @@ const prepareSchema = closedObject({
   brief: z.string(), example: taskExampleSchema, interface: templateInterfaceSchema,
   resolved: resourceSummarySchema, reminder: z.string(), planningSketchRef: refSchema,
   contextEpoch: z.string(), asOf: z.number().int(), remainingBudgetPct: remainingBudgetPctSchema,
+  acceptanceChecks: z.array(checkPreviewSchema),
+  checkRecipes: z.array(closedObject({ ref: refSchema, recipe: checkRecipeSchema })),
 })
 
 /** Runtime-private formats have one schema/type source. CAS verifies their digests. */

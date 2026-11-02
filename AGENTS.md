@@ -4,7 +4,7 @@
 
 - `docs/framework.md` 是协议唯一权威；`spec-lock.json` 固定其 digest。`AGENTS.md` 只写施工约束，`docs/progress.md` 写当前状态、证据和缺口。调研 artifact 不替代规范，不另建平行任务卡和交接规范。
 - 开始或恢复工作时阅读相关规范、进度和实际消费者；保留工作区已有未提交成果。旧 Singularity 仓库不提供本仓库兼容要求。
-- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011/012/013/014/015 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
+- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011/012/013/014/015/016 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
 
 ## 启动条件先于执行
 
@@ -24,7 +24,7 @@
 - DSH 拥有 Agent/Session、模型 loop、tool/skill registry、MCP transport、compaction、session persistence、创建回滚、取消和 disposal。直接组合公开能力；同步 receipt/usage 原始事件读取只留一个经过接入成本比较的适配入口，不复制 inbox 或 transcript。
 - 每个 worker 是 workflow 的一级：先形成初始草图，再依据相关资源细化职责、产物和检查边界；长链阶段创建直属任务，串行阶段用后续批次衔接。每层承担本地技术工作与集成，叶目标应有界且可直接验证。优化现有 prompt，不增语义判定器、固定树深或分解数量门禁；guided 分解证据不能升级为空 Method 自主发现多层 workflow 的证据。
 - 正式 child Task 使用独立 DSH session；只创建 direct children，root/descendants 固定 Method revision，运行中合同不变。Summary 是按合同 digest 派生的只读业务缓存，usage 归 source Task；Summary 使用原生 agents.create/dispose；替换为 subagent 所需的 live parent/preset/catalog 成本比较见 `docs/progress.md` 的原生接入比较。
-- root acceptance 归 operator/domain。explore-child 的固定 task-goal 标准也须由领域 provider 验证，空 criteria 不代表完成本地目标；探索 child 用固定 required result/ tree 交付证据，root 输出由 operator/domain 定义。保留冻结 Ref/digest 和外部 receipt 绑定；DB 外键不能证明外部内容身份。Proposer 只提交 patch，host 评测、比较和 trusted expected-head activation；隐藏 payload 保持实际部署读取边界。
+- root acceptance 归 operator/domain。每个 Task 至少有一个 required criterion，且每个 required criterion 必有非空 executable checks；parent 只从冻结 policy 选择 recipeRef/params，经 acceptanceChecks 追加，不覆盖模板检查。localCriteria 只作 guidance。explore-child 的 task-goal 槽位和完整 fallbackExample 由领域提供；探索 child 用固定 required result/ tree 交付证据，root 输出由 operator/domain 定义。保留冻结 Ref/digest 和外部 receipt 绑定；DB 外键不能证明外部内容身份。Proposer 只提交 patch，host 评测、比较和 trusted expected-head activation；隐藏 payload 保持实际部署读取边界。
 
 ## 最短正常路径
 
@@ -33,6 +33,7 @@
 - 只有模型可修正的参数、计划、提交和协议拒绝返回模型。宿主 CAS、provider、会话、资源、原生清理等未知异常保留原始原因，原生 cancel/dispose 后抛出，不写虚假 invalid/Evidence/闭合 fact。Summary、Proposer、precheck 与 Task 工具遵守同一边界。清理须尝试完成；多重失败保留全部原因，不吞错误。
 - 完成的非法工具参数走 DSH 原生解析/校验；Singularity 工具保留原始失败并附 failed 与完整极简格式用例。用例按需展示，不堆进 system prompt；不修补 JSON、不匹配自然语言错误、不建立参数恢复或 provider 重购机制。原始畸形参数须经过真实 provider adapter 的无付费回归，不能只用 JSON.stringify fixture 证明该路径。
 - 预算/截止、领域失败和无效验收仍按协议结算。verifier 转发 AbortSignal 并等待自己拥有的工作退出，不能丢弃 Promise 冒充停止。任意不合作进程内代码不在强停保证内。
+- self 返回完整授权 InputRef；公开检查预览由冻结配方派生。工作中用原生 bash/MCP 自检；提交后 provider 独立重跑，用宿主 CasObjectWriter 发布 PublicReceipt.criteria[].checks 报告，VerifierRequest 保持只读。reportRef 随已有公开 receipt 授权，不加 registry、工具、fact、账本或兼容旧合同路径。
 - retry 通过既有 evidence 读取最近 closed Run 的公开逐项验收，复用其 CAS 冻结输出；不读取旧 workspace/transcript。start/batch/tool 预算共用当前 Task 投影，retry 不重置 token/time 百分比。
 - resource 文本读取的 UTF-8 边界用 Node 原生 isUtf8；合法二进制对象返回模型可改正的工具拒绝，使用 copy-to-work 与原生文件工具。CAS 读取异常仍是宿主异常，不添加格式猜测或解包恢复器。
 - 同进程 parent yield → 整批 terminal → continue 是正常路径；只允许实际观察到的 live yield 续接，不从归档重建。保持原合同、session 和 deadline；已挂载 child 输出不重复覆盖。业务 retry 使用新 Run/session 和独占创建的新 workspace，保留 required feedback/replan/replacement；probe 允许同批多实例与后续批次的新问题，不沿用 required winner 或自动 replacement 门禁。
