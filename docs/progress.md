@@ -240,3 +240,6 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 
 
 10:24巡检：1573请求/1572结算，input249985268/output1904410/unknown0；9Tasks四层树，4Task verified（LLM、Flow、Conv1d IP、PPA），没有failed terminal Task，root仍等批次。PPA Run2根据公开意见修正源列表排序，独立driver与标准MCP重跑均得到六报告逐字节一致；Conv1d Run2修正ISA/decoder可达性，独立review复现UVM，并额外跑54配置/3795行bit-exact、backpressure/reset、故意删除rounding的mutation失败。它们是组件/域子任务证据，不代表全芯片仿真或root前端完成。model recipe Run2与HiFT window probe在独立审查，HiFT/reference两级parent等待；下一次约10:54。证据operator-monitor-20261102-1024.json及对应公开receipts。
+
+
+10:54巡检：1926请求全结算，input307062688/output2596345/unknown0；12Tasks、四层树、四个batch、十一次提交，6Task verified（新增HiFT reference和window-only probe），尚无failed terminal Task。recipe Run2的真实编译/权重导入成功，但独立review发现HiFT magnitude/phase/ISTFT/clamp与Flow normalization/RoPE等语义不保真，拒绝通过；Run3根据公开意见自主创建HiFT/Flow/LLM三路semantics子任务，未放宽验收。HiFT child实际查询ancestor并得到SUMMARY_PENDING；原生Summary Worker随后提交并被接受，reported8652 tokens，归recipe owner session。child尚未再次读取已生成摘要，owner Run尚未结算，故摘要返回/最终UsageRecord.summary归属仍待核对。root仍等直属批次，无root提交/RSI/比较/赢家；下一次约11:24，截止11:52:24。证据operator-monitor-20261102-1054.json及对应原生session/公开receipts。
