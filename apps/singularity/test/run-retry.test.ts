@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access,readFile,rm } from 'node:fs/promises'
+import { access,readFile,rm,writeFile } from 'node:fs/promises'
 
 import { join } from 'node:path'
 import test from 'node:test'
@@ -11,6 +11,7 @@ import {
 computeDigest,
 executionRecordSchema,
 parseProtocolValue,
+sealPublicReceipt,
 submissionManifestSchema
 } from '@singularity/protocol'
 import {
@@ -45,6 +46,7 @@ writeOutputReply
 import type { ReplyScript,Scenario } from './task-fixture.ts'
 import {
 FROZEN_OUTPUT,
+CRITERION_ID,
 LIVE,
 LIVE_TIMEOUT_MS,
 OUTPUT_PATH,
@@ -62,10 +64,11 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
   const secondSessionId = `${taskId}-session-2`
   let scenario: Scenario | undefined
   let secondWorkspace = ''
+  let now = Date.now()
 
   const fixtureScript: ReplyScript = (request, index) => {
     if (index === 0) {
-      return { content: 'The first attempt ends without submitting.', usage: fixtureUsage(index) }
+      return { content: 'The first attempt ends without submitting.', usage: { promptTokens: 199_992, completionTokens: 8, totalTokens: 200_000, cachedTokens: 0 } }
     }
     if (index === 1) {
       const reply = selfReadAndPlan(request, 0, scenario, taskId, secondRunId)
@@ -83,7 +86,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
   }
 
   await withHarness(fixtureScript, async ({ spike, fixture, workspace, storeRoot }) => {
-    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 2 })
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 2, deadlineAt: now + 10 * 60_000 })
     const active = scenario
 
     const first = await executeSingleRun({
@@ -103,6 +106,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
         },
       },
       transientInvalidReasons: [],
+      clock: () => now,
     })
     assert.ok(first.kind === 'settled')
     assert.equal(first.classification, 'failed')
@@ -136,6 +140,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
     }
 
     secondWorkspace = join(storeRoot, 'retry-workspace')
+    now += 5 * 60_000
     const verifierCalls: { readonly inputs: readonly Ref[]; readonly outputs: readonly Ref[] }[] = []
     try {
       const second = await retrySingleRun({
@@ -150,8 +155,16 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
         maxOutputBytes: 1024 * 1024,
         verifier: passingVerifier(active, secondRunId, secondWorkspace, verifierCalls),
         transientInvalidReasons: [],
+        clock: () => now,
       })
       assert.ok(second.kind === 'settled')
+      const retryWire = messageTexts(fixture.requests[1] ?? {}).join('\n')
+      assert.ok(retryWire.includes('"tokensPct":80'), 'the retry starts with 80% of the original Task token quota')
+      assert.ok(retryWire.includes('"wallClockPct":50'), 'the retry retains the Task time origin')
+      assert.ok(retryWire.includes('remaining-budget=80/100/50/0%.'), 'the start wake uses the same cumulative budget as NodeView')
+      const afterSelf = messageTexts(fixture.requests[2] ?? {}).join('\n')
+      assert.ok(afterSelf.includes('"tokensPct":79'), 'the self result includes prior usage and this attempt usage')
+      assert.ok(afterSelf.includes('"wallClockPct":50'))
 
       assert.equal(second.previousRunId, firstRunId)
       assert.equal(second.attempt, 2)
@@ -256,6 +269,61 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
     } finally {
       await rm(secondWorkspace, { recursive: true, force: true })
     }
+  })
+})
+
+void test('retry reads public criterion findings and reuses frozen output without opening the prior workspace', { timeout: 240_000 }, async () => {
+  const taskId = `retry-findings-${String(process.pid)}-${String(Date.now())}`
+  const firstRunId = `${taskId}:run:1`, secondRunId = `${taskId}:run:2`
+  const reason = 'The boundary case is missing; add the independent boundary check.'
+  const previousPath = `attempts/${encodeURIComponent(firstRunId)}/result`
+  let scenario: Scenario | undefined
+  await withHarness((request, index) => {
+    const local = index < 4 ? index : index - 4
+    const runId = index < 4 ? firstRunId : secondRunId
+    if (local <= 1) {
+      const reply = selfReadAndPlan(request, local, scenario, taskId, runId)
+      assert.ok(reply)
+      return reply
+    }
+    if (index === 2) return writeOutputReply()
+    if (index === 3 || index === 8) return submitReply()
+    if (index === 6) return { toolCalls: [{ id: 'previous-findings', name: 'singularity_read',
+      arguments: JSON.stringify({ kind: 'evidence', id: firstRunId }) }], usage: fixtureUsage(index) }
+    assert.equal(index, 7)
+    const wire = messageTexts(request).join('\n')
+    assert.ok(wire.includes(reason), 'the actual criterion finding reaches the retry model')
+    assert.ok(wire.includes(`attempts/${encodeURIComponent(firstRunId)}`), 'the NodeView advertises the frozen previous outputs')
+    return { toolCalls: [{ id: 'reuse-frozen-output', name: 'bash',
+      arguments: JSON.stringify({ command: `cat '${previousPath}' > '${OUTPUT_PATH}'` }) }], usage: fixtureUsage(index) }
+  }, async ({ spike, fixture, workspace, storeRoot }) => {
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 2 })
+    const active = scenario
+    const first = await executeSingleRun({ ctx: spike.ctx, journalRoot: storeRoot, workspace,
+      runId: firstRunId, sessionId: `${firstRunId}:session`, admission: active.runAdmission,
+      composition: active.composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
+      verifier: { provider: active.provider, async verify(request) {
+        await writeFile(join(workspace, OUTPUT_PATH), 'mutable old workspace must not be reused\n')
+        return sealPublicReceipt({ v: 1, provider: active.provider, operationId: request.operationId,
+          contractDigest: active.contract.digest, inputDigests: request.inputs.map(ref => ref.digest),
+          outputDigests: request.outputs.map(ref => ref.digest), criteria: [{ id: CRITERION_ID, verdict: 'fail', reason }],
+          exit: { code: 0, signal: null }, timedOut: false })
+      } }, transientInvalidReasons: [] })
+    assert.ok(first.kind === 'settled')
+    assert.equal(first.classification, 'failed')
+    assert.ok(first.evidenceRef)
+    const secondWorkspace = join(storeRoot, 'retry-findings-workspace')
+    const calls: { readonly inputs: readonly Ref[]; readonly outputs: readonly Ref[] }[] = []
+    const second = await retrySingleRun({ ctx: spike.ctx, journalRoot: storeRoot, workspace: secondWorkspace,
+      previousRunId: firstRunId, runId: secondRunId, sessionId: `${secondRunId}:session`,
+      composition: await currentComposition(spike.ctx, storeRoot, active), agentOptions: agentOptions(), maxOutputBytes: 1024,
+      verifier: passingVerifier(active, secondRunId, secondWorkspace, calls), transientInvalidReasons: [] })
+    assert.ok(second.kind === 'settled')
+    assert.equal(second.classification, 'verified')
+    assert.equal(await readFile(join(secondWorkspace, previousPath), 'utf8'), FROZEN_OUTPUT)
+    assert.equal(await readFile(join(workspace, OUTPUT_PATH), 'utf8'), 'mutable old workspace must not be reused\n')
+    assert.equal(calls[0]?.inputs.length, active.contract.spec.inputs.length + 1, 'previous frozen output retains its evidence lineage')
+    assert.equal(fixture.requests.length, 9)
   })
 })
 

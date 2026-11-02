@@ -295,11 +295,11 @@ export class RunToolController {
   private readTool() {
     return defineTool({
       name: 'singularity_read',
-      description: 'Read self, direct children/feedback, authorized resources/evidence or ancestor summaries; follow nextCursor.',
+      description: 'Read Task views/resources. evidence + child ID or lastAttempt.runId returns public findings as JSON text; follow nextCursor.',
       parameters: {
         kind: { type: 'string', enum: ['self', 'status', 'resource', 'children', 'evidence', 'ancestor', 'feedback'], required: true, description: 'Authorized Task view.' },
-        id: { type: 'string', description: 'The visible resource, child, evidence, feedback, or ancestor contract digest.' },
-        cursor: { type: 'string', description: 'nextCursor from a self page in this epoch.' },
+        id: { type: 'string', description: 'Visible resource, child, evidence, lastAttempt.runId, feedback, or ancestor digest.' },
+        cursor: { type: 'string', description: 'nextCursor from the same read object.' },
         page: { type: 'integer', description: 'List page size.' },
       },
       output: {

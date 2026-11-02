@@ -1,8 +1,8 @@
 import { chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import type { InputRef,JsonValue,Ref,TaskRunState,TaskState,TaskTemplate } from '@singularity/protocol'
-import { evidenceSchema,parseJsonText,parseProtocolValue,submissionManifestSchema } from '@singularity/protocol'
+import type { InputRef,JsonValue,Ref,RunState,TaskRunState,TaskState,TaskTemplate } from '@singularity/protocol'
+import { canonicalize,evidenceSchema,parseJsonText,parseProtocolValue,publicReceiptSchema,submissionManifestSchema } from '@singularity/protocol'
 
 import { activeChildBatch } from './decompose-commit.ts'
 import { DecomposeError } from './errors.ts'
@@ -15,11 +15,34 @@ import { prepareWorkspace } from './workspace.ts'
 export type ChildNodeView = Pick<NodeView,
   'requiredObligations' | 'childBatch' | 'childHistory' | 'recentChildResults'>
 
-export interface DirectChildResult {
-  readonly task: TaskState
+interface RunResult {
+  readonly runId?: string
   readonly evidenceRef?: Ref
   readonly executionRecordRef?: Ref
   readonly outputs: readonly (InputRef & { readonly kind: 'file' | 'tree' })[]
+}
+
+export interface DirectChildResult extends RunResult {
+  readonly task: TaskState
+}
+
+/** Only a closed Run's frozen submission can supply artifacts to another Run. */
+export async function loadRunResult(service: CommandService, run: RunState | undefined, path: string, idPrefix?: string): Promise<RunResult> {
+  const outputs: RunResult['outputs'][number][] = []
+  if (run?.closed !== undefined && run.submitted !== undefined) {
+    const manifest = parseProtocolValue(submissionManifestSchema, parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(
+      (await service.readObject(run.submitted.outputs, 'object')).bytes)))
+    for (const output of [...manifest.outputs, ...manifest.learningDrafts]) {
+      if (output.object === undefined) continue
+      outputs.push({ id: `${idPrefix ?? run.runId}:${output.id}`, kind: output.kind, object: output.object,
+        path: `${path}/${encodeURIComponent(output.id)}`, access: 'read' })
+    }
+  }
+  return { outputs,
+    ...(run === undefined ? {} : { runId: run.runId }),
+    ...(run?.closed?.evidenceRef === undefined ? {} : { evidenceRef: run.closed.evidenceRef }),
+    ...(run?.closed?.executionRecordRef === undefined ? {} : { executionRecordRef: run.closed.executionRecordRef }),
+  }
 }
 
 /** One journal cut supplies mounts, reads, join guards and verifier inputs. */
@@ -43,26 +66,8 @@ export async function loadDirectChildren(
     const task = state.tasks.get(childId)
     if (task === undefined) continue
     const lastRun = state.runs.get(task.runIds.at(-1) ?? '')
-    const outputs: (InputRef & { readonly kind: 'file' | 'tree' })[] = []
-    if (task.phase === 'closed' && lastRun?.submitted !== undefined) {
-      const manifest = parseProtocolValue(submissionManifestSchema,
-        parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(
-          (await service.readObject(lastRun.submitted.outputs, 'object')).bytes)))
-      for (const output of [...manifest.outputs, ...manifest.learningDrafts]) {
-        if (output.object === undefined) continue
-        outputs.push({
-          id: `${childId}:${output.id}`,
-          kind: output.kind,
-          object: output.object,
-          path: `children/${encodeURIComponent(childId)}/${encodeURIComponent(output.id)}`,
-          access: 'read',
-        })
-      }
-    }
-    results.push({ task, outputs,
-      ...(lastRun?.closed?.evidenceRef === undefined ? {} : { evidenceRef: lastRun.closed.evidenceRef }),
-      ...(lastRun?.closed?.executionRecordRef === undefined ? {} : { executionRecordRef: lastRun.closed.executionRecordRef }),
-    })
+    const result = await loadRunResult(service, task.phase === 'closed' ? lastRun : undefined, `children/${encodeURIComponent(childId)}`, childId)
+    results.push({ ...result, task })
   }
   const current = results.filter(result => result.task.parentRunId === runId)
   const requiredObligations = template.children.filter(binding => binding.join === 'required').map(binding => {
@@ -113,32 +118,31 @@ export async function loadDirectChildren(
 }
 
 /** Materialize declared frozen outputs only; never copy a child workspace. */
-export async function mountDirectOutputs(service: CommandService, workspace: string, children: DirectChildren, mounted: Set<string>): Promise<void> {
-  for (const result of children.results) {
-    for (const input of result.outputs) {
-      if (mounted.has(input.id)) continue
-      if (input.kind === 'tree') {
-        const bundle = await readTreeBundle(service, input.object, Number.MAX_SAFE_INTEGER)
-        for (const file of bundle.manifest.files) {
-          const path = `${input.path}/${file.path}`
-          await prepareWorkspace(workspace, [{ ...input, object: file.object, path, access: 'copy-to-work' }], service)
-          await chmod(join(workspace, path), 0o444)
-        }
-      } else {
-        await prepareWorkspace(workspace, [{ ...input, access: 'copy-to-work' }], service)
-        await chmod(join(workspace, input.path), 0o444)
+export async function mountRunOutputs(service: CommandService, workspace: string, outputs: RunResult['outputs'], mounted: Set<string>): Promise<void> {
+  for (const input of outputs) {
+    if (mounted.has(input.id)) continue
+    if (input.kind === 'tree') {
+      const bundle = await readTreeBundle(service, input.object, Number.MAX_SAFE_INTEGER)
+      for (const file of bundle.manifest.files) {
+        const path = `${input.path}/${file.path}`
+        await prepareWorkspace(workspace, [{ ...input, object: file.object, path, access: 'copy-to-work' }], service)
+        await chmod(join(workspace, path), 0o444)
       }
-      mounted.add(input.id)
+    } else {
+      await prepareWorkspace(workspace, [{ ...input, access: 'copy-to-work' }], service)
+      await chmod(join(workspace, input.path), 0o444)
     }
+    mounted.add(input.id)
   }
 }
 
-/** All lookups are scoped to direct children or explicitly authorized inputs. */
+/** All lookups are scoped to direct children, the previous attempt or explicit inputs. */
 export async function readChildData(
   service: CommandService,
   children: DirectChildren,
   inputs: readonly InputRef[],
   query: { readonly kind: string; readonly id?: string; readonly cursor?: string; readonly page?: number },
+  previous?: RunResult,
 ): Promise<{ readonly data: JsonValue; readonly objectRef?: Ref; readonly nextCursor?: string }> {
   if (query.kind === 'children') {
     const offset = Number(query.cursor ?? '0')
@@ -160,28 +164,36 @@ export async function readChildData(
       ...(next < children.results.length ? { nextCursor: String(next) } : {}) }
   }
   if (query.kind === 'evidence') {
-    const child = children.results.find(result => result.task.taskId === query.id
-      || result.evidenceRef?.id === query.id || result.executionRecordRef?.id === query.id)
-    const ref = child?.evidenceRef ?? child?.executionRecordRef
-    if (ref === undefined) throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'no direct child result is authorized by this id')
-    const { bytes } = await service.readObject(ref, child?.evidenceRef === undefined ? 'object' : 'evidence')
+    const result = children.results.find(result => result.task.taskId === query.id
+      || result.runId === query.id || result.evidenceRef?.id === query.id || result.executionRecordRef?.id === query.id)
+      ?? (previous !== undefined && (previous.runId === query.id || previous.evidenceRef?.id === query.id
+        || previous.executionRecordRef?.id === query.id) ? previous : undefined)
+    const ref = result?.evidenceRef ?? result?.executionRecordRef
+    if (ref === undefined) throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'no direct child or previous attempt result is authorized by this id')
+    const { bytes } = await service.readObject(ref, result?.evidenceRef === undefined ? 'object' : 'evidence')
     const value = parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-    if (child?.evidenceRef === undefined) return { data: value, objectRef: ref }
+    if (result?.evidenceRef === undefined) return readPage(canonicalize({ result: value }), ref, query.cursor)
     const evidence = parseProtocolValue(evidenceSchema, value)
-    return { data: { ...evidence, verification: publicVerificationOf(evidence.verification) } as unknown as JsonValue, objectRef: ref }
+    const receipt = parseProtocolValue(publicReceiptSchema, parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(
+      (await service.readObject(evidence.verification.publicReceipt, 'object')).bytes)))
+    return readPage(canonicalize({ result: { ...evidence, verification: publicVerificationOf(evidence.verification) }, publicReceipt: receipt }), ref, query.cursor)
   }
   if (query.kind === 'resource') {
-    const input = [...inputs, ...children.inputs].find(input => input.id === query.id || input.object.id === query.id)
+    const input = [...inputs, ...children.inputs, ...(previous?.outputs ?? [])].find(input => input.id === query.id || input.object.id === query.id)
     if (input === undefined) throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'resource is not an authorized input or direct output')
     const { bytes } = await service.readObject(input.object, 'object')
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-    const offset = Number(query.cursor ?? '0')
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > text.length) {
-      throw new DecomposeError('INVALID_ARGUMENT', 'invalid resource cursor')
-    }
-    const end = Math.min(text.length, offset + 4096)
-    return { data: text.slice(offset, end), objectRef: input.object,
-      ...(end < text.length ? { nextCursor: String(end) } : {}) }
+    return readPage(text, input.object, query.cursor)
   }
   throw new DecomposeError('INVALID_ARGUMENT', 'unsupported read kind')
+}
+
+function readPage(text: string, objectRef: Ref, cursor = '0'): { data: JsonValue; objectRef: Ref; nextCursor?: string } {
+  const offset = Number(cursor)
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > text.length) {
+    throw new DecomposeError('INVALID_ARGUMENT', 'invalid result/resource cursor')
+  }
+  const end = Math.min(text.length, offset + 4096)
+  return { data: text.slice(offset, end), objectRef,
+    ...(end < text.length ? { nextCursor: String(end) } : {}) }
 }

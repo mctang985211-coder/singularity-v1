@@ -39,6 +39,8 @@ void test('local child cap settles failed while its sibling continues; parent re
     if (child !== undefined) {
       const step = childRequests.get(currentId) ?? 0
       childRequests.set(currentId, step + 1)
+      if (step === 0) assert.ok(messageTexts(request).some(text => text.includes('"depthPct":0')),
+        'a leaf sees that its remaining decomposition depth is zero')
       const bad = children.values().next().value
       assert.ok(bad)
       if (currentId === bad.contract.taskId) {
@@ -56,6 +58,10 @@ void test('local child cap settles failed while its sibling continues; parent re
     }
     assert.equal(currentId, taskId)
     const step = parentRequests++
+    if (step === 5) assert.ok(messageTexts(request).some(text => text.includes('"taskSlotsPct":25')),
+      'the parent counts itself and both admitted children')
+    if (step === 11) assert.ok(messageTexts(request).some(text => text.includes('"taskSlotsPct":0')),
+      'the replacement uses the final Task slot')
     if (step === 0 || step === 5 || step === 11) return call('singularity_read', { kind: 'self' }, step === 0 ? 100 : 50)
     if (step === 1 || step === 8 || step === 12) return plan(scenario.contract, runId, step === 1 ? 100 : 50)
     if (step === 2 || step === 3 || step === 9) {

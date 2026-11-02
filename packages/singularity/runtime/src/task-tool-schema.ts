@@ -31,6 +31,7 @@ export const taskProtocolReference: JsonValue = {
   examples: taskToolExamples,
   method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Register skill/MCP assets in the Method before binding their IDs; public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
   skills: 'Bound skills use native DSH discovery; directory resources include frozen relative files. Use the path returned by the skill tool for bundled scripts.',
+  results: 'Read evidence with a direct child ID or lastAttempt.runId. Join every data text page to parse {result,publicReceipt?}; publicReceipt.criteria contains the independent findings. Frozen child outputs are under children/; the previous attempt is under lastAttempt.outputsPath. Copy useful artifacts to your current outputs and correct the observed failures before resubmitting. Prior transcripts and private receipts are not exposed.',
 }
 
 export const planningParameters = {
@@ -50,7 +51,7 @@ export const planningInputSchema: ToolDefinition['parameters'] = {
 export const decomposeParameters = {
   action: { type: 'string', required: true, description: '"prepare" reads an example; "commit" admits a prepared batch.' },
   bindingId: { type: 'string', description: 'NodeView childOptions bindingId for prepare.' },
-  children: { type: 'json', description: 'Use previewRef.digest as ackPreview. Probe bindings allow multiple children per batch and later batches; required bindings allow one per batch. Copy complete authorized input refs; exampleText is illustrative. Required outputs are inherited; localOutputs adds supporting outputs or [].' },
+  children: { type: 'json', description: 'ackPreview=previewRef.digest. Probe allows multiple instances per batch and later batches; required one per batch. Use complete authorized input refs. Required outputs inherited; localOutputs adds supporting outputs or [].' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)

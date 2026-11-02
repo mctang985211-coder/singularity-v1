@@ -26,8 +26,9 @@ void test('parent reads public child Evidence while the private receipt stays ou
     limits: { maxRuns: 1, maxStepsPerRun: 2, maxTokens: 1000, deadlineAt: 5000, maxDepth: 1, maxTasks: 1, maxBatchChildren: 1 },
   })
   const privateReceipt = await service.putObject('private-receipt', new TextEncoder().encode('private verifier details'))
+  const finding = `${'Observed boundary evidence. '.repeat(1000)}Fix the reset handshake.`
   const receipt = sealPublicReceipt({ v: 1, provider: contract.acceptance, operationId: 'child-run:verify',
-    contractDigest: contract.digest, inputDigests: [], outputDigests: [], criteria: [], exit: { code: 0, signal: null }, timedOut: false })
+    contractDigest: contract.digest, inputDigests: [], outputDigests: [], criteria: [{ id: 'boundary', verdict: 'fail', reason: finding }], exit: { code: 0, signal: null }, timedOut: false })
   const publicReceipt = await service.putObject('public-receipt', new TextEncoder().encode(canonicalize(receipt)))
   const evidence = sealEvidence({
     v: 1, task: { id: contract.taskId, digest: contract.digest }, runId: 'child-run', contractDigest: contract.digest,
@@ -42,11 +43,22 @@ void test('parent reads public child Evidence while the private receipt stays ou
     closed: { outcome: 'verified', reason: 'verified', source: 'task/closed', factDigest: ref('closure').digest } }
   const children: DirectChildren = { results: [{ task, evidenceRef, outputs: [] }], inputs: [], requiredFailure: false,
     view: { requiredObligations: [], childBatch: null, childHistory: { total: 1, outcomes: { verified: 1 } }, recentChildResults: [] } }
-  const result = await readChildData(service, children, [], { kind: 'evidence', id: task.taskId })
-  const text = canonicalize(result.data)
+  let text = '', cursor: string | undefined, pages = 0
+  do {
+    const result = await readChildData(service, children, [], { kind: 'evidence', id: task.taskId, ...(cursor === undefined ? {} : { cursor }) })
+    assert.equal(typeof result.data, 'string')
+    assert.ok(new TextEncoder().encode(JSON.stringify(result)).byteLength < 16 * 1024)
+    text += result.data as string
+    cursor = result.nextCursor
+    pages++
+  } while (cursor !== undefined)
+  assert.ok(pages > 1, 'long independent findings use bounded pages')
+  const payload = JSON.parse(text) as { publicReceipt: typeof receipt }
+  assert.equal(payload.publicReceipt.criteria[0]?.reason, finding)
   assert.ok(text.includes(publicReceipt.id))
   assert.ok(!text.includes('privateReceipt'))
   assert.ok(!text.includes(privateReceipt.id))
+  await assert.rejects(readChildData(service, children, [], { kind: 'evidence', id: 'unrelated-run' }), { code: 'INPUT_NOT_AUTHORIZED' })
   await assert.rejects(readChildData(service, children, [], { kind: 'resource', id: privateReceipt.id }), { code: 'INPUT_NOT_AUTHORIZED' })
   assert.ok(new TextDecoder().decode((await service.readObject(evidenceRef, 'evidence')).bytes).includes(privateReceipt.id))
 })

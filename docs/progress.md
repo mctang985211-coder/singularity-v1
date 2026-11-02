@@ -208,3 +208,14 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 当前 BB 轮的独立 review 多次调用 bbdev uvm --verilog，120 秒后报告 Routes failed to register。源码核对确定 CLI 宣称的 /uvm/verilog 后端不存在；对 50 个声明做操作者静态清单比较还发现 /verilator/cosim 同样不存在。领域补丁删除这两个过时操作，两个 API 错误提示改为已有的 uvm --build（chip/ball）。无运行时探测、重试、路由 alias 或恢复 manager；不修改当前轮冻结 baseline。
 
 单独准备副本 artifacts/buckyball-cosyvoice3-20261102-routes：base 82533d89 / bbdev bc83fe53。补丁对上游 06d35a79 可完整应用；48 个剩余 CLI 操作都有对应 route（静态清单不冒充全部业务成功）。原生 DSH MCP 实测 checkout/config 15.593 秒；两个已删除参数分别 2.090/2.040 秒由既有 argparse 拒绝；uvm help 与总 help 成功；已有 AXIS arbiter VCS/UVM 63.355 秒成功。0 模型请求。证据 route-inventory.json 与 mcp-preflight-routes/；准备环境仅用于下一新根。
+
+
+### retry 公开验收反馈与累计预算（2026-11-02，amendment 015）
+
+05:48 BB 轮的失败定位发现两处真实缺口。规范 §12.4 要求 retry 得到上次公开 receipt，但实现只在 lastAttempt 给通用 reason，evidence 读取仅允许 direct child；parent 即使拿到 child Evidence 也读不到其中的 publicReceipt body。新 Run 因而难以针对具体失败修正。另一个问题是 start wake 用 zero usage、本次 retry reservation/time origin 作百分比分母，导致已消耗大半时间的 retry 仍显示接近 100%；taskSlots/depth 也没有反映已创建子树与剩余深度。
+
+现有 evidence 读取授权扩展到本 Task 最近 closed Run，返回分页 JSON text {result,publicReceipt?}，真实 criteria/reason 按需读取，privateReceipt 仍不公开。child 与 retry 共用一个提交加载器和输出挂载器；旧产物仅从 CAS 冻结提交挂载到 lastAttempt.outputsPath，不复制旧 workspace/transcript。其 refs 保留输入与 verifier lineage。预算直接复用已有 facts/Task 投影，start/batch/tool 共用当前计算；删除单独 startBudget 路径和旧 computeBudget，不新增预算账本、fact、工具或恢复状态。BB example 在 source terminal 后先 seal trace，再决定剩余预算是否允许打开 RSI；截止不再购买模型请求。
+
+定向原生 DSH 回归覆盖：200k/1M usage 后 retry 的 NodeView 为 80%、五分钟/十分钟为 50%，self 工具结果继续扣本次 usage；leaf depth=0，parent 在两 child 与 replacement 后实际扣除 Task 槽位；retry 模型读到真实逐项失败意见，使用冻结旧文件完成新提交，旧 workspace 中被 verifier 改写的内容不被复用。长 child findings 分页完整重组、单页小于 16 KiB、private/无关 Run 拒读。固定 worker+exploration card 为 1983 bytes；精简重复工具描述保持原 12 KiB surface 上限。初次检查暴露的类型 lint 与 surface 超限均已修正，失败日志保留。
+
+根 pnpm verify 全通过：445/445（protocol206、runtime135、app91、domain13），0 fail/skip，project/build/typecheck/lint 全通过；日志 artifacts/attempt-feedback-20261102-release-verify.log。补充 start wake 对累计百分比的 wire 断言在定向回归验证，日志 artifacts/attempt-feedback-wake-20261102.log。fixture 不冒充 BB 完整 frontend、RSI 或 PPA 赢家；真实修复效果由后续新根证明。当前 05:48 进程保留已加载版本，运行资产未中途替换。

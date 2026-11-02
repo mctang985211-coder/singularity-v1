@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–014 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–015 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -1221,13 +1221,15 @@ interface NodeView {
   }
   readonly planningSketchRef: ObjectRef | null
   readonly feedback: { readonly count: number; readonly cursor?: string }
-  readonly lastAttempt: { readonly runId: string; readonly reason: string } | null
+  readonly lastAttempt: { readonly runId: string; readonly reason: string; readonly outputsPath?: string } | null
   readonly budget: RemainingBudgetPct
   readonly workspace: { readonly cwd: string; readonly outputs: readonly OutputSpec[] }
 }
 ~~~
 
 obligations 与 dispatch guard 使用相同规则，不在 prompt renderer 再写一套 canSubmit。canSubmit 只承诺结构/状态允许尝试提交，不预测文件是否存在或 verifier 是否通过。模型看到的预算统一是 0–100 的剩余百分比；精确 token、step、deadline、Task 数和字节只在 host guard、日志和评测中保存。
+
+预算视图与 start/batch wake 使用同一当前投影：tokens 以冻结 Task 总额度为分母，扣除该子树全部已结算尝试及当前 Run usage，并受当前 reservation 限制；wall-clock 使用该 Task 首次 run/opened 的时间原点与固定 deadline，retry 不重置。steps 以本 Run 额度为分母；depth 为当前剩余深度相对 root 最大深度，零深度为 0；taskSlots 扣除已创建的完整本地子树。无需新增预算账本或事实。
 
 documents 和 childOptions 的完整当层摘要列表随实际 NodeView 渲染校验体积；skills/tools 只列身份，不再复制 DSH discovery/schema 中的 description。skill 简介由 scoped DSH discovery 交付，tool 简介由工具 schema 交付，第一请求前装配完整集合；三处不能各注入一遍相同帮助。
 
@@ -1260,6 +1262,8 @@ children/<taskId>/<outputId>/...
 | RSI proposer | 完整 Method、sealed source trace 的可分页索引与公开轨迹、能力资产 | 控制运行中的 Task、评测私有数据、改平台或主动跑实验 |
 | verifier | 合同、固定输入、声明产物、固定规则 | executor 的自述和推理作为验收依据 |
 
+`lastAttempt` 只引用本 Task 最近一个 closed Run。retry 以该 runId 调用现有 `singularity_read(kind='evidence')` 读取公开结果与逐项验收意见；有冻结提交时，host 复用 child 产物加载/挂载路径，将其获准输出挂载在 `attempts/<encodeURIComponent(runId)>/<outputId>`，NodeView 的 `lastAttempt.outputsPath` 给出目录。该命名空间由 runtime 使用，不作为当前声明输出；worker 将需复用的内容明确复制/整合进本次输出。旧 workspace/transcript 和 private receipt 均不公开；这些 CAS refs 可作为本次直属 child 的显式 inputs 和 verifier inputs。没有冻结提交就不提供旧文件。
+
 ## 13. System prompt：固定短 card，领域内容外置
 
 下列 worker card 为 V1 规范的完整平台正文。它提供当前目标、可执行动作和下一步；schema、guard 和结算负责协议约束。模板 guidance 和 skill 与该 card 冲突时，平台义务优先。
@@ -1287,7 +1291,8 @@ integrate, then prepare the next batch. Refresh stale previews via
 singularity_read(kind="status"). Use authorized inputs, workspace, skills and
 MCP tools. Public-resource work may use inputs:[].
 Read ancestor summaries when useful; send direct-parent suggestions with
-singularity_feedback and continue local work. Call singularity_submit when
+singularity_feedback and continue. On retry, read lastAttempt.runId evidence
+and reuse its frozen outputsPath. Call singularity_submit when
 declared outputs are ready for independent verification, or singularity_stop
 with a concrete blocker when the goal cannot be completed.
 ~~~
@@ -1327,6 +1332,7 @@ singularity_read
            id?, cursor?, page? }
   output: { data, objectRef?, nextCursor?, asOf, remainingBudgetPct }
   self 返回完整 TaskSpec、acceptance 公开描述、own guidance、输入/输出路径
+  evidence 以 direct child ID/result Ref ID 或 lastAttempt.runId 返回分页 JSON text {result, publicReceipt?}；result 为公开 Evidence/ExecutionRecord，publicReceipt 包含真实 criteria/reason，去除 privateReceipt；连续拼接 data 页后解析，不截断 findings
   ancestor 按祖先 contractDigest 返回 ContractSummary；摘要未生成时返回 SUMMARY_PENDING；feedback 返回 direct child 的结构化反馈
 
 singularity_plan
@@ -2224,7 +2230,7 @@ C-24 single-case gain with validation regression is not improved
 
 ## 22. 发布冻结与版本治理
 
-本 V1 发布版冻结 C1–C3、A–F、amendment 001–014 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
+本 V1 发布版冻结 C1–C3、A–F、amendment 001–015 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
 
 ### 22.1 冻结内容
 
@@ -2245,7 +2251,7 @@ C-24 single-case gain with validation regression is not improved
 
 ~~~text
 版本：V1 发布规范
-修订：2026-11-02 纳入 amendment 006–014（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 多实例、原生工具参数失败、局部 workflow、探索目标验收与固定产物出口）
+修订：2026-11-02 纳入 amendment 006–015（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 多实例、原生工具参数失败、局部 workflow、探索目标验收与固定产物出口）
 权威文件：docs/framework.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威
@@ -2284,7 +2290,7 @@ C-24 single-case gain with validation regression is not improved
 
 实现默认沿 DSH 公开接口或现成库完成。保留自定义层必须提供具体原生调用路径，并比较本项目实际接入后的状态、分支和适配；只有明确证明原生方案更复杂时才保留。“暂不能证明等价”“库存在不代表可替代”都不能单独充当保留理由。可由操作者保证的条件在启动前固定，runtime 不为环境违约另建探测、恢复或兜底系统。输入不符合合同或权限时返回对应错误，普通执行失败按现有分类结束。改变公开字段、状态或 authority 时提出 amendment；独立正常功能继续推进。
 
-当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014 为准）：
+当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014/015 为准）：
 
 | Amendment | 状态 | 纳入内容 |
 |---|---|---|
@@ -2306,6 +2312,8 @@ C-24 single-case gain with validation regression is not improved
 | 013 | 2026-11-02 用户授权修正框架、要求所有机制得到有效使用；修复实跑发现的空验收 | explore-child 固定 required `task-goal` 标准，由领域 provider 验证冻结本地目标；localCriteria 不获验收权。空 criterion receipt 不可作为探索 child 完成证据，无新增状态或工具 |
 
 | 014 | 2026-11-02 用户授权持续修复实跑与框架；修复实跑发现的探索产物丢失 | explore-child 静态继承 required result/ tree 与 output ID result；localOutputs 可省略且只追加 supporting 输出。root 仍由 operator/domain 定义输出；不增加运行中合同修改、动态注册或恢复逻辑 |
+
+| 015 | 2026-11-02 用户授权持续修复实跑与框架；修复实跑发现的盲重试与预算误报 | 复用 evidence 读取向 direct parent/retry 公开分页 receipt findings；本 Task 最近 closed Run 的冻结输出经现有挂载器提供，NodeView 加 derived outputsPath。预算百分比沿冻结 Task 总量和首次 Run 时间累计，slots/depth 反映实际剩余；不增加 fact、工具、恢复状态或预算账本 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

@@ -341,8 +341,8 @@ export async function continueYieldedRun(service: CommandService, runId: string)
 }
 
 /**
- * Latest prior closed Run of this Task. The retry worker sees only the public
- * closure reason, never the previous transcript or receipt body (§12.2/§12.4).
+ * The latest prior closed Run authorizes public findings and frozen artifacts;
+ * it grants no access to the previous transcript or mutable workspace (§12.4).
  */
 function lastAttemptFromState(
   state: TaskRunState,
@@ -354,8 +354,9 @@ function lastAttemptFromState(
   for (let index = task.runIds.length - 1; index >= 0; index -= 1) {
     const runId = task.runIds[index]
     if (runId === currentRunId) continue
-    const closed = state.runs.get(runId)?.closed
-    if (closed !== undefined) return { runId, reason: closed.reason }
+    const run = state.runs.get(runId)
+    if (run?.closed !== undefined) return { runId, reason: run.closed.reason,
+      ...(run.submitted === undefined ? {} : { outputsPath: `attempts/${encodeURIComponent(runId)}` }) }
   }
   return null
 }
@@ -425,7 +426,7 @@ async function drivePreparedRun(
   mode: OpenedRunMode,
 ): Promise<DrivenRunResult> {
   const { runtime } = prepared
-  const { controller, children, feedback, budget, checkBudget, stopBudget, startBudget } = await createToolController(prepared, request, service)
+  const { controller, children, feedback, budget, checkBudget, stopBudget } = await createToolController(prepared, request, service)
   const observation = await driveAgent({
     prepared,
     request,
@@ -434,7 +435,6 @@ async function drivePreparedRun(
     budget,
     checkBudget,
     stopBudget,
-    startBudget,
     controllerState: () => service.taskRunState(runtime.transientInvalidReasons),
     renderView: () => renderLiveNodeView({
       contract: runtime.contract,

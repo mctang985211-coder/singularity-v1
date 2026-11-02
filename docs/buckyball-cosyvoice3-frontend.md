@@ -162,3 +162,8 @@ Verdi PLI 预检复现 `libnovas.so` 缺少 `libz.so.1`；verify Nix shell 的 `
 ## CLI 声明与实际路由对齐（2026-11-02）
 
 实跑暴露 bbdev 的 uvm --verilog 空路由：帮助有声明但后端没有实现，导致服务启动后空等 120 秒。领域补丁删除该操作及同样失效的 verilator --cosim，API 指引改为已有 uvm --build（--chip/--ball）。保留 48 个实际有路由的 CLI 操作；操作是否业务成功仍分别实测，不用静态清单代替验证。新准备副本 base 82533d89 / bbdev bc83fe53 在 artifacts/buckyball-cosyvoice3-20261102-routes；完整 checkout、无效参数原生拒绝、AXIS VCS/UVM 及 help 已通过真实 MCP 复测，0 模型请求。旧轮继续使用冻结资产。
+
+
+### 公开失败反馈与 retry 输入
+
+worker 在 retry 时以 lastAttempt.runId 调用 singularity_read(kind=evidence)，逐页读取独立验收的真实 criteria/reason。此前只暴露通用 failed 的实现缺口已经修复。旧输出仅从 CAS 冻结提交挂载到 lastAttempt.outputsPath；模型在本轮副本中显式整合后重新提交，不能沿用旧 worker workspace。预算百分比沿原 Task 总额度及首次 Run 时间累计，不因 retry 变回 100%。source 结算后即使整轮已截止也先 seal 只读公开轨迹；无剩余额度时不打开 RSI 或继续买请求。

@@ -57,7 +57,6 @@ interface DriveAgentOptions {
   readonly checkBudget: (tokens?: number, steps?: number) => boolean
   readonly stopBudget: () => void
   readonly budget: () => RemainingBudgetPct
-  readonly startBudget: RemainingBudgetPct
   readonly controllerState: () => Promise<TaskRunState>
   readonly renderView: () => string
 }
@@ -118,14 +117,13 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
     sessionAction = mode === 'create' ? 'created' : 'resumed'
     deadline.throwIfAborted()
     if (!options.checkBudget()) throw budgetExhausted
-    // Start percentages use the frozen run/opened boundary; a batch wake shows
-    // current percentages. The wake adapter checks native message identities.
+    // Start and batch wakes share the current Task budget projection.
     const state = await options.controllerState()
     const wake = mode === 'resume'
       ? batchWakeRequest(state, request.runId, options.budget()) : undefined
     wakeOutcome = await deliverWakeOnceOrFail(handle.agent, wake ?? {
       wakeId: `${request.runId}:start`,
-      text: startWakeText(contract.taskId, request.runId, options.startBudget),
+      text: startWakeText(contract.taskId, request.runId, options.budget()),
     })
     await handle.agent.whenIdle()
     deadline.throwIfAborted()

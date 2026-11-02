@@ -69,7 +69,7 @@ export interface NodeView {
   }
   readonly planningSketchRef: Ref | null
   readonly feedback: { readonly count: number; readonly cursor?: string }
-  readonly lastAttempt: { readonly runId: string; readonly reason: string } | null
+  readonly lastAttempt: { readonly runId: string; readonly reason: string; readonly outputsPath?: string } | null
   readonly budget: RemainingBudgetPct
   readonly workspace: { readonly cwd: string; readonly outputs: readonly OutputSpec[] }
 }
@@ -102,7 +102,8 @@ integrate, then prepare the next batch. Refresh stale previews via
 singularity_read(kind="status"). Use authorized inputs, workspace, skills and
 MCP tools. Public-resource work may use inputs:[].
 Read ancestor summaries when useful; send direct-parent suggestions with
-singularity_feedback and continue local work. Call singularity_submit when
+singularity_feedback and continue. On retry, read lastAttempt.runId evidence
+and reuse its frozen outputsPath. Call singularity_submit when
 declared outputs are ready for independent verification, or singularity_stop
 with a concrete blocker when the goal cannot be completed.`
 

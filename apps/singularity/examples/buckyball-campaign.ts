@@ -130,8 +130,8 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
       const active = (await service.methodRoundState()).productionHead
       if (active === undefined) throw new Error('Missing active Method')
       const source = await runTask(await contractFor(taskId, sourceSpec, active, 'work', await put(`${taskId}:request`, { v: 1, purpose: 'autonomous-chip-frontend' })))
-      if (!accounting.available()) break
       const trace = await sealPublicTrace({ ctx: spike.ctx, service, actor, rootTaskId: taskId, summaries })
+      if (!accounting.available()) break
       const remaining = Math.max(1, deadlineAt - Date.now())
       const plan = { v: 1 as const, cases: cases.slice(0, 2).map(value => value.ref), validationCases: [cases[2].ref],
         metric: { name: 'frontend-ppa', weights: PPA_WEIGHTS }, thresholds: { minDelta: 0.01, maxRegression: 0 }, trialsPerCase: 1,
