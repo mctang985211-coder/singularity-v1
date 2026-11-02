@@ -130,6 +130,8 @@ node apps/singularity/examples/buckyball-campaign.ts <全新 execution root> <�
 
 后续独立实验可在准备目录的 `project.json` 指定 `publicSeed: {archive, description}`。操作者将已归档执行的公开冻结产物和公开验收意见整理为 tar.gz，内含 `provenance.json` 记录来源 Run、digest、原 verdict 与已知缺口；`archive` 相对准备目录。启动时把归档原始字节冻结为普通 Task input `public-seed.tar.gz`，source 和全部评测 case 使用同一个 Ref。模型自行检查、选择复用并修正；新 Run 仍按完整原合同独立验收。不得加入私有 receipt、验证集答案、旧 transcript 或可写 workspace，也不导入旧事实/状态/verdict。此输入是公开实验起点，不是 Method、恢复机制或预置 workflow；报告应区分首次从零探索与基于真实产物继续设计。仍守每执行根 3h/400M/4000。
 
+BB 的冻结领域策略允许把已终结的 ExecutionRecord 作为失败学习轨迹（规范 §16.1 的现有策略接口），包括预算取消。它不将取消改为验收成功；整轮额度已用完时仍只封存、不打开 proposer。这项配置保证真实截止的归档不会再因缺省 RSI 资格策略而抛错，不增加运行期恢复路径。
+
 ## 首次实跑失败与参数边界修正
 
 首次实跑 `artifacts/buckyball-cosyvoice3-live-20261101-1502/execution` 持续 157.788 秒，21 次请求、746746 reported tokens。只有 root opened，没有 child admission、芯片提交、验收或 RSI；产物仍不满足任何芯片成果声明。

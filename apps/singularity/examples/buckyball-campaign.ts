@@ -55,7 +55,8 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
     const provider = await put('buckyball:acceptance', { v: 1, kind: 'independent-native-review-and-reproduction', policy: FRONTEND_REVIEW_POLICY,
-      limitations: 'Public trusted local experiment; independent LLM review and rerun evidence, not formal signoff or hidden-data isolation.', weights: PPA_WEIGHTS })
+      limitations: 'Public trusted local experiment; independent LLM review and rerun evidence, not formal signoff or hidden-data isolation.',
+      tracePolicy: 'Include terminal ExecutionRecords as failure evidence; exhausted campaigns seal without opening RSI.', weights: PPA_WEIGHTS })
     const comparatorAsset = await put('buckyball:comparator', { v: 1, metric: 'weighted geometric PPA improvement', weights: PPA_WEIGHTS, minDelta: 0.01, noCaseRegression: true })
     const baseTools = await Promise.all(['bash', 'job_output', 'job_list', 'job_kill'].map(name => put(`base-tool:${name}`, { v: 1, name })))
     const protocol = await put('buckyball:task-protocol', taskProtocolReference)
@@ -113,7 +114,7 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
       spec.goal.constraints.push('Read experiment-guide.json before domain work; its operator scope overrides the public skills.')
       if (publicSeed !== undefined) {
         spec.inputs.push({ id: 'public-seed', object: publicSeed, path: 'public-seed.tar.gz', access: 'copy-to-work' })
-        spec.goal.constraints.push('Inspect public-seed.tar.gz and its provenance.json before implementation. These are prior public artifacts, including recorded failures, for reuse and correction. Complete the full frontend goal; prior verdicts do not establish this Run\'s acceptance. Baseline and candidate receive the same frozen seed.')
+        spec.goal.constraints.push('Inspect public-seed.tar.gz and its provenance.json before implementation. Reuse applicable references/components and correct recorded failures, then plan the remaining implementation and integration. Pass the authorized seed input to children that need these artifacts. Complete the full frontend goal; prior verdicts do not establish this Run\'s acceptance. Baseline and candidate receive the same frozen seed.')
       }
       return spec
     }
@@ -141,7 +142,7 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
       const active = (await service.methodRoundState()).productionHead
       if (active === undefined) throw new Error('Missing active Method')
       const source = await runTask(await contractFor(taskId, sourceSpec, active, 'work', await put(`${taskId}:request`, { v: 1, purpose: 'autonomous-chip-frontend' })))
-      const trace = await sealPublicTrace({ ctx: spike.ctx, service, actor, rootTaskId: taskId, summaries })
+      const trace = await sealPublicTrace({ ctx: spike.ctx, service, actor, rootTaskId: taskId, summaries, acceptsExecutionRecord: () => true })
       if (!accounting.available()) break
       const remaining = Math.max(1, deadlineAt - Date.now())
       const plan = { v: 1 as const, cases: cases.slice(0, 2).map(value => value.ref), validationCases: [cases[2].ref],

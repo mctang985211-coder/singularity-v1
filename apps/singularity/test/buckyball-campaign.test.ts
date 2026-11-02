@@ -172,11 +172,12 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   const oldPath = process.env.PATH
   process.env.PATH = `${bin}:${oldPath ?? ''}`
   t.after(() => { if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath })
-  let reviews = 0, proposers = 0
+  let reviews = 0, proposers = 0, exhaustReview = false
   const fixture = await startChatCompletionsFixture((request, index) => {
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `chip-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
       usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
     if (toolSchemaNames(request).includes('buckyball_review_submit')) {
+      if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: 400_000_000, completionTokens: 10, totalTokens: 400_000_010 } }
       if (!toolNames(request).includes('buckyball_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
         name: 'buckyball_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
@@ -244,4 +245,20 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   }
   assert.deepEqual((await readFile(join(baseline, 'nix-argv.txt'), 'utf8')).trimEnd().split('\n'),
     [baseline, 'develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', '--help', 'literal;$(false)'])
+  exhaustReview = true
+  const exhausted = join(directory, 'budget-exhausted')
+  await runBuckyballCampaign(exhausted, prepared)
+  const stopped = JSON.parse(await readFile(join(exhausted, 'result.json'), 'utf8')) as { failure?: string; outcomes: unknown[]; usage: { unknown: number } }
+  assert.equal(stopped.failure, undefined, 'a budget cancellation seals its terminal ExecutionRecord without a host failure')
+  assert.deepEqual(stopped.outcomes, [])
+  assert.equal(stopped.usage.unknown, 0)
+  assert.equal(proposers, 3, 'exhausted source never purchases an RSI request')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(join(exhausted, 'domain/domain.sqlite'), { readOnly: true })
+  try {
+    const facts = db.prepare('SELECT payload FROM events ORDER BY seq').all().map(row => JSON.parse(row.payload as string) as { type: string; data: { usage?: { unknownRequests: number }; scope?: string } })
+    assert.equal(facts.filter(value => value.type === 'rsi/trace-sealed').length, 1)
+    assert.ok(facts.some(value => value.type === 'task/closed' && value.data.scope === 'subtree'))
+    assert.equal(facts.some(value => value.type === 'rsi/round-opened'), false)
+  } finally { db.close() }
 })

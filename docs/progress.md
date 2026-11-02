@@ -253,3 +253,14 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 连续BB轮次从零重复参考/组件工作，source已占据大部分共享窗口，尚未留出完整paired evaluation。示例入口允许操作者在准备project.json提供publicSeed归档；原始字节只通过既有CAS/Task input固定，source与三个case用相同Ref，baseline/candidate仍独立实现和验收。归档须记录来源Run/digest/verdict/缺口，只含公开冻结产物和公开receipt，不导入旧事实、session、可写workspace或旧验收结论；没有runtime字段、恢复逻辑或预置workflow。首次从零与后续复用实验应分别报告；当前08:52轮仍使用bef5907已加载版本，没有中途替换资产或扩大3h/400M/4000。
 
 原生领域fixture核对三次fresh retry均读取冻结seed、所有评测定义与source的seed Ref完全一致；旧的failed/no-proposal语义保持。定向4/4、类型/lint通过；根pnpm verify **445/445**（protocol206、runtime135、app91、domain13），project/build/typecheck/lint通过、0fail/skip，日志artifacts/public-seed-20261102-verify.log。真实seed整理与下一根使用待当前轮结算。
+
+
+### 08:52 BB 轮最终结果与归档策略修正（2026-11-02 11:52 +08）
+
+最终2507请求全部结算，input388247338/output3132633，unknown1为截止时取消的最后一个review请求。使用协议原生reduceDomainFacts只读核对71facts：12Tasks全部closed（9verified/3failed）、18Runs全部closed（9verified/8failed/1cancelled）；其中一个Run由CancellationCut关闭，没有额外合成run/closed。无活动所属进程，主PID只剩已退出zombie。证据operator-final-projection.json；普通monitor只数run/closed的running残项不是实际活动Run。
+
+root Run1真实验收仅model-reference/delivery通过，其余失败：recipes仍与原模型不保真、Conv1d只挂toy而recipes目标为poly、compiler无法发出CONV1D、无实际CosyVoice拓扑、当前设计缺匹配PPA。52原始reference fixtures逐字节重生、组件UVM和mutation控制仍成立，但不能替代完整frontend。Run2读取公开意见和CAS旧产物后提交，独立review被deadline取消，保留完整ExecutionRecord。recipe Run3的Summary usage已核对为ownerTaskId=recipe、sourceContract匹配，input3020/output5632/steps1/unknown0；child未再次读取生成的祖先摘要，不声称完成返回/cache消费覆盖。reference parent确实在batch wake后读取Flow的input-invalid feedback。
+
+该轮随后sealPublicTrace被缺省ExecutionRecord资格策略拒绝，result保留原始错误，没有trace-sealed、RSI、candidate、比较或赢家。规范§16.1已有领域冻结策略接口，BB示例遗漏配置；现将terminal ExecutionRecord作为失败学习轨迹的策略写入冻结provider并传入既有接口，额度耗尽后仍不打开RSI。无runtime/协议修改、无恢复逻辑，旧根保持归档不补写。原生fixture真实在review中耗尽预算，验证subtree一次结算、唯一trace seal、无host failure、无新proposer请求；定向4/4与根verify **445/445**通过（0fail/skip，project/build/typecheck/lint通过），日志artifacts/terminal-trace-20261102-{targeted,verify}.log。
+
+下一轮公开seed由一次性操作者脚本仅从旧CAS导出11个有冻结提交的Task、627文件，包含各自公开receipt/原verdict和缺口；无session/可写workspace导入。归档43,743,003bytes，sha256=0c6b68b65a38892471549c9acaec460febe732da1aee2cb4d67ff401a0b54b3b，无symlink/绝对或越界路径。准备目录artifacts/buckyball-cosyvoice3-20261102-seed仍指向同一82533d89/bbdev bc83fe53环境；它是后续公开复用实验，不再声称首次从零。新根维持原3h/400M/4000、独立验收和全部功能/PPA门槛。
