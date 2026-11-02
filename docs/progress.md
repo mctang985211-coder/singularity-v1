@@ -226,3 +226,8 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 该轮在三小时窗口结束并退出，清理后未发现命令行指向此 execution root 的活动所属进程。最终1779次已结算请求，input268759596/output1872968，unknown=1（deadline取消了最后一个 proposer 请求）；七Task为五verified/两failed，最大depth3、十二Run与十二提交全部结算。三次root独立验收均failed，首次只通过model-reference/delivery；最后一次连参考交付也丢失。已封存trace sha256:28f2b5fd228e09a7728be1b84406cc7da76d680393a403d3c6537dd8917af7e6；RSI确实打开并读取25次公开资源，但只剩约30秒，未交patch，Round以insufficient-evidence/proposer-failure关闭。没有candidate、paired evaluation、PPA赢家或发布，不把初始化activation算赢家。
 
 公开receipt明确指出：单独ActLut/Cv3Dot32/Sfu未接入完整chip/core/compiler/recipe；Q3.12饱和和固定Snake alpha不能代表原模型；第三次输出缺失已生成的原始参考张量。amendment015补齐按需公开失败反馈、CAS旧输出与累计预算；领域guide补充先用现有core/Ball/compiler打通集成路径，明确host/accelerator归属，再按证据增加IP。没有指定分解树、放宽验收、增加语义门禁或运行管理器。下一轮使用routes准备副本，仍守原3h/400M/4000限制。
+
+
+### 新 BB 轮（2026-11-02 08:52:24 +08）
+
+代码bef5907（含fe3caa0公开反馈/累计预算修复），新根artifacts/buckyball-cosyvoice3-live-20261102005224（目录时间为UTC），PID1608191，截止11:52:24 +08。使用routes准备副本82533d89/bbdev bc83fe53；原3h/400M/4000、maxActive4、depth8/256Tasks/4096steps、deepseek-flash/max/40k保持。独立领域MCP准备与445项根检查均完成，领域guide现有原生fixture4/4通过（artifacts/integration-guide-20261102.log）；首批真实模型请求正常。下一次巡检约09:22 +08。启动不作为验收或发布证据，仍不提交PR/合并。
