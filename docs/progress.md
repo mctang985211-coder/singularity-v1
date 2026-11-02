@@ -237,3 +237,6 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 
 
 09:53巡检：9Tasks、depth3（四层树）、三批自主分解；1244请求全结算，input187076863/output1462445/unknown0。LLM reference Task在Run2 verified：真实模型先以旧runId读取公开evidence、再读CAS挂载attempts/，修正name-sorted fingerprint等发现；独立review重新推导115项/0失败、原始权重fixtures全等且逐文件再生一致。PPA/IP/recipes的Run2也已真实读取公开receipt和旧冻结产物（长receipt跟进4096 cursor），未读取旧workspace；原生工具结果显示tokens73%/time77%等累计预算，未重置成100%。这些是amendment015真实效果，尚不是root成功。Flow节点实际发出input-invalid feedback，指出共享合同里三处维度/缓存事实错误并给出测量；HiFT进一步创建window/phase探测child等待容量。七次提交、五Run结算、一个Task terminal verified；root仍等待直属批次，无RSI/比较/赢家。证据operator-monitor-20261102-0953.json和对应原生session/公开receipt；继续约10:23巡检。
+
+
+10:24巡检：1573请求/1572结算，input249985268/output1904410/unknown0；9Tasks四层树，4Task verified（LLM、Flow、Conv1d IP、PPA），没有failed terminal Task，root仍等批次。PPA Run2根据公开意见修正源列表排序，独立driver与标准MCP重跑均得到六报告逐字节一致；Conv1d Run2修正ISA/decoder可达性，独立review复现UVM，并额外跑54配置/3795行bit-exact、backpressure/reset、故意删除rounding的mutation失败。它们是组件/域子任务证据，不代表全芯片仿真或root前端完成。model recipe Run2与HiFT window probe在独立审查，HiFT/reference两级parent等待；下一次约10:54。证据operator-monitor-20261102-1024.json及对应公开receipts。
