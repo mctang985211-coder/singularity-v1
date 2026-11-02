@@ -281,3 +281,8 @@ root Run1真实验收仅model-reference/delivery通过，其余失败：recipes�
 ### 公开seed轮重开（2026-11-02 13:55:05 +08）
 
 代码673bba1，新根artifacts/buckyball-cosyvoice3-live-20261102-1355-seeded，PID3632562，截止16:55:05 +08；使用同一冻结seed/准备环境与全部原预算、模型、验收。首批真实请求正常。独立操作者只读watch已启动，每30分钟写operator-monitor与operator-watch.log，首次约14:25；它只做快照，不重启或改变运行。继续核对分解、完整frontend、RSI比较及发布后消费，未满足前不提交PR/合并。
+
+
+14:25:06独立快照按时落盘：9Tasks、depth2（三层树）、两批自主分解，8Run opened/4提交/2Task verified；606请求/605结算，input68254723/output622704/unknown0。root以旧公开失败为输入，自主分解Flow精确语义、recipe修正、专用cosyvoice拓扑与实际Ball的匹配PPA；recipe再分LLM/Flow/HiFT/host四路，显式传递冻结seed。Flow精确语义子任务已独立验证99 tensors、补充11组非预设输入、负控均通过；LLM修正11fixtures/56outputs及独立134checks通过，真实checkpoint而非随机权重。二进制seed已用原生bash解包消费，未再因UTF-8接口误用退出，框架仍正常运行。
+
+随后14:30读取到拓扑child的公开receipt：其局部config/elaboration目标verified，实际创建cosyvoice双tile/7core并生成447个SV；review同时实测发现异构chip的UVM filelist选错BallDomainDecoder，且depthwise Conv1d不等同于原HiFT/Flow grouped conv，明确留给parent修正，不能把该child通过说成完整frontend实现。MCP首次checkout因模型未建work父目录返回ENOENT，模型创建后成功；后两工具失败为上述真实领域测试，工具均正常返回，无harness兜底。root仍等直属批次，尚无root提交/RSI/比较/赢家。下一快照14:55。证据operator-monitor-20261102-1425.json及对应公开receipts/原生sessions。
