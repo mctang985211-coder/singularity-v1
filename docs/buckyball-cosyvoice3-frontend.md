@@ -78,16 +78,20 @@ Singularity host 使用已验证的官方 Node 24.9.0 二进制。Buckyball Nix 
 | 范围 | 启动值/上限 |
 |---|---|
 | 模型 | `deepseek-flash`，reasoning `max`，700000 context，40000 output |
-| 整轮所有模型请求 | 最长 3 小时、400000000 tokens、4000 次调用；source/child/Summary/proposer/评测/发布后验证共用累计计量 |
+| 整轮所有模型请求 | 最长 12 小时、1600000000 tokens、16000 次调用；source/child/Summary/proposer/评测/发布后验证共用累计计量 |
 | 单 Run | `maxStepsPerRun: 4096`；避免先于整轮调用上限截断 |
-| RSI proposer | `maxSteps: 4096`、400000000 tokens；时间仍受整轮剩余 deadline 限制，不沿用 inventory 的 96 步/2M token 默认值 |
-| 双臂评测 | `maxRuns: 4608`、400000000 tokens、`maxActiveRuns: 4`；六棵 baseline/candidate 树顺序执行，此并发值用于单棵树内部；实际购买请求仍受整轮累计 4000 次限制 |
+| RSI proposer | `maxSteps: 4096`、1600000000 tokens；时间仍受整轮剩余 deadline 限制，不沿用 inventory 的 96 步/2M token 默认值 |
+| 双臂评测 | `maxRuns: 4608`、1600000000 tokens、`maxActiveRuns: 4`；六棵 baseline/candidate 树顺序执行，此并发值用于单棵树内部；实际购买请求仍受整轮累计 16000 次限制 |
 | Task 树 | `maxDepth: 8`、`maxTasks: 256`、`maxBatchChildren: 8`、`maxRuns: 3`；不是必须达到的目标 |
-| 初始 root 子树 token 上限 | 400000000；子树配额不能使整轮总额增加 |
+| 初始 root 子树 token 上限 | 1600000000；子树配额不能使整轮总额增加 |
 | 活跃 Task 上限 | 4；外部构建并发与模型上下文限制分别配置 |
 | 输出冻结上限 | 256 MiB；交付 patch、必要小向量和证据，不重复提交权重或整个 build 目录 |
 
-绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 3 小时。给 proposer/evaluation 的相对时间取整轮剩余时间，所有阶段共用累计计量，不各自重新获得 3 小时或 4 亿 tokens。每次执行使用全新 execution root；不复用此前已过期的 inventory 窗口。秘密只经 launch environment 注入。
+绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 12 小时。给 proposer/evaluation 的相对时间取整轮剩余时间，所有阶段共用累计计量，不各自重新获得 12 小时或 16 亿 tokens。worker/reviewer 的原生 MCP toolCallTimeoutMs 共用这一配置，整轮取消仍沿既有 AbortSignal 传递。每次执行使用全新 execution root；不复用此前已过期的 inventory 窗口。秘密只经 launch environment 注入。
+
+上述上限于 2026-11-02 经用户确认用于下一轮。13:55 启动的既有执行根保持原 3h/400M/4000 与 16:55:05 截止，冻结配置不在运行中改写。
+
+后续轮的root PPA须对应交付workload实际使用的加速边界，说明活跃core/Ball实例及存储模型并独立复现；单个组件或未接入IP的报告只作支持证据，不替代frontend PPA，缺失则ppa-evidence失败且不提交ppa数值。该要求来自13:55轮首次root审查把未接入recipe的Conv1dBall报告判作PPA通过的实际缺口；该root仍因设计/实现不合格失败，未产生比较或赢家。
 
 默认 inventory profile 仍关闭自动 compaction。本实验以原生 profile patch 启用自动压缩：75% context 压力、16% 近期历史保留、40000 输出上限；不配置额外 compaction/overflow 重购。`native-accounting.ts` 在 DSH `llm/stream` 接缝计入所有请求（包括 Summary、review、proposer、compaction 与辅助调用），共用累计预算。session usage fold 同时消费带 `llmStreamCall:true` 的原生 `compaction/summary`，模型无关摘要不算模型请求。
 
@@ -128,7 +132,7 @@ node apps/singularity/examples/buckyball-campaign.ts <全新 execution root> <�
 
 启动记录为 `launch.json`，原生请求累计记录为 `requests.jsonl`，标准输出留 `campaign.log`，每轮及最终结果为 `round-N.json`、`result.json`。执行根不会重启；失败保留原始错误。按用户最新要求每半小时只读巡检树、交付、验收、RSI 和累计用量；需要修订时先停止旧根，提交修改后从新根启动，不中途修改冻结运行资产。
 
-后续独立实验可在准备目录的 `project.json` 指定 `publicSeed: {archive, description}`。操作者将已归档执行的公开冻结产物和公开验收意见整理为 tar.gz，内含 `provenance.json` 记录来源 Run、digest、原 verdict 与已知缺口；`archive` 相对准备目录。启动时把归档原始字节冻结为普通 Task input `public-seed.tar.gz`，source 和全部评测 case 使用同一个 Ref。模型自行检查、选择复用并修正；新 Run 仍按完整原合同独立验收。不得加入私有 receipt、验证集答案、旧 transcript 或可写 workspace，也不导入旧事实/状态/verdict。此输入是公开实验起点，不是 Method、恢复机制或预置 workflow；报告应区分首次从零探索与基于真实产物继续设计。仍守每执行根 3h/400M/4000。
+后续独立实验可在准备目录的 `project.json` 指定 `publicSeed: {archive, description}`。操作者将已归档执行的公开冻结产物和公开验收意见整理为 tar.gz，内含 `provenance.json` 记录来源 Run、digest、原 verdict 与已知缺口；`archive` 相对准备目录。启动时把归档原始字节冻结为普通 Task input `public-seed.tar.gz`，source 和全部评测 case 使用同一个 Ref。模型自行检查、选择复用并修正；新 Run 仍按完整原合同独立验收。不得加入私有 receipt、验证集答案、旧 transcript 或可写 workspace，也不导入旧事实/状态/verdict。此输入是公开实验起点，不是 Method、恢复机制或预置 workflow；报告应区分首次从零探索与基于真实产物继续设计。每执行根遵守启动时冻结的整轮上限，当前配置见长任务限制。
 
 BB 的冻结领域策略允许把已终结的 ExecutionRecord 作为失败学习轨迹（规范 §16.1 的现有策略接口），包括预算取消。它不将取消改为验收成功；整轮额度已用完时仍只封存、不打开 proposer。这项配置保证真实截止的归档不会再因缺省 RSI 资格策略而抛错，不增加运行期恢复路径。
 
@@ -161,7 +165,7 @@ Verdi PLI 预检复现 `libnovas.so` 缺少 `libz.so.1`；verify Nix shell 的 `
 
 ## 固定探索交付（2026-11-02，amendment 014）
 
-上轮研究 child 省略 localOutputs，合同仅有可选 learning drafts，导致实际统计文件未被冻结。平台探索模板现固定 required result/ tree，示例不再重复声明 result；root 保持 frontend/。原生三级回归以无 localOutputs 的 child/grandchild 验证冻结文件与逐层集成。新轮 maxActive=4，评测 maxActiveRuns=4；总 3 小时、4 亿 tokens、4000 请求不变。
+上轮研究 child 省略 localOutputs，合同仅有可选 learning drafts，导致实际统计文件未被冻结。平台探索模板现固定 required result/ tree，示例不再重复声明 result；root 保持 frontend/。原生三级回归以无 localOutputs 的 child/grandchild 验证冻结文件与逐层集成。当时新轮 maxActive=4，评测 maxActiveRuns=4；总 3 小时、4 亿 tokens、4000 请求保持原授权。
 
 ## CLI 声明与实际路由对齐（2026-11-02）
 

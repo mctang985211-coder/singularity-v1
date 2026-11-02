@@ -293,3 +293,10 @@ root Run1真实验收仅model-reference/delivery通过，其余失败：recipes�
 recipe Run1虽已合并四路真实数值参考，仍因plan/graphs参数路径、rotary buffer和main.cpp host路径未集成而failed；公开receipt给出可复现命令与具体原因，Run2已读取并返工。没有root提交、RSI、candidate或赢家，不把7个局部verified升级为全线贯通。证据operator-monitor-20261102-{1455,1525}.json及对应公开receipts。
 
 实验时长评估：先前08:52轮3小时已消耗391379971 reported tokens而未完成root第二次验收；当前复用公开seed的轮次90分钟仍在root前置集成。示例的source、proposer、三个case各两arm的六棵顺序执行树与发布后验证共用同一campaign窗口，maxActive=4只用于每棵树内部。6小时可增加深层集成/RSI入口观察，完整对照与发布验证宜从12小时评估，并同步扩大总token/request上限；该判断不是通过保证，也未扩大当前已冻结的3h/400M/4000或16:55:05截止。没有为扩大实验增加runtime预算账本或调度器。
+
+
+15:55快照：1303请求全部结算，input158334938/output1320347/unknown0，8个子Task均verified，root已被整批terminal正常唤醒并自行集成。recipe Run2独立复现867参数映射、0缺失，原始四stage数值对照通过，compiler与poly/cosyvoice3模型构建exit0（272accelerator/26host operators、32graphs）；但量化加速路径和专用cosyvoice配置仍有待root集成，不把它升级为整体验收通过。
+
+16:06:05首次root独立验收failed：model-reference/component-verification/delivery通过，design-contract/implementation失败。review复现447SV和组件测试，但发现专用芯片与poly recipe脱节、Conv1dBall未接入实际图、bank分配合同矛盾；root Run2已读取公开反馈并返工。该receipt还把未接入recipe的单个Conv1dBall PPA判作通过；由于root其他required项失败，没有比较/赢家。下一轮同步收紧既有TaskSpec的ppa-evidence与领域review说明，要求实际workload使用的加速边界、活跃实例/存储模型及独立复现，组件报告只作支持证据。没有新增runtime校验器、状态或恢复机制，当前已冻结review保持不变。
+
+用户明确选择下一轮12小时/1600000000 reported tokens/16000请求，仍是整轮共享上限；深度8、256Tasks、单Run4096steps、并发4和40k输出保持。BB example的Task/proposer/evaluation配额与worker/reviewer原生MCP timeout共用配置，阶段时间继续取整轮剩余deadline，不重新领取整轮额度。仅修改examples、既有fixture与领域文档，protocol/runtime源码不变。定向原生DSH4/4；最终根pnpm verify **445/445**（protocol206/runtime135/app91/domain13）、0fail/skip，project/build/typecheck/lint通过；日志artifacts/bb-12h-20261102-{targeted,final-verify}.log。12小时执行根尚未启动，当前根仍按16:55:05和原额度结算；不以配置或fixture通过声称复杂芯片RSI/PPA闭环完成。

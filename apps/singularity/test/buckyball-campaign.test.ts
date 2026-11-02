@@ -17,6 +17,7 @@ import { createWakeMessage,snapshotSession } from '@singularity/runtime'
 
 import { runBuckyballCampaign } from '../examples/buckyball-campaign.ts'
 import { compareFrontendPpa } from '../examples/buckyball-acceptance.ts'
+import { BUCKYBALL_FRONTEND_CAMPAIGN } from '../examples/buckyball-frontend-task.ts'
 import { nativeAccounting } from '../examples/native-accounting.ts'
 import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
 import { withHarness } from './run-fixture.ts'
@@ -179,7 +180,8 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `chip-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
       usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
     if (toolSchemaNames(request).includes('buckyball_review_submit')) {
-      if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: 400_000_000, completionTokens: 10, totalTokens: 400_000_010 } }
+      if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens,
+        completionTokens: 10, totalTokens: BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens + 10 } }
       if (!toolNames(request).includes('buckyball_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
         name: 'buckyball_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
