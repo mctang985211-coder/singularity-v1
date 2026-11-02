@@ -243,3 +243,6 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 
 
 10:54巡检：1926请求全结算，input307062688/output2596345/unknown0；12Tasks、四层树、四个batch、十一次提交，6Task verified（新增HiFT reference和window-only probe），尚无failed terminal Task。recipe Run2的真实编译/权重导入成功，但独立review发现HiFT magnitude/phase/ISTFT/clamp与Flow normalization/RoPE等语义不保真，拒绝通过；Run3根据公开意见自主创建HiFT/Flow/LLM三路semantics子任务，未放宽验收。HiFT child实际查询ancestor并得到SUMMARY_PENDING；原生Summary Worker随后提交并被接受，reported8652 tokens，归recipe owner session。child尚未再次读取已生成摘要，owner Run尚未结算，故摘要返回/最终UsageRecord.summary归属仍待核对。root仍等直属批次，无root提交/RSI/比较/赢家；下一次约11:24，截止11:52:24。证据operator-monitor-20261102-1054.json及对应原生session/公开receipts。
+
+
+11:24巡检：2280请求全结算，input355109522/output2993937/unknown0；仍为12Tasks四层树，8Task verified、1Task failed。新增HiFT/LLM exact-semantics两child通过；Flow child预算耗尽后submit被拒，形成no-submission ExecutionRecord并terminal failed，未伪造领域Evidence。recipe parent已被整批terminal唤醒、读取直属结果并提交Run3；reference parent也完成整合提交，两个父任务都在独立review。root仍等直属批次，尚无root验收或RSI；剩余约27分钟/42M reported tokens，继续截止附近核对结算和trace。证据operator-monitor-20261102-1124.json及原生sessions。
