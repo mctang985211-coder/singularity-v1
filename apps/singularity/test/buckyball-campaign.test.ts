@@ -3,6 +3,7 @@ import { chmod,mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gzipSync } from 'node:zlib'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 
@@ -164,7 +165,8 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   }
   await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: baseline },
     publicSeed: { archive: 'prior-public.tar.gz', description: 'Recorded incomplete public artifacts; not an accepted chip.' } }))
-  await writeFile(join(prepared, 'prior-public.tar.gz'), 'frozen public seed fixture')
+  const seedBytes = gzipSync('frozen public seed fixture')
+  await writeFile(join(prepared, 'prior-public.tar.gz'), seedBytes)
   const bin = join(directory, 'bin')
   await mkdir(bin)
   await writeFile(join(bin, 'nix'), '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > "$PWD/nix-argv.txt"\nprintf "fixture bbdev help\\n"\n')
@@ -204,11 +206,12 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     const data = JSON.parse(pages.map(value => value.data).join('')) as { taskId: string; runId: string; contractDigest: string }
     if (!calls.includes('singularity_plan')) return call('singularity_plan', { sketch: { v: 1, taskId: data.taskId, runId: data.runId, sourceContract: data.contractDigest, contextEpoch: last.contextEpoch,
       objective: 'Deliver the incomplete fixture honestly.', levels: [0, 1].map(level => ({ level, purpose: 'Inspect local output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })), directPlan: [], assumptions: [] } })
+    if (!messageTexts(request).join('\n').includes('Resource is binary.')) return call('singularity_read', { kind: 'resource', id: 'public-seed' })
     assert.ok(toolSchemaNames(request).includes('mcp__buckyball__bbdev'), 'the frozen domain MCP is available in each fresh Run')
     if (!calls.includes('mcp__buckyball__bbdev')) return call('mcp__buckyball__bbdev', { project: baseline, args: ['--help', 'literal;$(false)'] })
     if (!calls.includes('bash')) {
       assert.match(messageTexts(request).join('\n'), /frontend/)
-      return call('bash', { description: 'Inspect public seed and create incomplete output.', command: "test \"$(cat public-seed.tar.gz)\" = 'frozen public seed fixture' && mkdir -p frontend && printf 'Incomplete fixture, no chip implementation.\\n' > frontend/report.md" })
+      return call('bash', { description: 'Inspect public seed and create incomplete output.', command: "test \"$(gzip -cd public-seed.tar.gz)\" = 'frozen public seed fixture' && mkdir -p frontend && printf 'Incomplete fixture, no chip implementation.\\n' > frontend/report.md" })
     }
     return call('singularity_submit', { outputIds: ['frontend'], includeLearningDrafts: false })
   })
@@ -238,7 +241,7 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   }
   const seedInput = launch.sourceSpec.inputs.find(value => value.id === 'public-seed')
   assert.ok(seedInput)
-  assert.equal(await readFile(join(root, 'domain/objects', seedInput.object.digest.slice('sha256:'.length)), 'utf8'), 'frozen public seed fixture')
+  assert.deepEqual(await readFile(join(root, 'domain/objects', seedInput.object.digest.slice('sha256:'.length))), seedBytes)
   for (const { spec } of launch.cases) {
     assert.deepEqual(spec.inputs.find(value => value.id === 'public-seed'), seedInput, 'both arms use each frozen case with the identical seed')
     assert.ok(spec.goal.constraints.some(value => value.includes('prior verdicts do not establish')))

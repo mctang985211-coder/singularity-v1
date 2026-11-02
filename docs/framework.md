@@ -1331,6 +1331,7 @@ singularity_read
   input: { kind: self | status | resource | children | evidence | ancestor | feedback,
            id?, cursor?, page? }
   output: { data, objectRef?, nextCursor?, asOf, remainingBudgetPct }
+  resource 文本分页只接受 UTF-8；合法 CAS 的二进制输入返回 INVALID_ARGUMENT 与已物化路径，模型使用原生文件工具读取/解包。此调用失败不终止 Run；实际 CAS 读取错误仍保留宿主异常。
   self 返回完整 TaskSpec、acceptance 公开描述、own guidance、输入/输出路径
   evidence 以 direct child ID/result Ref ID 或 lastAttempt.runId 返回分页 JSON text {result, publicReceipt?}；result 为公开 Evidence/ExecutionRecord，publicReceipt 包含真实 criteria/reason，去除 privateReceipt；连续拼接 data 页后解析，不截断 findings
   ancestor 按祖先 contractDigest 返回 ContractSummary；摘要未生成时返回 SUMMARY_PENDING；feedback 返回 direct child 的结构化反馈

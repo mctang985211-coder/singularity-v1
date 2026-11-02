@@ -34,6 +34,7 @@
 - 完成的非法工具参数走 DSH 原生解析/校验；Singularity 工具保留原始失败并附 failed 与完整极简格式用例。用例按需展示，不堆进 system prompt；不修补 JSON、不匹配自然语言错误、不建立参数恢复或 provider 重购机制。原始畸形参数须经过真实 provider adapter 的无付费回归，不能只用 JSON.stringify fixture 证明该路径。
 - 预算/截止、领域失败和无效验收仍按协议结算。verifier 转发 AbortSignal 并等待自己拥有的工作退出，不能丢弃 Promise 冒充停止。任意不合作进程内代码不在强停保证内。
 - retry 通过既有 evidence 读取最近 closed Run 的公开逐项验收，复用其 CAS 冻结输出；不读取旧 workspace/transcript。start/batch/tool 预算共用当前 Task 投影，retry 不重置 token/time 百分比。
+- resource 文本读取的 UTF-8 边界用 Node 原生 isUtf8；合法二进制对象返回模型可改正的工具拒绝，使用 copy-to-work 与原生文件工具。CAS 读取异常仍是宿主异常，不添加格式猜测或解包恢复器。
 - 同进程 parent yield → 整批 terminal → continue 是正常路径；只允许实际观察到的 live yield 续接，不从归档重建。保持原合同、session 和 deadline；已挂载 child 输出不重复覆盖。业务 retry 使用新 Run/session 和独占创建的新 workspace，保留 required feedback/replan/replacement；probe 允许同批多实例与后续批次的新问题，不沿用 required winner 或自动 replacement 门禁。
 - 工具条件复用一个 dispatch guard；wake 使用原生 deriveMessages 的消息 ID 判重，不承诺 provider exactly-once。submit 用 DSH exclusive 工具直接冻结 CAS，不建立进程表探测、静止检测或备用作业管理器。
 - TS 使用 ESM、严格类型、import type、本地 `.ts` 导入、包 exports、references 和 Cordis effects。新增生产依赖服务当前消费者并同步 lockfile；helper 仅承载实际重复或明确业务职责。

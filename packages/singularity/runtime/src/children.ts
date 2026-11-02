@@ -1,3 +1,4 @@
+import { isUtf8 } from 'node:buffer'
 import { chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -182,7 +183,8 @@ export async function readChildData(
     const input = [...inputs, ...children.inputs, ...(previous?.outputs ?? [])].find(input => input.id === query.id || input.object.id === query.id)
     if (input === undefined) throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'resource is not an authorized input or direct output')
     const { bytes } = await service.readObject(input.object, 'object')
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    if (!isUtf8(bytes)) throw new DecomposeError('INVALID_ARGUMENT', `Resource is binary. Use native file tools at the declared path ${input.path}; binary inputs require copy-to-work. Pass its frozen Ref as a child input when needed.`)
+    const text = new TextDecoder().decode(bytes)
     return readPage(text, input.object, query.cursor)
   }
   throw new DecomposeError('INVALID_ARGUMENT', 'unsupported read kind')

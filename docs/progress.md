@@ -269,3 +269,10 @@ root Run1真实验收仅model-reference/delivery通过，其余失败：recipes�
 ### 公开seed BB 轮启动（2026-11-02 11:59:07 +08）
 
 代码6548240，新根artifacts/buckyball-cosyvoice3-live-20261102-1159-seeded，PID1353425，截止14:59:07 +08。首次从零探索已经归档，本轮使用上述公开冻结seed继续设计；source与全部case的seed Ref一致（object-domain digest c10e2f6c2ae6e715c73f03ca30085dcf5f5da5d80a741c5fcbd30e6ae131df00）。空Method、高节点限制、模型/compaction、原3h/400M/4000和独立验收保持。启动及首批真实请求正常；约12:29巡检，当前仍无本轮验收、RSI或赢家。
+
+
+### 二进制资源读取边界与巡检修正（2026-11-02 13:54 +08）
+
+11:59 seed轮实际在12:01:26因host异常退出：17请求全部结算，input623948/output12910/unknown0，只有root admitted/opened，没有child/提交/验收/RSI。模型已用bash解包并阅读公开产物，随后试图用singularity_read(resource)读取gzip输入；readChildData错误地对所有合法CAS bytes做fatal UTF-8解码，使模型可修正的文本接口误用升级为host失败。原始异常与未闭合事实保留，归档不续跑。计划12:29的对话巡检实际延迟至13:49，未及时处理退出；后续在artifacts运行独立只读操作者定时快照（每次sleep至多60秒、每30分钟写checkpoint），不依赖模型消息周转、不自动重启，不加入产品runtime。
+
+实际边界仅增加Node原生isUtf8：resource文本分页拒绝二进制并返回INVALID_ARGUMENT、declared path和copy-to-work/原生文件工具用法；CAS读取异常仍原样退出，无格式猜测/自动解包/恢复。framework§14同步明确此文本接口边界并更新spec-lock，AGENTS同步。领域原生fixture改用真实gzip字节，模拟模型误读后沿同Run原生bash解包、fresh retry和提交继续，并保持冻结seed所有case同Ref、预算取消唯一封存/不买RSI等断言。初次未build的定向测试复现旧错误并保留日志；build后定向4/4，最终根pnpm verify **445/445**（protocol206/runtime135/app91/domain13）、0fail/skip、project/build/typecheck/lint通过；日志artifacts/binary-resource-20261102-{targeted-fixed,final-verify}.log。
