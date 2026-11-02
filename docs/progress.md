@@ -264,3 +264,8 @@ root Run1真实验收仅model-reference/delivery通过，其余失败：recipes�
 该轮随后sealPublicTrace被缺省ExecutionRecord资格策略拒绝，result保留原始错误，没有trace-sealed、RSI、candidate、比较或赢家。规范§16.1已有领域冻结策略接口，BB示例遗漏配置；现将terminal ExecutionRecord作为失败学习轨迹的策略写入冻结provider并传入既有接口，额度耗尽后仍不打开RSI。无runtime/协议修改、无恢复逻辑，旧根保持归档不补写。原生fixture真实在review中耗尽预算，验证subtree一次结算、唯一trace seal、无host failure、无新proposer请求；定向4/4与根verify **445/445**通过（0fail/skip，project/build/typecheck/lint通过），日志artifacts/terminal-trace-20261102-{targeted,verify}.log。
 
 下一轮公开seed由一次性操作者脚本仅从旧CAS导出11个有冻结提交的Task、627文件，包含各自公开receipt/原verdict和缺口；无session/可写workspace导入。归档43,743,003bytes，sha256=0c6b68b65a38892471549c9acaec460febe732da1aee2cb4d67ff401a0b54b3b，无symlink/绝对或越界路径。准备目录artifacts/buckyball-cosyvoice3-20261102-seed仍指向同一82533d89/bbdev bc83fe53环境；它是后续公开复用实验，不再声称首次从零。新根维持原3h/400M/4000、独立验收和全部功能/PPA门槛。
+
+
+### 公开seed BB 轮启动（2026-11-02 11:59:07 +08）
+
+代码6548240，新根artifacts/buckyball-cosyvoice3-live-20261102-1159-seeded，PID1353425，截止14:59:07 +08。首次从零探索已经归档，本轮使用上述公开冻结seed继续设计；source与全部case的seed Ref一致（object-domain digest c10e2f6c2ae6e715c73f03ca30085dcf5f5da5d80a741c5fcbd30e6ae131df00）。空Method、高节点限制、模型/compaction、原3h/400M/4000和独立验收保持。启动及首批真实请求正常；约12:29巡检，当前仍无本轮验收、RSI或赢家。
