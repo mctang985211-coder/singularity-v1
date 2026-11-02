@@ -219,3 +219,10 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 定向原生 DSH 回归覆盖：200k/1M usage 后 retry 的 NodeView 为 80%、五分钟/十分钟为 50%，self 工具结果继续扣本次 usage；leaf depth=0，parent 在两 child 与 replacement 后实际扣除 Task 槽位；retry 模型读到真实逐项失败意见，使用冻结旧文件完成新提交，旧 workspace 中被 verifier 改写的内容不被复用。长 child findings 分页完整重组、单页小于 16 KiB、private/无关 Run 拒读。固定 worker+exploration card 为 1983 bytes；精简重复工具描述保持原 12 KiB surface 上限。初次检查暴露的类型 lint 与 surface 超限均已修正，失败日志保留。
 
 根 pnpm verify 全通过：445/445（protocol206、runtime135、app91、domain13），0 fail/skip，project/build/typecheck/lint 全通过；日志 artifacts/attempt-feedback-20261102-release-verify.log。补充 start wake 对累计百分比的 wire 断言在定向回归验证，日志 artifacts/attempt-feedback-wake-20261102.log。fixture 不冒充 BB 完整 frontend、RSI 或 PPA 赢家；真实修复效果由后续新根证明。当前 05:48 进程保留已加载版本，运行资产未中途替换。
+
+
+### 05:48 BB 轮最终结果（2026-11-02 08:48 +08）
+
+该轮在三小时窗口结束并退出，清理后未发现命令行指向此 execution root 的活动所属进程。最终1779次已结算请求，input268759596/output1872968，unknown=1（deadline取消了最后一个 proposer 请求）；七Task为五verified/两failed，最大depth3、十二Run与十二提交全部结算。三次root独立验收均failed，首次只通过model-reference/delivery；最后一次连参考交付也丢失。已封存trace sha256:28f2b5fd228e09a7728be1b84406cc7da76d680393a403d3c6537dd8917af7e6；RSI确实打开并读取25次公开资源，但只剩约30秒，未交patch，Round以insufficient-evidence/proposer-failure关闭。没有candidate、paired evaluation、PPA赢家或发布，不把初始化activation算赢家。
+
+公开receipt明确指出：单独ActLut/Cv3Dot32/Sfu未接入完整chip/core/compiler/recipe；Q3.12饱和和固定Snake alpha不能代表原模型；第三次输出缺失已生成的原始参考张量。amendment015补齐按需公开失败反馈、CAS旧输出与累计预算；领域guide补充先用现有core/Ball/compiler打通集成路径，明确host/accelerator归属，再按证据增加IP。没有指定分解树、放宽验收、增加语义门禁或运行管理器。下一轮使用routes准备副本，仍守原3h/400M/4000限制。

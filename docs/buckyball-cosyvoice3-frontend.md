@@ -167,3 +167,5 @@ Verdi PLI 预检复现 `libnovas.so` 缺少 `libz.so.1`；verify Nix shell 的 `
 ### 公开失败反馈与 retry 输入
 
 worker 在 retry 时以 lastAttempt.runId 调用 singularity_read(kind=evidence)，逐页读取独立验收的真实 criteria/reason。此前只暴露通用 failed 的实现缺口已经修复。旧输出仅从 CAS 冻结提交挂载到 lastAttempt.outputsPath；模型在本轮副本中显式整合后重新提交，不能沿用旧 worker workspace。预算百分比沿原 Task 总额度及首次 Run 时间累计，不因 retry 变回 100%。source 结算后即使整轮已截止也先 seal 只读公开轨迹；无剩余额度时不打开 RSI 或继续买请求。
+
+领域指引要求先利用已有 core/Ball/compiler 建立集成路径，明确各阶段 host/accelerator 归属，再按真实 workload 决定新增 IP。独立 primitive、paper-only mapping 和自报 PASS 不替代 chip/core/compiler/recipe 接线或原始参考比较；验收条件保持原样。
