@@ -264,11 +264,13 @@ void test('sealTaskContract rejects partial payloads and outermost digest fields
 
 void test('sealTaskContract preserves supplied field and array order without merging or appending', () => {
   const body = clone(rootBody)
+  delete (body.spec as unknown as Record<string, unknown>)['localGuidance']
   delete (body.resources as unknown as Record<string, unknown>)['exploration']
 
   const original = sealTaskContract(rootBody)
   const sealed = sealTaskContract(body)
 
+  assert.equal('localGuidance' in sealed.spec, false)
   assert.equal('exploration' in sealed.resources, false)
   assert.equal(sealed.spec.criteria.length, rootBody.spec.criteria.length)
   assert.equal(sealed.spec.outputs.length, rootBody.spec.outputs.length)

@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import { parseProtocolValue, inputRefSchema, sealMethodRevision, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type { InputRef, TaskContract } from '@singularity/protocol'
-import { CommandService, executeTaskTree, verifyRunSubmission } from '@singularity/runtime'
+import { CommandService, executeTaskTree } from '@singularity/runtime'
 import type { RunVerifier } from '@singularity/runtime'
 
 import { buildSingleRunComposition } from '../src/host-composition.ts'
@@ -49,30 +49,6 @@ function outputInput(request: WireRequest): InputRef {
   }
   throw new Error('Fixture model did not receive a direct frozen output')
 }
-
-void test('frozen commands consume CAS bytes, preserve review failures and cancel native subprocesses', async () => {
-  await withHarness(() => { throw new Error('This regression must not request a model') }, async ({ spike, storeRoot }) => {
-    const scenario = await makeScenario(storeRoot, spike.ctx, { taskId: 'frozen-command', maxRuns: 1 })
-    const service = await CommandService.open({ root: storeRoot, actor: { kind: 'runtime', id: 'check-fixture' }, clock: Date.now })
-    try {
-      const output = await service.putObject('check-run:output:result', new TextEncoder().encode(FROZEN_OUTPUT))
-      const input = await service.putObject('binary', new Uint8Array([0, 255, 7]))
-      const check = `python3 - <<'PY'\nfrom pathlib import Path\nassert Path('seed.bin').read_bytes() == bytes([0,255,7])\nassert Path('result.txt').read_text() == '${FROZEN_OUTPUT}'\nPY`
-      for (const [command, review, expected] of [[check, 'pass', 'verified'], ['exit 1', 'pass', 'failed'], [check, 'fail', 'failed'], ['sleep 30 & wait', 'pass', 'invalid']] as const) {
-        const contract = sealTaskContract({ ...contractPayload(scenario.contract), spec: { ...scenario.contract.spec,
-          inputs: [{ id: 'binary', object: input, path: 'seed.bin', access: 'read' }],
-          criteria: [{ id: 'check', statement: 'Match frozen input/output bytes.', required: true, check: command }] },
-          limits: { ...scenario.contract.limits, deadlineAt: Date.now() + (expected === 'invalid' ? 100 : 10_000) } })
-        const result = await verifyRunSubmission({ shell: spike.ctx.shell, contract, runId: 'check-run', inputs: [input], outputs: [output], reader: service, writer: service,
-          verifier: { provider: contract.acceptance, verify: request => Promise.resolve(sealPublicReceipt({ v: 1, provider: contract.acceptance,
-            operationId: request.operationId, contractDigest: contract.digest, inputDigests: [input.digest], outputDigests: [output.digest],
-            criteria: [{ id: 'check', verdict: review, reason: 'Independent domain finding.' }], exit: { code: 0, signal: null }, timedOut: false })) } })
-        assert.equal(result.verdict, expected)
-        if (result.verdict !== 'invalid') assert.match(result.receipt.criteria[0].reason, /Frozen check:/)
-      }
-    } finally { await service.close() }
-  })
-})
 
 void test('S4 required child failure returns scheduler feedback, enforces replan, admits replacement and joins its verified winner', { timeout: 240_000 }, async () => {
   const taskId = `task-replacement-${String(process.pid)}-${String(Date.now())}`

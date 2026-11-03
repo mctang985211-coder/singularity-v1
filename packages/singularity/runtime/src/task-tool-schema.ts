@@ -37,7 +37,7 @@ export const taskProtocolReference: JsonValue = {
 
 export const planningParameters = {
   sketch: { type: 'json', required: true,
-    description: 'Hierarchy [0,1] or [0,1,2]: self, direct responsibilities, possible deeper work. Refine the completion path, dependencies and interfaces after discovery. A bounded verifiable leaf has no children.',
+    description: 'Hierarchy [0,1] or [0,1,2]: self, children, possible grandchildren. Refine after discovery; delegate long-chain stages in direct batches. A bounded verifiable leaf has no children.',
   },
 } as const
 
