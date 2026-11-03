@@ -307,3 +307,7 @@ recipe Run1虽已合并四路真实数值参考，仍因plan/graphs参数路径�
 真实模型测试已停止，本次仅运行本地协议与脚本化 DSH 回归。旧记录中的 seed 完整传递、数值验收成功和当前运行状态，以 [Task 修复审计](task-repair-20261103.md) 的逐项更正为准；已撤除首轮配方、固定 suite 和项目 skill 挂载，改由 parent 编写 child 验收，并修复 self Ref 与工作流指引。
 
 相对 `dac8c0e`：core 源码净增 57 行；整个 apps/packages（含源码、测试与配置）净增 62 行；Buckyball 生产代码净减 18 行，含测试净减 16 行。project/build/typecheck/lint 通过；本地测试 445 项通过、1 项被宿主 inotify 配额耗尽阻断（runtime 的既有 CAS 原子发布 fs.watch 测试，ENOSPC；8192/8192 已占用），app 单独完整 92/92 通过；独立 CI 在 `2f2ea05` 上完整 446/446 通过。本轮恢复通用原生 shell 注册并重跑 CAS 命令及 app 回归，日志 `artifacts/task-repair-{audit-verify,app,frozen-checks}-20261103.log`；未跳过测试或修改系统配额。PR 保持 Draft，最终提交的 CI 状态见 PR checks；本次没有新增真实模型行为改善证据。
+
+后续 prompt 补齐（修改前备份 `e084a7d`）：将弱化职责的探索 brief 和两处算术示例替换为拥有解析、汇总及集成责任的阶段合同；工具示例复用同一合同，按需协议文档展示前批冻结 totals → 后批完整 InputRef → parent 最终消费者复验。worker 明确为 workflow 节点，派发时说明输入来源、输出消费者和接口；未新增机制或预设真实任务树。相对 `dac8c0e`，core 净增 78 行，apps/packages 净增 83 行；Buckyball 仍净减 18 行（含测试净减 16 行）。
+
+原生 shell 的示例正例通过，陈旧 totals、错误 CLI、重复 key 丢失均被拒绝，0 模型请求；worker 1967/2048 bytes，带 checkout/bbdev 的生产 prepare 返回 3562/32768 bytes，见 `artifacts/workflow-example-smoke-20261103.json`。project/build/typecheck/lint 和 app 92/92 通过；本地完整 verify 仍仅被既有 fs.watch ENOSPC 阻断，见 `artifacts/workflow-refinement-{verify,app}-20261103.log`，最终 CI 见 PR checks。真实模型测试保持停止；领域 root 证据检查、独立完成能力评测和 BB 成功链路仍未完成，详见审计的剩余范围。

@@ -1,7 +1,6 @@
 import { z } from 'zod'
 
 import { computeDigest } from './digest.ts'
-import type { JsonValue } from './json.ts'
 import { skillAssetSchema, toolAssetSchema } from './method.ts'
 import type { MethodRevision, TaskTemplate } from './method.ts'
 import { refSchema } from './refs.ts'
@@ -29,26 +28,39 @@ export const EXPLORE_GUIDANCE = {
   text: 'Discover the completion path for this Task. Choose direct responsibility scopes with usable interfaces; dependent work uses later batches. Each child plans its own work. Author acceptanceCriteria with concrete pass rules and self-contained shell checks before dispatch. Checks run at the workspace root with declared input/output paths, during work and independently after submission. Use complete frozen InputRefs from self or child results. Deliver under result/. A bounded leaf may finish directly. Integrate direct results and recheck this Task; preserve reusable discoveries as learning drafts.',
 } as const
 
-export const EXPLORE_EXAMPLE: TaskExample = {
+export const EXPLORE_EXAMPLE = {
   goal: {
-    summary: 'Evaluate the supplied arithmetic expression.',
-    deliverable: 'result/value.txt containing the evaluated integer.',
-    scope: ['One independently useful local question.'],
-    constraints: ['Use only frozen inputs and public resources authorized for this Task.'],
+    summary: 'Implement the record aggregation stage of a report workflow.',
+    deliverable: 'result/aggregate.py exposing aggregate(rows) and a CLI taking records.json; totals.json for the later report stage.',
+    scope: ['Own parsing, aggregation and stage integration; discover any direct responsibilities needed.'],
+    constraints: ['Consume the frozen records input; emit a JSON object mapping each key to its integer sum.',
+      'The parent retains final report integration and end-to-end checks; the next batch consumes the frozen totals output.'],
   },
-  acceptanceCriteria: [{ id: 'local-result', statement: 'The result reproduces the expected value from the supplied input.', check: "python3 - <<'PY'\nfrom pathlib import Path\nassert Path('result/value.txt').read_text().strip() == '4'\nPY" }],
-  inputs: [{ id: 'source', exampleText: '2 + 2 = 4; write the value to result/value.txt.' }],
-  localOutputs: [],
-}
+  acceptanceCriteria: [{ id: 'aggregation', statement: 'The callable handles empty and cancelling inputs; callable, CLI and saved totals reproduce the supplied records.', check: `python3 - <<'PY'
+import json, runpy, subprocess, sys
+from pathlib import Path
+rows = json.loads(Path('records.json').read_text())
+expected = {}
+for row in rows:
+    expected[row['key']] = expected.get(row['key'], 0) + row['value']
+aggregate = runpy.run_path('result/aggregate.py')['aggregate']
+assert aggregate(rows) == expected and aggregate([]) == {}
+assert aggregate([{'key':'x','value':-2},{'key':'x','value':2}]) == {'x':0}
+actual = json.loads(subprocess.check_output([sys.executable, 'result/aggregate.py', 'records.json']))
+assert actual == expected == json.loads(Path('totals.json').read_text())
+PY` }],
+  inputs: [{ id: 'records', exampleText: '[{"key":"a","value":2},{"key":"b","value":-1},{"key":"a","value":3}]' }],
+  localOutputs: [{ id: 'totals', path: 'totals.json', kind: 'file', description: 'Frozen key totals consumed by the next report stage.' }],
+} satisfies TaskExample
 
 export const EXPLORE_GUIDANCE_REF = { id: 'platform:explore-guidance', digest: computeDigest('object', EXPLORE_GUIDANCE) }
-export const EXPLORE_EXAMPLE_REF = { id: 'platform:explore-example', digest: computeDigest('object', EXPLORE_EXAMPLE as unknown as JsonValue) }
+export const EXPLORE_EXAMPLE_REF = { id: 'platform:explore-example', digest: computeDigest('object', EXPLORE_EXAMPLE) }
 
 /** Fixed platform template, bound only to this frozen domain resource snapshot. */
 export function explorationTemplate(snapshot: GlobalResourceSnapshot): TaskTemplate {
   return {
     id: EXPLORE_TEMPLATE_ID,
-    brief: 'Explore one local goal using frozen public resources.',
+    brief: 'Own one workflow scope, its technical work and result integration.',
     guidance: EXPLORE_GUIDANCE_REF,
     example: EXPLORE_EXAMPLE_REF,
     instanceSchema: {
@@ -61,7 +73,7 @@ export function explorationTemplate(snapshot: GlobalResourceSnapshot): TaskTempl
     acceptancePolicy: snapshot.fallbackAcceptance,
     skills: snapshot.skills.map(skill => skill.id),
     tools: snapshot.tools.map(tool => tool.id),
-    children: [{ bindingId: EXPLORE_BINDING_ID, templateId: EXPLORE_TEMPLATE_ID, brief: 'Explore a useful direct subproblem.', join: snapshot.fallbackJoin }],
+    children: [{ bindingId: EXPLORE_BINDING_ID, templateId: EXPLORE_TEMPLATE_ID, brief: 'Own a direct workflow scope with consumable outputs and checks.', join: snapshot.fallbackJoin }],
   }
 }
 

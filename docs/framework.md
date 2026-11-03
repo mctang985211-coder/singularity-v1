@@ -398,37 +398,41 @@ example 是完整业务用例，而不是占位 scaffold。必须包含真实可
 
 所有模型可见的 worker/RSI card、Method guidance、example、skill 正文、MCP tool description 和协议错误都采用正向结构：当前目标、可执行动作、下一步和剩余预算百分比。权限、边界和终结条件由 schema、guard、scope 与 verifier 执行；模型界面只展示完成当前动作所需的信息。
 
-示例：仿真子任务模板的 example（**仅解释协议，不规定领域实现**）：
+示例：记录汇总阶段的 example（**仅解释协议，不规定领域实现**）。child 拥有该阶段的完整工作流，自主组织直属职责；parent 保留后续报告及最终集成：
 
 ~~~json
 {
   "goal": {
-    "summary": "验证一个 4 位无符号加法器的功能",
-    "deliverable": "生成 sim-result.json 和完整仿真日志",
-    "scope": ["单个组合逻辑模块", "功能仿真"],
-    "constraints": ["将被测 RTL 作为只读输入", "覆盖全部输入组合"]
+    "summary": "Implement the record aggregation stage of a report workflow.",
+    "deliverable": "result/aggregate.py exposing aggregate(rows) and a CLI taking records.json; totals.json for the later report stage.",
+    "scope": [
+      "Own parsing, aggregation and stage integration; discover any direct responsibilities needed."
+    ],
+    "constraints": [
+      "Consume the frozen records input; emit a JSON object mapping each key to its integer sum.",
+      "The parent retains final report integration and end-to-end checks; the next batch consumes the frozen totals output."
+    ]
   },
   "acceptanceCriteria": [
     {
-      "id": "exhaustive",
-      "statement": "逐一检查 256 对输入的 sum 与 carry",
-      "check": "python3 -c \"import json; r=json.load(open('sim-result.json')); assert len(r)==256; assert all(x['sum']==(x['a']+x['b'])%16 and x['carry']==(x['a']+x['b'])//16 for x in r)\""
-    },
-    {
-      "id": "traceable",
-      "statement": "结果文件及执行日志可读取",
-      "check": "test -s sim-result.json && test -s sim.log"
+      "id": "aggregation",
+      "statement": "The callable handles empty and cancelling inputs; callable, CLI and saved totals reproduce the supplied records.",
+      "check": "python3 - <<'PY'\nimport json, runpy, subprocess, sys\nfrom pathlib import Path\nrows = json.loads(Path('records.json').read_text())\nexpected = {}\nfor row in rows:\n    expected[row['key']] = expected.get(row['key'], 0) + row['value']\naggregate = runpy.run_path('result/aggregate.py')['aggregate']\nassert aggregate(rows) == expected and aggregate([]) == {}\nassert aggregate([{'key':'x','value':-2},{'key':'x','value':2}]) == {'x':0}\nactual = json.loads(subprocess.check_output([sys.executable, 'result/aggregate.py', 'records.json']))\nassert actual == expected == json.loads(Path('totals.json').read_text())\nPY"
     }
   ],
   "inputs": [
     {
-      "id": "rtl-example",
-      "exampleText": "module add4(input [3:0] a,b,output [3:0] sum,output carry); assign {carry,sum}=a+b; endmodule"
+      "id": "records",
+      "exampleText": "[{\"key\":\"a\",\"value\":2},{\"key\":\"b\",\"value\":-1},{\"key\":\"a\",\"value\":3}]"
     }
   ],
   "localOutputs": [
-    { "id": "result", "path": "sim-result.json", "kind": "file", "description": "仿真统计与公开结果" },
-    { "id": "log", "path": "simulation.log", "kind": "file", "description": "完整仿真日志" }
+    {
+      "id": "totals",
+      "path": "totals.json",
+      "kind": "file",
+      "description": "Frozen key totals consumed by the next report stage."
+    }
   ]
 }
 ~~~
@@ -438,6 +442,8 @@ example 输入是嵌入式样本，不能伪造 ObjectRef 或读取授权。实�
 其类型为 TaskExample = Omit<TaskProposal, 'inputs'> & { inputs: readonly { id: string; exampleText: string }[] }。acceptanceCriteria 必须非空，包含完整的 pass 规则和自包含 check；样本输入不是授权 Ref，实际 commit 必须使用 self 或直属结果返回的完整 InputRef。
 
 Child preview 不展示该 child 自己可以继续分解的孙模板、内部 workflow 或 guidance；父模型看见的是该 child 的接口、目标和一个用例。child 开始时才得到自己的完整本级指导与下一级 brief。
+
+按需 task-protocol 文档展示完整交接：先派发上述汇总阶段；parent 读取冻结结果并核对实际 CLI；后批报告任务使用 totals supporting output 的完整授权 InputRef，保持 id/object/path/access 不变，按 access 读取；最后 parent 集成两阶段并以原 records 复验最终消费者。示例身份仅用于解释格式，实际派发从 self/children 复制完整 Ref；不预设真实任务的切分、层数或 child 数。
 
 ## 6. 每个节点都支持局部探索
 
@@ -1281,8 +1287,9 @@ deeper work. Create only direct children; each discovers its own workflow.
 Use current contextEpoch and visible bindingIds. A bounded, directly verifiable
 leaf may finish locally. Use later batches for work that consumes earlier results.
 
-Before dispatch, author each child's acceptanceCriteria: goal-specific pass
-rules and self-contained shell checks, including any new test code inline.
+Define each child's input source, output consumer and interface before dispatch.
+Author acceptanceCriteria with goal-specific pass rules and self-contained
+shell checks, including any new test code inline.
 Checks run from the workspace root using declared input/output paths. Run your
 checks during work and use observed data to correct failures. They are frozen
 in the contract and independently rerun after submission.

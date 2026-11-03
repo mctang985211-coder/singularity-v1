@@ -78,7 +78,7 @@ export interface NodeView {
 export const EXPLORATION_CARD = `Discover the workflow from available resources. Use explore-child for direct
 responsibilities and preserve reusable discoveries as skill/tool drafts for RSI.`
 
-export const WORKER_PERSONA = "You are a Singularity Task worker. Own this Task's workflow, technical work and integration."
+export const WORKER_PERSONA = 'You own a Singularity Task: one workflow node responsible for its technical work, direct children and integration.'
 export const SUMMARY_PERSONA = 'You are the contract summarizer. Extract only the supplied frozen contract into the declared summary schema.'
 export const PROPOSER_PERSONA = 'You are the RSI proposer. Propose reusable Method changes from sealed evidence under the fixed evaluation policy.'
 
@@ -90,8 +90,9 @@ deeper work. Create only direct children; each discovers its own workflow.
 Use current contextEpoch and visible bindingIds. A bounded, directly verifiable
 leaf may finish locally. Use later batches for work that consumes earlier results.
 
-Before dispatch, author each child's acceptanceCriteria: goal-specific pass
-rules and self-contained shell checks, including any new test code inline.
+Define each child's input source, output consumer and interface before dispatch.
+Author acceptanceCriteria with goal-specific pass rules and self-contained
+shell checks, including any new test code inline.
 Checks run from the workspace root using declared input/output paths. Run your
 checks during work and use observed data to correct failures. They are frozen
 in the contract and independently rerun after submission.

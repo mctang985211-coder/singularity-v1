@@ -1,21 +1,22 @@
 import { parameterSchemaSpecToJsonSchema } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { decomposeCommitSchema, planningSketchSchema, protocolJsonSchema } from '@singularity/protocol'
+import { decomposeCommitSchema, EXPLORE_EXAMPLE, planningSketchSchema, protocolJsonSchema } from '@singularity/protocol'
 import type { JsonValue } from '@singularity/protocol'
 
 /** Syntax-only examples; current identities and objectives come from the Task view. */
 export const taskToolExamples: Record<string, JsonValue> = {
   singularity_read: { kind: 'self' },
   singularity_plan: { sketch: { v: 1, taskId: 'task', runId: 'run', contextEpoch: 'current-epoch',
-    sourceContract: `sha256:${'0'.repeat(64)}`, objective: 'Produce the result.',
-    levels: [0, 1].map(level => ({ level, purpose: 'Work at this level.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
-    directPlan: [], assumptions: [] } },
+    sourceContract: `sha256:${'0'.repeat(64)}`, objective: 'Deliver a report from frozen records.',
+    levels: [{ level: 0, purpose: 'Integrate aggregation and reporting; check the final report.', likelyChildren: ['platform:explore-child'], expectedInputs: ['records.json'], expectedOutputs: ['validated report'] },
+      { level: 1, purpose: 'Own aggregation, then reporting in a later batch.', likelyChildren: [], expectedInputs: ['frozen records or totals'], expectedOutputs: ['executable stage and consumable output'] }],
+    directPlan: [{ bindingId: 'platform:explore-child', purpose: 'Implement aggregation before dispatching its report consumer.' }], assumptions: [] } },
   singularity_decompose: { action: 'commit', children: [{ bindingId: 'platform:explore-child',
-    ackPreview: `sha256:${'0'.repeat(64)}`, task: { goal: { summary: 'Evaluate the supplied arithmetic expression.', deliverable: 'result/value.txt with the integer value.', scope: [], constraints: [] },
-      inputs: [], acceptanceCriteria: [{ id: 'exact-result', statement: 'The independently reproduced result equals 4.',
-        check: "python3 - <<'PY'\nfrom pathlib import Path\nassert Path('result/value.txt').read_text().strip() == '4'\nPY" }], localOutputs: [] } }] },
+    ackPreview: `sha256:${'0'.repeat(64)}`, task: { goal: EXPLORE_EXAMPLE.goal,
+      inputs: [{ id: 'records', object: { id: 'example:records', digest: `sha256:${'0'.repeat(64)}` }, path: 'records.json', access: 'copy-to-work' }],
+      acceptanceCriteria: EXPLORE_EXAMPLE.acceptanceCriteria, localOutputs: EXPLORE_EXAMPLE.localOutputs } }] },
   singularity_feedback: { kind: 'needs-replan', summary: 'Clarify this component boundary.', proposedChanges: [], refs: [] },
-  singularity_submit: { outputIds: ['result'], includeLearningDrafts: false },
+  singularity_submit: { outputIds: ['result', 'totals'], includeLearningDrafts: false },
   singularity_stop: { reason: 'unsolved', message: 'The required result is incomplete.' },
 }
 
@@ -30,6 +31,13 @@ export const taskProtocolReference: JsonValue = {
   },
   decompose: protocolJsonSchema(decomposeCommitSchema),
   examples: taskToolExamples,
+  handoffExample: [
+    'Illustration: the parent owns a final report workflow; the example child owns the complete aggregation stage. Discover the actual stages for your Task.',
+    'Read self, plan, prepare explore-child, then commit the aggregation contract with the authorized records InputRef. Replace illustrative identities with actual returned values. Each child discovers its own workflow and may organize direct children.',
+    'After the batch finishes, read children and evidence, following all pages. Inspect the frozen result/aggregate.py and totals output; check the stage through its CLI before planning its consumer.',
+    'Prepare a later report batch. Copy the totals output InputRef fields id/object/path/access unchanged into that child inputs. Its goal defines the JSON totals interface and report format; author checks that compare the report with those totals. An access:read input is read with singularity_read(kind="resource", id=...), not a sibling workspace path.',
+    'Read the report result, integrate both stages into this Task outputs and test the actual report consumer against the original records and this Task acceptance. Local passes do not replace this integration check. A failed interface leads to corrected work or a new contract through feedback.',
+  ],
   method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Register skill/MCP assets in the Method before binding their IDs; public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
   skills: 'Bound skills use native DSH discovery; directory resources include frozen relative files. Use the path returned by the skill tool for bundled scripts.',
   results: 'Read evidence with a direct child ID or lastAttempt.runId. Join every data text page to parse {result,publicReceipt?}; publicReceipt.criteria contains the independent findings. Frozen child outputs are under children/; the previous attempt is under lastAttempt.outputsPath. Copy useful artifacts to your current outputs and correct the observed failures before resubmitting. Prior transcripts and private receipts are not exposed.',

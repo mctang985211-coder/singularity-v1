@@ -23,3 +23,14 @@ host 复用 DSH 原生 shell，在 fresh 目录物化 CAS 合同输入和冻结�
 Buckyball 撤除项目旧 skill 的打包、改写和注册；root 合同只给出 `.agents/skills/` 的参考文档绝对路径。root 领域验收继续由 operator/domain 固定；child 目标、接口和验收由 parent 自己写。Singularity 自产 Method skill 的现有机制保留。
 
 验证包括协议与原生 DSH 脚本化集成：真实 tool self 返回二进制 Ref 并向 child/grandchild 传递、跨批冻结交接、独立命令拒绝 reviewer 误报通过、失败后的 replan/replacement、本层集成及 deadline 取消。本轮复验发现未提交删减误移除了通用 profile 的 shell 注册，导致普通 Task 验收访问 undefined.execute；已恢复两行原生注册，并保留 CAS、pipeline 失败、review 否决与取消回归。最终检查与行数记录见 [进度](progress.md)。这些证据验证机制可用，尚不能证明真实模型已自主正确使用 Task；按最新停止要求，本次不重跑真实模型。
+
+## Prompt 补齐与剩余范围
+
+后续核对发现，首轮收敛后的探索 brief、算术用例和空计划范例仍不足以展示 workflow 节点。已替换为记录汇总阶段：child 负责解析、汇总和阶段集成，交付可调用模块、CLI 及独立冻结的 totals；按需协议示例说明后批复制完整 totals InputRef、定义消费者验收，parent 最后核对原输入到最终报告。工具错误示例复用同一合同；有界叶子仍可直接完成，不固定实际 Task 树。
+
+| 原规划内容 | 当前判断 |
+|---|---|
+| 完整 Ref、角色覆盖、模型编写 child 验收、CAS 复验及分批交接说明 | 机制已实现；示例检查正例及陈旧 totals、错误 CLI、重复 key 丢失三个负例通过；真实模型行为待验证 |
+| 预供配方限制、旧项目 skill 改写挂载、预制探索验收 | 被用户新要求替代，已撤除，不补回 |
+| Buckyball root 的确定性数值/映射/PPA 证据核对、独立完成能力评测及 BB 成功链路 fixture | 有效但尚未完成；不能据当前回归宣称完整领域/PPA/RSI 改善 |
+| 完整 workflow schema、父计划快照、额外 trace 索引、预算策略和专用预检体系 | 未证实当前修复需要，继续暂缓；不等于已确认这些想法普遍错误 |
