@@ -68,7 +68,7 @@ export async function createToolController(
     }
     const usage = currentUsage()
     const cost = usageCost([usage])
-    if (prior.unknown || cost.unknown || cost.tokens + tokens > limits.maxTokens) {
+    if (cost.tokens + tokens > limits.maxTokens) {
       request.onBudgetExhausted?.()
       return false
     }
@@ -83,7 +83,7 @@ export async function createToolController(
     const task = state.tasks.get(runtime.contract.taskId)
     const rootDepth = state.tasks.get(task?.rootTaskId ?? '')?.contract.limits.maxDepth ?? limits.maxDepth
     return {
-      tokensPct: closed.unknown || cost.unknown ? null : clampPercent(
+      tokensPct: clampPercent(
         Math.min(reservation.tokens, runtime.contract.limits.maxTokens - closed.tokens) - cost.tokens, runtime.contract.limits.maxTokens),
       stepsPct: clampPercent(limits.maxStepsPerRun - usage.steps, limits.maxStepsPerRun),
       wallClockPct: clampPercent(limits.deadlineAt - runtime.clock(), limits.deadlineAt - taskStartedAt),
@@ -95,7 +95,7 @@ export async function createToolController(
     ...(request.signal === undefined ? {} : { signal: request.signal }),
     checkBudget: (extraTokens = 0) => {
       const cost = usageCost([workerUsage()])
-      return !prior.unknown && !cost.unknown && runtime.clock() < limits.deadlineAt
+      return runtime.clock() < limits.deadlineAt
         && cost.tokens + extraTokens < limits.maxTokens && request.checkReportedBudget?.() !== false
     },
   })
@@ -155,9 +155,6 @@ export async function createToolController(
         throw new DecomposeError('INVALID_ARGUMENT', 'live Agent is missing at child batch commit')
       }
       const live = usageCost([currentUsage()])
-      if (live.unknown || prior.unknown) {
-        throw new DecomposeError('LIMIT_EXCEEDED', 'live usage is unknown at child batch commit')
-      }
       const result = await commitDecomposeBatch({
         contract: runtime.contract,
         parentRunId: request.runId,

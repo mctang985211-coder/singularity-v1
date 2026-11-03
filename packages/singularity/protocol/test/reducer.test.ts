@@ -1016,7 +1016,7 @@ void test('run/opened resolves a frozen Composition and checks contract id, dige
   )
 })
 
-void test('failed retry is allowed only while maxRuns, deadline, tokens, and unknown usage permit', () => {
+void test('failed retry is allowed only while maxRuns, deadline, and tokens permit', () => {
   const root = makePlainRootContract()
   const context = makeContext([root], [plainMethod])
   const journal = new Journal()
@@ -1076,7 +1076,7 @@ void test('a retry Run cannot open while an earlier child is still active', () =
   )
 })
 
-void test('deadline, token exhaustion, and unknown usage stop retry but permit task closure', () => {
+void test('deadline and token exhaustion stop retry but permit task closure', () => {
   const deadlineRoot = makePlainRootContract()
   const deadlineContext = makeContext([deadlineRoot], [plainMethod])
   const deadlineJournal = new Journal()
@@ -1145,36 +1145,6 @@ void test('deadline, token exhaustion, and unknown usage stop retry but permit t
     'failed',
   )
 
-  const unknownRoot = makePlainRootContract()
-  const unknownContext = makeContext([unknownRoot], [plainMethod])
-  const unknownJournal = new Journal()
-  unknownJournal.add('task/admitted', {
-    taskId: 'task-root',
-    contract: contractRef(unknownRoot),
-  })
-  unknownJournal.add('run/opened', runOpened('task-root', 'run-root-1', 1))
-  unknownJournal.add('run/submitted', submitted('run-root-1'))
-  unknownJournal.add(
-    'run/closed',
-    { ...failedClosed('run-root-1'), usage: usage({ unknownRequests: 1 }) },
-  )
-  const unknownRetry = appendFact(
-    unknownJournal.facts,
-    'run/opened',
-    runOpened('task-root', 'run-root-2', 2),
-  )
-  expectReducerError(
-    () => reduceTaskRunFacts([...unknownJournal.facts, unknownRetry], unknownContext),
-    'RETRY_NOT_ALLOWED',
-  )
-  const unknownClose = appendFact(unknownJournal.facts, 'task/closed', failedTask('task-root'))
-  assert.equal(
-    mustGet(
-      reduceTaskRunFacts([...unknownJournal.facts, unknownClose], unknownContext).tasks,
-      'task-root',
-    ).closed?.outcome,
-    'failed',
-  )
 })
 
 for (const exhaustedOwner of ['root', 'parent'] as const) {
@@ -1236,14 +1206,6 @@ for (const exhaustedOwner of ['root', 'parent'] as const) {
     assert.deepEqual(protocol.decideTaskRetryPolicy(failedState, grandchild.taskId, 'run-grandchild-1', [], 100), {
       allowed: false,
       reason: `ancestor Task ${JSON.stringify(exhaustedOwner === 'root' ? root.taskId : parent.taskId)}: known token budget is exhausted`,
-    })
-    const knownPrefix = journal.facts.slice(0, -2)
-    const unknownClosure = appendFact(knownPrefix, 'run/closed', { ...verifiedClosed('run-other-1'),
-      usage: usage({ inputTokens: 10, outputTokens: 0, unknownRequests: 1 }) })
-    const unknownState = reduceTaskRunFacts([...knownPrefix, unknownClosure], context)
-    assert.deepEqual(protocol.decideTaskRetryPolicy(unknownState, grandchild.taskId, 'run-grandchild-1', [], 100), {
-      allowed: false,
-      reason: `ancestor Task ${JSON.stringify(exhaustedOwner === 'root' ? root.taskId : parent.taskId)}: usage is unknown, so budget cannot be proven`,
     })
     const terminal = appendFact(journal.facts, 'task/closed', failedTask(grandchild.taskId, 'run-grandchild-1'))
     const closedState = reduceTaskRunFacts([...journal.facts, terminal], context)

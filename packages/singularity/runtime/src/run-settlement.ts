@@ -379,7 +379,7 @@ export function retryDecisionForRun(
 }
 
 /** The same frozen Task subtree contributes to retry eligibility and reservation. */
-export function closedSubtreeUsage(state: TaskRunState, taskId: string): { readonly tokens: number; readonly unknown: boolean } {
+export function closedSubtreeUsage(state: TaskRunState, taskId: string): { readonly tokens: number } {
   const records: UsageRecord[] = []
   const pending = [taskId]
   for (const id of pending) {
@@ -394,14 +394,12 @@ export function closedSubtreeUsage(state: TaskRunState, taskId: string): { reado
   return usageCost(records)
 }
 
-export function usageCost(records: readonly UsageRecord[]): { readonly tokens: number; readonly unknown: boolean } {
+export function usageCost(records: readonly UsageRecord[]): { readonly tokens: number } {
   let tokens = 0
-  let unknown = false
   for (const usage of records) {
     tokens += usage.inputTokens + usage.outputTokens + (usage.summary?.inputTokens ?? 0) + (usage.summary?.outputTokens ?? 0)
-    unknown ||= usage.unknownRequests > 0 || (usage.summary?.unknownRequests ?? 0) > 0
   }
-  return { tokens, unknown }
+  return { tokens }
 }
 
 export async function putSealed(

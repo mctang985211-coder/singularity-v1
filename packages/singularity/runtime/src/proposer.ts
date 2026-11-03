@@ -114,14 +114,14 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
   const percentages = () => {
     const actual = currentUsage()
     return {
-      tokens: actual.unknownRequests > 0 ? 0 : clampPercent(budget.maxTokens - actual.inputTokens - actual.outputTokens, budget.maxTokens),
+      tokens: clampPercent(budget.maxTokens - actual.inputTokens - actual.outputTokens, budget.maxTokens),
       steps: clampPercent(budget.maxSteps - actual.steps, budget.maxSteps),
       wallClock: clampPercent(deadlineAt - clock(), budget.maxWallClockMs),
     }
   }
   const available = (nextRequest = false) => {
     const actual = currentUsage()
-    return clock() < deadlineAt && actual.unknownRequests === 0
+    return clock() < deadlineAt
       && actual.inputTokens + actual.outputTokens + (nextRequest ? 1 : 0) <= budget.maxTokens
       && actual.steps + (nextRequest ? 1 : 0) <= budget.maxSteps
   }

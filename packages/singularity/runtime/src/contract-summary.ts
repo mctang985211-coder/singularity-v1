@@ -187,7 +187,7 @@ export class ContractSummaryService {
           ctx.on('agent/request-error', () => Promise.resolve(undefined), { prepend: true })
           ctx.on('agent/pre-step', (_payload, next) => {
             const usage = snapshotSession(agent.session, false).usage
-            if (usage.unknownRequests > 0 || !entry.owner.checkBudget(usage.inputTokens + usage.outputTokens + 1)) {
+            if (!entry.owner.checkBudget(usage.inputTokens + usage.outputTokens + 1)) {
               return Promise.resolve({ kind: 'reject' as const })
             }
             return next()

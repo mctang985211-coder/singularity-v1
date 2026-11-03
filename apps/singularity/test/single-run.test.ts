@@ -862,7 +862,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
 })
 
 void test('single Run stops purchasing at host budget boundaries', { timeout: 240_000 }, async t => {
-  const boundaries = ['steps', 'tokens', 'cache', 'unknown', 'deadline'] as const
+  const boundaries = ['steps', 'tokens', 'cache', 'deadline'] as const
   let boundary: (typeof boundaries)[number] = 'steps'
   let now = Date.now()
   let deadline = now + 60_000
@@ -872,9 +872,9 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
     if (boundary === 'deadline') now = deadline
     return {
       toolCalls: [{ id: `read-${String(index)}`, name: 'singularity_read', arguments: '{"kind":"self"}' }],
-      ...(boundary === 'unknown' ? {} : { usage: boundary === 'cache'
+      usage: boundary === 'cache'
         ? { promptTokens: 256_001, completionTokens: 8, totalTokens: 256_009, cachedTokens: 256_000 }
-        : fixtureUsage(0) }),
+        : fixtureUsage(0),
     }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
     for (const current of boundaries) {
@@ -906,7 +906,6 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
         assert.equal(fixture.requests.length - firstRequest, 1)
         assert.equal(result.evidence, undefined)
         assert.ok(result.executionRecord)
-        if (boundary === 'unknown') assert.equal(result.usage.unknownRequests, 1)
       })
     }
   })

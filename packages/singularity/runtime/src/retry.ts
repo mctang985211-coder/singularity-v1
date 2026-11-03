@@ -48,7 +48,7 @@ export interface RetrySingleRunRequest {
   readonly actor?: FactActor
   readonly clock?: () => number
   readonly summaries?: ContractSummaryService
-  readonly checkReportedBudget?: (reported?: { readonly tokens: number; readonly unknown: boolean }) => boolean
+  readonly checkReportedBudget?: (reported?: { readonly tokens: number }) => boolean
   readonly canOpenRun?: () => boolean
   readonly signal?: AbortSignal
   readonly onBudgetExhausted?: () => void

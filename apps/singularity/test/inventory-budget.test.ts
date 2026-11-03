@@ -118,7 +118,6 @@ void test('invalid or exhausted launch conditions fail before creating output or
   for (const [name, previous, configuration] of [
     ['requests', { requestBoundaries: 10 }, { maxRequests: 10 }],
     ['tokens', { usage: { tokens: 100 } }, { maxReportedTokens: 100 }],
-    ['unknown', { usage: { unknown: 1 } }, {}],
     ['negative', { requestBoundaries: -1 }, {}],
     ['deadline', {}, { deadlineAt: Date.now() - 1 }],
   ] as const) {

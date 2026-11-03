@@ -104,14 +104,6 @@ void test('missing and invalid slots stay in the manifest and never reach compar
   assert.equal(result.completeCases, 2)
 })
 
-void test('unknown usage cannot establish a cost improvement or pass a hard cost threshold', () => {
-  const input = { ...manifest(), usage: { ...usage, unknownRequests: 1 } }
-  assert.equal(compareEvaluation('round', ref('plan'), plan, input, comparator()).outcome, 'improved')
-  assert.equal(compareEvaluation('round', ref('plan'), plan, input, comparator([2, 2, 2], true)).outcome, 'insufficient-evidence')
-  const costPlan = { ...plan, thresholds: { ...plan.thresholds, maxRelativeCostIncrease: 0.1 } }
-  assert.equal(compareEvaluation('round', ref('plan'), costPlan, input, comparator()).reason, 'unknown-cost')
-})
-
 void test('whole-slot usage including failed attempts is charged against frozen relative cost', () => {
   const costPlan = { ...plan, thresholds: { ...plan.thresholds, maxRelativeCostIncrease: 0.1 } }
   const input = manifest(costPlan)

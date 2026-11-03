@@ -270,8 +270,6 @@ export interface RetryPolicyInput {
   readonly now: number
   /** Known subtree input+output tokens, including summary usage. */
   readonly usageTokens: number
-  /** True when any subtree usage is unknown; retry then fails closed. */
-  readonly usageUnknown: boolean
 }
 
 /**
@@ -308,9 +306,6 @@ export function decideRetryPolicy(
   }
   if (input.now >= input.deadlineAt) {
     return { allowed: false, reason: 'deadline has been reached' }
-  }
-  if (input.usageUnknown) {
-    return { allowed: false, reason: 'usage is unknown, so budget cannot be proven' }
   }
   if (input.usageTokens >= input.maxTokens) {
     return { allowed: false, reason: 'known token budget is exhausted' }
@@ -991,7 +986,6 @@ export function decideTaskRetryPolicy(
       deadlineAt: owner.contract.limits.deadlineAt,
       now,
       usageTokens: totals.tokens,
-      usageUnknown: totals.unknown,
     }, transientInvalidReasons)
     if (!decision.allowed) {
       return owner.taskId === task.taskId ? decision

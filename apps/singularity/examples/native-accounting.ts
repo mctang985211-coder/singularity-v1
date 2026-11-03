@@ -10,7 +10,7 @@ export function nativeAccounting(ctx: Context, options: {
 }) {
   const usage = { requests: 0, completed: 0, inputTokens: 0, outputTokens: 0, unknown: 0 }
   const available = () => !options.cancellation.signal.aborted && Date.now() < options.deadlineAt
-    && usage.requests < options.maxRequests && usage.unknown === 0
+    && usage.requests < options.maxRequests
     && usage.inputTokens + usage.outputTokens < options.maxReportedTokens
   const dispose = ctx.on('llm/stream', async function* (request, next) {
     if (!available()) {
@@ -31,8 +31,9 @@ export function nativeAccounting(ctx: Context, options: {
       const output = reported?.outputTokens ?? 0
       usage.completed += 1
       if (input + output <= 0) {
+        // Unknown usage is observational only. DSH owns transport retry;
+        // Singularity does not cancel a Task or reserve a fake token cost.
         usage.unknown += 1
-        options.cancellation.abort('campaign-unknown-usage')
       } else {
         usage.inputTokens += input
         usage.outputTokens += output

@@ -100,7 +100,7 @@ export interface ExecuteSingleRunRequest {
   /** Domain-owned derived summaries and their source Task usage. */
   readonly summaries?: ContractSummaryService
   /** Domain pool request-boundary check over reported ancestor/subtree usage. */
-  readonly checkReportedBudget?: (reported?: { readonly tokens: number; readonly unknown: boolean }) => boolean
+  readonly checkReportedBudget?: (reported?: { readonly tokens: number }) => boolean
   readonly canOpenRun?: () => boolean
   /** The tree owner drains native lifecycle before its single subtree closure. */
   readonly signal?: AbortSignal

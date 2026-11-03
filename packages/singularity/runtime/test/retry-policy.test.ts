@@ -19,14 +19,12 @@ const base: RetryPolicyInput = {
   deadlineAt: 10_000,
   now: 1000,
   usageTokens: 15,
-  usageUnknown: false,
 }
 
 void test('failed Runs retry only within maxRuns, deadline, and known token budget', () => {
   assert.equal(decideRetryPolicy(base, []).allowed, true)
   assert.equal(decideRetryPolicy({ ...base, runCount: 2 }, []).allowed, false)
   assert.equal(decideRetryPolicy({ ...base, now: 10_000 }, []).allowed, false)
-  assert.equal(decideRetryPolicy({ ...base, usageUnknown: true }, []).allowed, false)
   assert.equal(decideRetryPolicy({ ...base, usageTokens: 1000 }, []).allowed, false)
 })
 

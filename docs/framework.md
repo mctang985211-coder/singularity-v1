@@ -280,7 +280,7 @@ Budget 不能在每个 child 重新放大。根预算覆盖整棵子树，子任
 
 maxTokens 计本 Task 子树所有尝试的 inputTokens + outputTokens；cache tokens 若已属于 inputTokens，不重复相加。steps 计实际模型请求，不把一次 tool batch 当成多个模型 step。deadlineAt 为绝对时间，同进程续接和 retry 不延长。
 
-宿主在每次模型请求前按已报告的子树 usage 检查剩余 tokens、steps 和绝对 deadline；余额耗尽或 usage unknown 时停止购买下一请求。单请求输出上限使用 DSH `AgentOptions.maxTokens`。DSH alpha2 没有请求前精确输入 token 计量接口；在途请求可能跨越剩余额度，其真实尾部 usage 全部记账，不截断或伪称严格不超额。`contextWindow` 仅用于模型上下文容量，不作为下一请求的 token 预留，不因缺少该元数据拒绝合法任务。
+宿主在每次模型请求前按已报告的子树 usage 检查剩余 tokens、steps 和绝对 deadline；余额耗尽时停止购买下一请求。unknown usage 只作观测/归档记录，不取消 Run、不阻断 retry，也不预留虚假 token 成本；传输重试由 DSH 自身负责。单请求输出上限使用 DSH `AgentOptions.maxTokens`。DSH alpha2 没有请求前精确输入 token 计量接口；在途请求可能跨越剩余额度，其真实尾部 usage 全部记账，不截断或伪称严格不超额。`contextWindow` 仅用于模型上下文容量，不作为下一请求的 token 预留，不因缺少该元数据拒绝合法任务。
 
 `at`、`deadlineAt`、`asOf` 统一为 Unix epoch milliseconds（UTC）安全整数，`0 <= value <= Number.MAX_SAFE_INTEGER`，在协议边界校验。`deadlineAt` 是绝对时间，行动边界只允许 `now < deadlineAt`：`now >= deadlineAt` 不开始新行动，retry/同进程续接不延长。runtime 使用宿主时钟和原生 deadline signal，不增加逐工具调用的时钟回拨状态机。
 
@@ -2068,7 +2068,7 @@ function activate(candidate: MethodRef, round: RoundRef, approval: Approval) {
 
 activation 只移动 future root 的 MethodRef。live Task/Run 不被改写。rollback 是新的 activation command，由独立 trusted approval 发起，不是 proposer 工具。
 
-费用判断：总成本含整棵任务树、失败尝试及工具调用，不只算 root。若目标是减少成本，unknown usage 使结论 insufficient；若纯质量目标且成本不是硬门槛，未知成本可以保留质量结论，但禁止声称省钱。规则在 plan 中冻结，不能看到结果后改变。
+费用判断：总成本含整棵任务树、失败尝试及工具调用，不只算 root。unknown usage 只作观测/归档，不改变质量结论，也不因此取消或阻断 retry；若成本是硬门槛，只有明确缺失成本时才判 insufficient。规则在 plan 中冻结，不能看到结果后改变。
 
 完整 round procedure：
 
@@ -2141,7 +2141,7 @@ parent 提交 child batch 后释放执行槽位，整批 terminal 后由同一�
 
 业务 retry 独立于进程恢复：领域 failed 或预先允许的无效验收结果，在固定预算内用新 Run/session 和 exclusive create 的新 workspace 再尝试。child 失败反馈、parent replan/replacement 和多批次仍是正常工作流。不能因“不重启”而删除这些业务能力。
 
-宿主存储、provider 断连/请求失败、Agent 创建/处置、Summary、Proposer 或 MethodPatch precheck 的未知异常抛给调用方，停止本轮执行；已提交 facts 与 DSH 日志保留，未发生的结果不补写。远程请求结果不明时原生日志可能计 unknown usage，不承诺供应商 exactly-once，不自动重购请求。环境修复后人工开启新的尝试，harness 不重启、不补账、不修复归档。
+宿主存储、provider 断连/请求失败、Agent 创建/处置、Summary、Proposer 或 MethodPatch precheck 的未知异常抛给调用方，停止本轮执行；已提交 facts 与 DSH 日志保留，未发生的结果不补写。远程请求结果不明时原生日志计 unknown usage，但不因此取消 Run 或阻断 DSH 自身的传输重试；不承诺供应商 exactly-once，也不由 Singularity 代发重购请求或补账。环境修复后人工开启新的尝试，harness 不重启、不补账、不修复归档。
 
 预算耗尽仍是业务边界：停止新请求与派发，调用 DSH 原生 cancel/whenIdle/dispose，取得最终 usage/sessionCut 后一次写完整记录并关闭非 terminal 子树，保留已 terminal Evidence。之后 seal partial trace，Round 记 insufficient-evidence。只有原生生命周期成功结束后才能声明该结论。
 

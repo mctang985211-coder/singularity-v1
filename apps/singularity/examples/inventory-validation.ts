@@ -99,8 +99,8 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
     || typeof priorUnknown !== 'number' || typeof priorRequests !== 'number') throw new Error('Prior validation counters must be numeric')
   const budget = resolveInventoryValidationBudget(typeof configuration === 'number' ? { deadlineAt: configuration } : configuration, startedAt)
   const { deadlineAt } = budget
-  if (Date.now() >= deadlineAt || priorUnknown !== 0 || priorTokens >= budget.maxReportedTokens || priorRequests >= budget.maxRequests) {
-    throw new Error('Validation launch budget is exhausted or has unknown usage')
+  if (Date.now() >= deadlineAt || priorTokens >= budget.maxReportedTokens || priorRequests >= budget.maxRequests) {
+    throw new Error('Validation launch budget is exhausted')
   }
   await mkdir(dirname(resolve(root)), { recursive: true })
   await mkdir(root)
@@ -117,7 +117,7 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
       steps: total.steps + value.steps, unknown: total.unknown + value.unknownRequests }), { tokens: priorTokens, steps: priorSteps, unknown: priorUnknown })
   const withinBudget = () => {
     const current = usage()
-    return !cancellation.signal.aborted && Date.now() < deadlineAt && current.tokens < budget.maxReportedTokens && current.unknown === 0
+    return !cancellation.signal.aborted && Date.now() < deadlineAt && current.tokens < budget.maxReportedTokens
   }
   const canPurchase = () => withinBudget() && requestBoundaries < budget.maxRequests
   const disposeGate = spike.ctx.on('agent/pre-step', ({ agent }, next) => {

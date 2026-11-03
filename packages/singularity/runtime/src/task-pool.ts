@@ -109,7 +109,7 @@ export async function executeTaskTree(
         return taskId !== undefined && isBelow(taskId, owner.taskId) ? [record] : []
       })
       const cost = usageCost(records)
-      if (cost.unknown || cost.tokens >= owner.limits.maxTokens || clock() >= owner.limits.deadlineAt) return false
+      if (cost.tokens >= owner.limits.maxTokens || clock() >= owner.limits.deadlineAt) return false
       ancestor = owner.origin.kind === 'child' ? contracts.get(owner.origin.parentId) : undefined
     }
     const rootUsage = [...usage].flatMap(([runId, record]) => {

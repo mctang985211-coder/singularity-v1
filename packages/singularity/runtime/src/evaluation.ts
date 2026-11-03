@@ -254,9 +254,8 @@ export function compareEvaluation(
   if (!metric.name || !metric.unit || !['higher-is-better', 'lower-is-better'].includes(metric.direction)) {
     return insufficient('invalid-comparator-metric')
   }
-  if ((!manifest.usage.complete || manifest.usage.unknownRequests > 0)
-    && (metric.costObjective || plan.thresholds.maxRelativeCostIncrease !== undefined)) {
-    return insufficient('unknown-cost')
+  if (!manifest.usage.complete && (metric.costObjective || plan.thresholds.maxRelativeCostIncrease !== undefined)) {
+    return insufficient('missing-cost')
   }
   const evidence = manifest.slots.flatMap(slot => slot.publicEvidence === undefined ? [] : [slot.publicEvidence])
   const compared = comparator.compare(plan, evidence)
@@ -281,7 +280,7 @@ export function compareEvaluation(
     && worstRegression <= plan.thresholds.maxRegression && costAllowed
   return {
     ...common, metric, aggregateDelta: compared.aggregateDelta, worstRegression, cases: compared.cases,
-    ...(compared.cost === undefined || !manifest.usage.complete || manifest.usage.unknownRequests > 0 ? {} : { cost: compared.cost }),
+    ...(compared.cost === undefined || !manifest.usage.complete ? {} : { cost: compared.cost }),
     outcome: improved ? 'improved' : 'no-improvement',
     ...(!costAllowed ? { reason: 'cost-threshold' } : {}),
   }
@@ -293,7 +292,7 @@ export interface EvaluationTaskRequest {
   readonly maxActive: number
   readonly deadlineAt: number
   /** Same writer's committed usage, checked by the ordinary DSH request gate. */
-  readonly checkReportedBudget: (reported?: { readonly tokens: number; readonly unknown: boolean }) => boolean
+  readonly checkReportedBudget: (reported?: { readonly tokens: number }) => boolean
   readonly canOpenRun: () => boolean
   /** Ordinary Task tree runner owns native cancellation and final settlement. */
   readonly signal: AbortSignal
@@ -327,7 +326,7 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
     const existing = state.tasks.get(slot.taskId)
     if (existing?.phase === 'closed') continue
     const manifest = await readEvaluationManifest(service, slots, state)
-    if (existing === undefined && (clock() >= deadlineAt || manifest.usage.unknownRequests > 0
+    if (existing === undefined && (clock() >= deadlineAt
       || tokenCount(manifest.usage) >= plan.budget.maxTokens || manifest.runCount >= plan.budget.maxRuns)) break
     const requestRef = await service.putObject(slot.id, new TextEncoder().encode(canonicalize({ v: 1, roundId, slot })))
     await request.runTask({
@@ -336,7 +335,7 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
         if (reported === undefined) return reportedEvaluationBudget(service, slots, plan, clock, deadlineAt)
         const otherUsage = manifest.slots.filter(value => value.slot.id !== slot.id)
           .reduce((sum, value) => sum + tokenCount(value.usage), 0)
-        return !reported.unknown && otherUsage + reported.tokens < plan.budget.maxTokens && clock() < deadlineAt
+        return otherUsage + reported.tokens < plan.budget.maxTokens && clock() < deadlineAt
       },
       canOpenRun: () => reportedEvaluationUsage(service, slots).runCount < plan.budget.maxRuns,
     })
@@ -353,14 +352,13 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
 
 function reportedEvaluationBudget(service: CommandService, slots: readonly EvaluationSlot[], plan: RoundPlan, clock: () => number, deadlineAt: number): boolean {
   const usage = reportedEvaluationUsage(service, slots)
-  return !usage.unknown && clock() < deadlineAt && usage.tokens < plan.budget.maxTokens && usage.runCount <= plan.budget.maxRuns
+  return clock() < deadlineAt && usage.tokens < plan.budget.maxTokens && usage.runCount <= plan.budget.maxRuns
 }
 
-function reportedEvaluationUsage(service: CommandService, slots: readonly EvaluationSlot[]): { readonly runCount: number; readonly tokens: number; readonly unknown: boolean } {
+function reportedEvaluationUsage(service: CommandService, slots: readonly EvaluationSlot[]): { readonly runCount: number; readonly tokens: number } {
   const taskIds = new Set(slots.map(slot => slot.taskId))
   const runs = new Map<string, string>()
   let tokens = 0
-  let unknown = false
   for (const fact of service.facts()) {
     if (fact.type === 'task/children-admitted') {
       const parentTaskId = runs.get(fact.data.parentRunId)
@@ -368,11 +366,10 @@ function reportedEvaluationUsage(service: CommandService, slots: readonly Evalua
     }
     if (fact.type === 'run/opened' && taskIds.has(fact.data.taskId)) runs.set(fact.data.runId, fact.data.taskId)
     if (fact.type === 'run/closed' && runs.has(fact.data.runId)) {
-      unknown ||= fact.data.usage.unknownRequests > 0 || (fact.data.usage.summary?.unknownRequests ?? 0) > 0
       tokens += tokenCount(fact.data.usage) + (fact.data.usage.summary === undefined ? 0 : tokenCount(fact.data.usage.summary))
     }
   }
-  return { runCount: runs.size, tokens, unknown }
+  return { runCount: runs.size, tokens }
 }
 
 async function assertPairedContracts(service: CommandService, state: TaskRunState, slots: readonly EvaluationSlot[], plan: RoundPlan): Promise<void> {

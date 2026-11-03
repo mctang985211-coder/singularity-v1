@@ -356,7 +356,7 @@ function subtreeTaskCount(state: TaskRunState, parentTaskId: string): number {
 /**
  * Remaining frozen Task budget after every closed Run in the parent subtree and
  * the live parent attempt. Child reservations and actual usage therefore count
- * against the same ancestor cap; unknown usage fails closed.
+ * against the same ancestor cap.
  */
 function taskRemainingTokens(
   state: TaskRunState,
@@ -370,7 +370,6 @@ function taskRemainingTokens(
     .map(run => run.closed?.usage)
     .filter((usage): usage is NonNullable<typeof usage> => usage !== undefined)
   const cost = usageCost(records)
-  if (cost.unknown) return 0
   return Math.max(0, maxTokens - cost.tokens - liveTokens)
 }
 
