@@ -82,3 +82,7 @@ root Evidence digest 为 `sha256:72793c63e4c88ce17f20b3b6f0935779fe693d7adb9239d
 修复后，host-reference与numerical均由冻结领域runner直接调用固定原软件与权重产生expected；reviewer只提供typed输入和独立复现actual。原生FP32合同、整数exact与compiled precision规则保留，删除自填reference/checkpoint/comparator作为oracle的路径。领域runner不复制模型算法，原HiFT内部FP64步骤照常保留。新recipe digest与script在现有CAS依赖链冻结，reviewer首请求前取得完整可执行资源。
 
 真实失败回归 `artifacts/oracle-regression-20261103/regression.json`：0750同一Flow输入/actual，host-reference与numerical均拒绝，**1839/3840超差，maxAbsError=0.0030074119567871094**；归档原生FP32输出作actual时**3840/3840精确一致**。这是针对真实错误放行的正负对照，不等于完整frontend/PPA或Method收益。PR继续Draft，后续完整真实验收通过前不合并。
+
+最终本地 `pnpm verify` **498/498**、0失败/取消/跳过，project/build/typecheck/lint通过；真实原生API smoke与Flow正负回归完成。预检首次7/8因operator缺少VCS PATH失败，按服务器指南补齐原生启动环境后完整重跑 **8/8**，包含真实UVM与compiler构建、MCP参数失败/取消，不跳过检查。提交 `b0bbdbee9438aeacd583309a299d108900c9e22f` 的 [GitHub CI](https://github.com/mctang985211-coder/singularity-v1/actions/runs/41555482478) 同样通过。
+
+修复后完整新根 `artifacts/takeover-full-native-oracle-20261103-0858` 于08:58:43 +08开始，继承全部历史消费、原14:15:16截止、剩余2468调用/776057275可分配tokens。启动只读审计partial/valid、issues=[]，生产源码快照未变。原02:15:16起点的30分钟watch继续，下一09:15:16。初期root触发READ_SELF_FIRST与PLAN_FIRST后自行完成self/计划再探索；不记作首次操作成功。尚无完整真实验收结果，PR保持Draft。

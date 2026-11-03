@@ -367,3 +367,9 @@ Flow首次冻结暴露真实数值不合格：submission3aea1ccb…ec3b23、resu
 08:45巡检按原窗口记录到artifacts/operator-checkpoint-20261103-0845.json，修复/预检阶段无新付费请求，shared消费未变。新代码根pnpm verify **498/498**，project/build/typecheck/lint全部通过（artifacts/takeover-oracle-final-verify-20261103.log）；追加5项原生执行测试验证CAS预览篡改复位、review pass被数值失败覆盖、非法shape公开报告、缺失native Python保留ENOENT及timeout/取消。有限原生API smoke均实跑：campplus192、tokenizer codes13/features16640、HiFT11520、LLM hidden1792/logits13522值，全部非空finite；Flow真实负例/正例分别1839/0超差，最终证据artifacts/oracle-native-smoke-final-20261103与artifacts/oracle-regression-final-20261103。
 
 首次本轮预检7/8：当前operator shell未导出服务器指南的EDA PATH，真实UVM返回command not found: vcs。原始失败artifacts/takeover-oracle-preflight-20261103.json保留；只补齐operator启动环境，不修改runtime或跳过业务检查。依据服务器指南及project.operatorEnvironment写入artifacts/operator-eda-env-20261103.sh，随后重跑完整预检；新campaign使用相同环境。
+
+08:58:43 +08启动新完整根artifacts/takeover-full-native-oracle-20261103-0858，进程1704458、原生会话和首次真实请求正常。启动前再次按原计划逐项复核完成与冗余删除（artifacts/takeover-oracle-prelaunch-review-20261103.json），最终完整预检8/8（artifacts/takeover-oracle-ready-preflight-20261103.json），独立子代理只读复核无新实质缺陷。生产源码固定提交b0bbdbe，六项完整frontend验收、空Method、自主派发和原FP32/integer阈值保持；oracle改为前述冻结原生调用，运行中不改合同或源码。
+
+新根继承全部历史1532调用/216722725 reported tokens/unknown3，分配2468调用/776057275 tokens（扣除未知2220000与尾部5000000），仍于原14:15:16截止。SIGUSR1是operator业务取消入口，SIGTERM/SIGINT仍归DSH进程生命周期。只读watch继续按原02:15:16起点每30分钟落盘，下一09:15:16；PR38保持Draft，完整真实验收、独立复现、终局审计和CI通过前不合并。
+
+08:59启动审计partial/valid、issues=[]、生产源码哈希未变；最新b0bbdbe的GitHub CI完整verify通过（actions/runs/41555482478）。root先触发READ_SELF_FIRST和PLAN_FIRST，随后自行补齐分页self/本级计划继续探索，原始失败保留；不将启动或调用计数当作正式验收。
