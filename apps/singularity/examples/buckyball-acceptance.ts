@@ -16,7 +16,7 @@ import { createWakeMessage,readTreeBundle,snapshotSession,withToolExample,materi
 import { z } from 'zod'
 
 import { BUCKYBALL_FRONTEND_CAMPAIGN } from './buckyball-frontend-task.ts'
-import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE_REF } from './buckyball-checks.ts'
+import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE_REF,BUCKYBALL_ORACLE_SOURCE_REF } from './buckyball-checks.ts'
 
 export const PPA_WEIGHTS = { power: 0.3, delay: 0.4, area: 0.3 } as const
 export const FRONTEND_REVIEW_POLICY = `Independently review this frozen Buckyball frontend submission against its supplied TaskContract.
@@ -30,7 +30,7 @@ Use FP32 rtol=1e-4/atol=1e-5 for preserved FP32 semantics. Integer ISA/layout/ca
 Assess architecture/mapping independently from source and evidence; this is an LLM domain review plus reproduced tool evidence, not formal chip signoff. Do not claim more coverage than rerun.
 PPA objective weights power=0.30, delay=0.40, area=0.30. Extract only independently reproduced mapped synthesis estimates: total power mW, critical-path delay ns, cell area um^2. Use identical library/corner/clock/top/workload/activity/host-offload boundary for paired comparisons. Do not treat a clock target as achieved critical path or substitute guessed power. Record a condition identity and report commands/paths. Missing comparable PPA leaves the PPA metric absent, never invents a zero. Full-chip power simulation is excluded; static/vectorless power is an estimate and its activity assumption must match between arms.
 Root PPA must cover the implemented accelerator boundary used by the delivered workload, with active core/Ball instances and memory models accounted for. Standalone component or unused-IP reports are supporting evidence only; they do not establish frontend PPA. If that boundary is not independently reproduced, fail ppa-evidence and omit ppa.
-Read check-recipe.json for the frozen evidence schema, public data policy and pass rule. frozen-checker.ts is its public executable. After reproduction, create reproduced/evidence.json in this review directory following that schema. All file paths resolve under reproduced/. Select evidence for the frozen check kinds: hostReference for original-software comparisons; compiler for recipe/MLIR/Chip.pb without requiring RTL; synthesis for standalone RTL/netlist/raw synthesis reports without claiming workload PPA. delivery checks only file identity and cannot prove a technical task-goal. For integrated root checks, it must name the real independently produced source/config, original-reference and actual compiled-arm tensor arrays, inputs/checkpoint/comparator, generated recipe/graph/compiler/RTL routes, nonempty build/component reports, and normalized synthesis report. Copy raw independently reproduced files into this directory. The host computes comparisons and PPA from those files; your verdict cannot override failed checks. Do not copy worker-generated PASS reports as independent results.
+Read check-recipe.json for the frozen evidence schema, oracleInputSchema, public data policy and pass rule. frozen-checker.ts and buckyball-oracle.py are its public executables. After reproduction, create reproduced/evidence.json in this review directory following that schema. All file paths resolve under reproduced/. For hostReference and numerical, provide typed native stage inputs and independently reproduced actual arrays. The host generates reference values directly from the pinned original software/checkpoints with the frozen oracle; you cannot supply or replace reference arrays, dtype or oracle implementation. Original FP32 tolerances remain fixed even when the candidate has reduction noise. Unsupported cases or numerical failures require failure evidence and feedback, never an alternative oracle or relaxed contract. Select compiler for recipe/MLIR/Chip.pb without requiring RTL; synthesis for standalone RTL/netlist/raw synthesis reports without claiming workload PPA. delivery checks only file identity and cannot prove a technical task-goal. Integrated root checks must name the real independently produced source/config, native oracle inputs and actual compiled-arm arrays, generated recipe/graph/compiler/RTL routes, nonempty build/component reports, and normalized synthesis report. Copy raw independently reproduced files into this directory. The host computes comparisons and PPA; your verdict cannot override failed checks. Do not copy worker-generated PASS reports as independent results.
 Submit exactly the required IDs in TaskContract.spec.criteria; spec.localGuidance is guidance only. Submit one result per required criterion. Explain commands, observed values and gaps. End with buckyball_review_submit. Maximum 4096 review requests; use them for verification, not implementation. Do not repair candidate code.`
 
 const ppaSchema = z.object({ power: z.number().positive(), delay: z.number().positive(), area: z.number().positive(),
@@ -66,7 +66,13 @@ export function frontendVerifier(ctx: Context, options: {
     await writeFile(join(workspace, 'contract.json'), JSON.stringify(request.task, null, 2))
     await writeFile(join(workspace, 'check-recipe.json'), (await request.readObject(BUCKYBALL_RECIPE_REF, 'object')).bytes)
     const checker = join(workspace, 'frozen-checker.ts')
-    await writeFile(checker, (await request.readObject(BUCKYBALL_CHECKER_SOURCE_REF, 'object')).bytes)
+    const checkerBytes = (await request.readObject(BUCKYBALL_CHECKER_SOURCE_REF, 'object')).bytes
+    const oracleBytes = (await request.readObject(BUCKYBALL_ORACLE_SOURCE_REF, 'object')).bytes
+    const materializeChecker = async () => {
+      await writeFile(checker, checkerBytes)
+      await writeFile(join(workspace, 'buckyball-oracle.py'), oracleBytes)
+    }
+    await materializeChecker()
     let result: z.infer<typeof reviewSchema> | undefined
     const skillsRoot = join(workspace, 'skills')
     await mkdir(skillsRoot)
@@ -110,6 +116,8 @@ export function frontendVerifier(ctx: Context, options: {
     } finally { request.signal.removeEventListener('abort', cancel); await handle.dispose() }
     const observed = snapshotSession(handle.agent.session)
     if (observed.failure !== undefined) throw new Error(observed.failure)
+    // Preview files are writable during reproduction; execute the frozen CAS bytes.
+    await materializeChecker()
     const reviewFindings = result?.criteria ?? request.task.spec.criteria.filter(value => value.required)
       .map(value => ({ id: value.id, verdict: 'fail' as const, reason: 'Independent review did not complete its required findings.' }))
     const findings: PublicCriterionResult[] = []

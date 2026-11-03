@@ -21,15 +21,49 @@ const compilerRoute = z.object({ operation: z.string().min(1), mappedOperation: 
 const compilerEvidence = z.object({ recipe: file, graph: file, compiler: file, entrypoint: z.string().min(1),
   routes: z.array(compilerRoute).min(1), buildReport: file })
 const compilerBuild = z.object({ sourceDigest: z.string(), configDigest: z.string(), exitCode: z.number().int(), compilerCommand: z.array(z.string()).min(1) })
+const tensor = z.object({ shape: z.array(z.number().int().nonnegative()).min(1), values: z.array(z.number().min(-3.4028234663852886e38).max(3.4028234663852886e38)) })
+const integerTensor = tensor.extend({ values: z.array(z.number().int()) })
+const dimension = z.number().int().positive()
+const melTensor = tensor.extend({ shape: z.tuple([dimension, z.literal(80), dimension]) })
+const batchLengths = integerTensor.extend({ shape: z.tuple([dimension]) })
+const oracleBase = { seed: z.number().int().min(0).max(2 ** 32 - 1) }
+const flowInputs = { x: melTensor, mask: tensor.extend({ shape: z.tuple([dimension, z.literal(1), dimension]) }), mu: melTensor,
+  spks: tensor.extend({ shape: z.tuple([dimension, z.literal(80)]) }), cond: melTensor }
+const tokenizerInputs = { feats: tensor.extend({ shape: z.tuple([z.literal(1), z.literal(128), dimension]) }),
+  feats_length: integerTensor.extend({ shape: z.tuple([z.literal(1)]), values: z.array(z.number().int().positive().max(2 ** 31 - 1)).length(1) }) }
+const llmInputs = { embeddings: tensor.extend({ shape: z.tuple([dimension, dimension, z.literal(896)]) }), lengths: batchLengths }
+/** Input JSON is public and typed; code, checkpoint, dtype and oracle output are host-owned. */
+export const buckyballOracleInputSchema = z.discriminatedUnion('stage', [
+  z.object({ ...oracleBase, stage: z.literal('campplus'), tensors: z.object({ feats: tensor.extend({ shape: z.tuple([dimension, dimension, z.literal(80)]) }) }) }),
+  z.object({ ...oracleBase, stage: z.literal('tokenizer.codes'), tensors: z.object(tokenizerInputs) }),
+  z.object({ ...oracleBase, stage: z.literal('tokenizer.features'), tensors: z.object(tokenizerInputs) }),
+  z.object({ ...oracleBase, stage: z.literal('flow.velocity'), streaming: z.boolean(), tensors: z.object({ ...flowInputs, t: tensor.extend({ shape: z.tuple([dimension]) }) }) }),
+  z.object({ ...oracleBase, stage: z.literal('flow.euler'), streaming: z.boolean(), nTimesteps: z.number().int().positive(), tensors: z.object(flowInputs) }),
+  z.object({ ...oracleBase, stage: z.literal('hift'), finalize: z.boolean(), tensors: z.object({ mel: melTensor }) }),
+  z.object({ ...oracleBase, stage: z.literal('llm.hidden'), tensors: z.object(llmInputs) }),
+  z.object({ ...oracleBase, stage: z.literal('llm.logits'), tensors: z.object(llmInputs) }),
+]).superRefine((input, context) => {
+  const require = (condition: boolean, message: string) => { if (!condition) context.addIssue({ code: 'custom', message }) }
+  for (const [name, value] of Object.entries<z.infer<typeof tensor>>(input.tensors)) {
+    if (value.shape.reduce((a, b) => a * b, 1) !== value.values.length) context.addIssue({ code: 'custom', path: ['tensors', name], message: 'Tensor shape does not match value count' })
+  }
+  if (input.stage === 'flow.velocity' || input.stage === 'flow.euler') {
+    const { x, mu, cond, mask, spks } = input.tensors, [batch, , frames] = x.shape
+    require([mu, cond].every(value => value.shape.every((size, i) => size === x.shape[i])) && mask.shape[0] === batch && mask.shape[2] === frames && spks.shape[0] === batch, 'Flow tensor batch/frame dimensions differ')
+    if (input.stage === 'flow.euler') require(batch === 1, 'Native Euler CFG accepts batch 1')
+    else require(input.tensors.t.shape[0] === batch, 'Velocity time tensor batch differs')
+  }
+  if (input.stage === 'tokenizer.codes' || input.stage === 'tokenizer.features') require(input.tensors.feats_length.values[0] <= input.tensors.feats.shape[2], 'Tokenizer length exceeds input frames')
+  if (input.stage === 'llm.hidden' || input.stage === 'llm.logits') require(input.tensors.lengths.shape[0] === input.tensors.embeddings.shape[0] && input.tensors.lengths.values.every(value => value >= 1 && value <= input.tensors.embeddings.shape[1]), 'LLM lengths differ from input batch/frames')
+  if (input.stage === 'hift' && !input.finalize) require(input.tensors.mel.shape[2] >= 9, 'Nonfinal HiFT needs at least 9 frames for a nonempty output')
+})
 /** Produced in an independent checkout after reproduction, never accepted from worker reports directly. */
 export const buckyballEvidenceSchema = z.object({
   design: source.extend({ compiledPrecision: z.string().min(1) }),
-  numerical: z.array(z.object({ reference: file, actual: file, input: file, checkpoint: file, comparator: file,
+  numerical: z.array(z.object({ actual: file, input: file,
     compiledSource: file, compiledConfig: file, precision: z.string().min(1), quantization: z.string().min(1),
     rtol: z.number().nonnegative(), atol: z.number().nonnegative() })).min(1).optional(),
-  hostReference: source.extend({ sourceRevision: z.string().min(1), checkpointRevision: z.string().min(1),
-    cases: z.array(z.object({ stage: z.string().min(1), reference: file, actual: file, input: file, checkpoint: file, comparator: file,
-      precision: z.enum(['FP32', 'integer']) })).min(1) }).optional(),
+  hostReference: source.extend({ cases: z.array(z.object({ actual: file, input: file })).min(1) }).optional(),
   compiler: compilerEvidence.optional(),
   synthesis: ppa.extend({ rtl: file }).optional(),
   integration: compilerEvidence.extend({ rtl: file,
@@ -48,8 +82,10 @@ let checkerSource = await readFile(fileURLToPath(import.meta.url), 'utf8')
 for (const name of ['@singularity/protocol', 'zod']) checkerSource = checkerSource.replaceAll(`'${name}'`, JSON.stringify(import.meta.resolve(name)))
 export const BUCKYBALL_CHECKER_SOURCE = new TextEncoder().encode(checkerSource)
 export const BUCKYBALL_CHECKER_SOURCE_REF: Ref = { id: 'buckyball:checker-source', digest: computeDigestBytes('object', BUCKYBALL_CHECKER_SOURCE) }
+export const BUCKYBALL_ORACLE_SOURCE = new Uint8Array(await readFile(new URL('./buckyball-oracle.py', import.meta.url)))
+export const BUCKYBALL_ORACLE_SOURCE_REF: Ref = { id: 'buckyball:oracle-source', digest: computeDigestBytes('object', BUCKYBALL_ORACLE_SOURCE) }
 export const BUCKYBALL_RECIPE = { v: 1, name: 'buckyball-independent-evidence',
-  entrypoint: [process.execPath, fileURLToPath(import.meta.url)], dependencies: [BUCKYBALL_CHECKER_SOURCE_REF], paramsSchema,
+  entrypoint: [process.execPath, fileURLToPath(import.meta.url)], dependencies: [BUCKYBALL_CHECKER_SOURCE_REF, BUCKYBALL_ORACLE_SOURCE_REF], paramsSchema,
   resultSchema: { anyOf: [{ type: 'object', required: ['checksRun', 'failures'], properties: {
     checksRun: { type: 'integer', minimum: 1 }, failures: { type: 'array', items: { type: 'string' } },
     metrics: { type: 'object', properties: {
@@ -63,9 +99,10 @@ export const BUCKYBALL_RECIPE = { v: 1, name: 'buckyball-independent-evidence',
     } }, ppa: { type: 'object' } } },
     { type: 'object', additionalProperties: false, required: ['executionStatus', 'reason'], properties: {
       executionStatus: { const: 'timeout' }, reason: { type: 'string', minLength: 1 } } }] } as JsonObject,
-  publicDataPolicy: 'Independently reproduce candidate artifacts before checks. host-reference compares submitted vectors against separately regenerated pinned original-model vectors (FP32 rtol=1e-4/atol=1e-5, integer exact); it requires no accelerator. compiler parses reachable recipe/graph MLIR and Chip.pb target/core/Ball/ISA with no RTL requirement. synthesis parses raw reports and native Yosys write_json for the declared component boundary and pinned library/corner; its metrics are component estimates and do not produce workload PPA. integration/implementation/ppa retain the complete compiled-design boundary. Keep original source/config and reproduction commands. Semantic review may veto. Worker reports are debug evidence only.',
+  publicDataPolicy: 'Independently reproduce candidate artifacts before checks. For host-reference and numerical, input files follow oracleInputSchema. The frozen buckyball-oracle.py directly calls pinned original source/checkpoints in the prepared referencePython, CPU, 2 threads, FP32 input/model with original internal semantics. Neither worker nor reviewer supplies reference arrays, dtype, checkpoint paths or oracle code. The host derives integer exact comparison for tokenizer.codes; all other preserved FP32 outputs use rtol=1e-4/atol=1e-5. Seed, tensors and finite native stage arguments are public. Unsupported stages stay local or report the validation gap; never replace the oracle or relax the contract. compiler parses reachable recipe/graph MLIR and Chip.pb target/core/Ball/ISA with no RTL requirement. synthesis parses raw reports and native Yosys write_json for the declared component boundary and pinned library/corner; its metrics are component estimates and do not produce workload PPA. integration/implementation/ppa retain the complete compiled-design boundary. Keep original source/config and reproduction commands. Semantic review may veto. Worker reports are debug evidence only.',
   passRule: 'All requested identity, nonempty coverage, numerical comparisons, integration and report checks succeed. Missing evidence fails. Quantized error rules require independent review justification.',
-  maxWallClockMs: 10 * 60 * 1000, evidenceSchema: z.toJSONSchema(buckyballEvidenceSchema) as JsonObject }
+  maxWallClockMs: 10 * 60 * 1000, evidenceSchema: z.toJSONSchema(buckyballEvidenceSchema) as JsonObject,
+  oracleInputSchema: z.toJSONSchema(buckyballOracleInputSchema) as JsonObject }
 export const BUCKYBALL_RECIPE_REF: Ref = { id: 'buckyball:recipe:independent-evidence', digest: computeDigest('object', BUCKYBALL_RECIPE) }
 export function buckyballCheck(kind: BuckyballCheckKind): ExecutableCheck {
   return { checkId: kind, recipeRef: BUCKYBALL_RECIPE_REF, params: { kind, manifest: 'evidence.json' } }
@@ -82,6 +119,13 @@ export function describeBuckyballCheck({ check, spec }: { check: ExecutableCheck
 }
 const sameFile = (a: z.infer<typeof file>, b: z.infer<typeof file>) => a.path === b.path && a.digest === b.digest
 export class BuckyballEvidenceError extends Error {}
+function parseCandidate<T>(schema: z.ZodType<T>, text: string): T {
+  try { return schema.parse(JSON.parse(text)) }
+  catch (error) {
+    if (!(error instanceof SyntaxError) && !(error instanceof z.ZodError)) throw error
+    throw new BuckyballEvidenceError(error.message)
+  }
+}
 // Use the prepared compiler's native MLIR bindings and existing Chip.pb reader.
 const inspectMapping = `import json, sys
 from pathlib import Path
@@ -132,20 +176,26 @@ const mappingSchema = z.object({ recipe: z.array(operation), graph: z.array(oper
 })) })
 async function readCompilerMapping(root: string, data: z.infer<typeof compilerEvidence>, projectFile: string, signal?: AbortSignal) {
   const project = JSON.parse(await readFile(projectFile, 'utf8')) as { source: { destination: string }; toolchain: { llvmBuild: string } }
-  const toolchain = project.source.destination, termination = new AbortController()
-  const cancel = () => { termination.abort(new Error('Checker terminated')) }
-  process.once('SIGTERM', cancel)
+  const toolchain = project.source.destination
   try {
-    const execution = promisify(execFile)(resolve(toolchain, 'result/bin/python3'), ['-c', inspectMapping, toolchain, project.toolchain.llvmBuild,
-      resolve(root, data.recipe.path), resolve(root, data.graph.path), resolve(root, data.compiler.path), data.entrypoint],
-    { signal: AbortSignal.any([termination.signal, ...(signal === undefined ? [] : [signal])]), maxBuffer: 8 * 1024 * 1024 })
-    const closed = new Promise<void>(resolve => { execution.child.once('close', () => { resolve() }) })
-    let parsed
-    try { parsed = await execution } finally { await closed }
-    return mappingSchema.parse(JSON.parse(parsed.stdout))
+    const result = await executeNative(resolve(toolchain, 'result/bin/python3'), ['-c', inspectMapping, toolchain, project.toolchain.llvmBuild,
+      resolve(root, data.recipe.path), resolve(root, data.graph.path), resolve(root, data.compiler.path), data.entrypoint], signal)
+    return mappingSchema.parse(JSON.parse(result.stdout))
   } catch (error) {
     if ((error as { code?: number }).code !== 1) throw error
     throw new BuckyballEvidenceError(`Native MLIR/Chip.pb inspection failed: ${(error as Error).message}`)
+  }
+}
+async function executeNative(executable: string, args: string[], signal?: AbortSignal, input?: string) {
+  const termination = new AbortController()
+  const cancel = () => { termination.abort(new Error('Checker terminated')) }
+  process.once('SIGTERM', cancel)
+  try {
+    const execution = promisify(execFile)(executable, args,
+    { signal: AbortSignal.any([termination.signal, ...(signal === undefined ? [] : [signal])]), maxBuffer: 8 * 1024 * 1024 })
+    execution.child.stdin?.end(input)
+    const closed = new Promise<void>(resolve => { execution.child.once('close', () => { resolve() }) })
+    try { return await execution } finally { await closed }
   } finally { process.removeListener('SIGTERM', cancel) }
 }
 const netlistSchema = z.object({ modules: z.record(z.string(), z.object({ attributes: z.object({ hdlname: z.string().optional() }),
@@ -160,8 +210,8 @@ function instanceModules(netlist: z.infer<typeof netlistSchema>, top: string, in
   return path
 }
 export function parseSynthesisReport(text: string, raw: { power: string; timing: string; area: string }) {
-  const identity = z.object({ sourceDigest: z.string(), configDigest: z.string(), rtlTop: z.string(),
-    activeInstances: z.array(z.string()), memoryModels: z.array(z.string()), boundary }).parse(JSON.parse(text))
+  const identity = parseCandidate(z.object({ sourceDigest: z.string(), configDigest: z.string(), rtlTop: z.string(),
+    activeInstances: z.array(z.string()), memoryModels: z.array(z.string()), boundary }), text)
   const power = (label: string) => {
     const found = new RegExp(`${label}\\s*=\\s*([\\d.eE+-]+)\\s*(pW|nW|uW|mW|W)`).exec(raw.power)
     if (found === null) throw new BuckyballEvidenceError(`Synthesis power report lacks ${label} with units`)
@@ -184,19 +234,39 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
   const metrics: JsonObject = {}
   const check = (condition: boolean, reason: string) => { checksRun += 1; if (!condition) failures.push(reason) }
   const read = async (identity: z.infer<typeof file>) => {
-    const bytes = await readFile(resolve(root, identity.path))
+    const bytes = await readCandidate(identity.path)
     check(`sha256:${createHash('sha256').update(bytes).digest('hex')}` === identity.digest, `identity mismatch: ${identity.path}`)
     return bytes.toString('utf8')
   }
-  const input = buckyballEvidenceSchema.safeParse(JSON.parse(await readFile(resolve(root, manifest), 'utf8')))
-  if (!input.success) return { checksRun: 1, failures: input.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`), metrics }
-  const evidence = input.data
+  const readCandidate = async (path: string) => {
+    try { return await readFile(resolve(root, path)) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      throw new BuckyballEvidenceError(`Candidate evidence file missing: ${path}`)
+    }
+  }
+  let evidence: BuckyballEvidence
+  try { evidence = parseCandidate(buckyballEvidenceSchema, (await readCandidate(manifest)).toString('utf8')) }
+  catch (error) {
+    if (!(error instanceof BuckyballEvidenceError)) throw error
+    return { checksRun: 1, failures: [error.message], metrics }
+  }
   await read(evidence.design.source)
-  const configuration = z.object({ precision: z.string().min(1) }).parse(JSON.parse(await read(evidence.design.config)))
+  const configuration = parseCandidate(z.object({ precision: z.string().min(1) }), await read(evidence.design.config))
   check(configuration.precision === evidence.design.compiledPrecision, 'declared compiled precision differs from the reproduced compiler configuration')
-  const compare = async (item: { reference: z.infer<typeof file>; actual: z.infer<typeof file> }, rtol: number, atol: number, integer = false) => {
-    const expected = z.array(z.number()).min(1).parse(JSON.parse(await read(item.reference)))
-    const actual = z.array(z.number()).min(1).parse(JSON.parse(await read(item.actual)))
+  const compare = async (item: { input: z.infer<typeof file>; actual: z.infer<typeof file> }, tolerance?: { rtol: number; atol: number }) => {
+    const oracleInput = parseCandidate(buckyballOracleInputSchema, await read(item.input))
+    const project = z.object({ referencePython: z.string().min(1) }).parse(JSON.parse(await readFile(projectFile, 'utf8')))
+    let result
+    try { result = await executeNative(project.referencePython, [fileURLToPath(new URL('./buckyball-oracle.py', import.meta.url)), resolve(projectFile)], signal, JSON.stringify(oracleInput)) }
+    catch (error) {
+      if ((error as { code?: number }).code !== 3) throw error
+      throw new BuckyballEvidenceError((error as Error).message)
+    }
+    const expected = z.array(z.number()).min(1).parse(JSON.parse(result.stdout))
+    const actual = parseCandidate(z.array(z.number()).min(1), await read(item.actual))
+    const integer = oracleInput.stage === 'tokenizer.codes'
+    const { rtol, atol } = integer ? { rtol: 0, atol: 0 } : tolerance ?? { rtol: 1e-4, atol: 1e-5 }
     if (integer) check(expected.every(Number.isSafeInteger) && actual.every(Number.isSafeInteger), 'integer reference comparison requires exact safe-integer values')
     check(expected.length === actual.length, 'numerical tensor lengths differ')
     const valuesCompared = Math.min(expected.length, actual.length)
@@ -206,11 +276,11 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
       maxAbsError = Math.max(maxAbsError, error)
       if (!(error <= atol + rtol * Math.abs(value))) mismatches += 1
     }
-    return { valuesCompared, mismatches, maxAbsError }
+    return { valuesCompared, mismatches, maxAbsError, stage: oracleInput.stage }
   }
   const inspectCompiler = async (data: z.infer<typeof compilerEvidence>) => {
     await read(data.recipe); await read(data.graph); await read(data.compiler)
-    const build = compilerBuild.parse(JSON.parse(await read(data.buildReport)))
+    const build = parseCandidate(compilerBuild, await read(data.buildReport))
     const targetFlag = build.compilerCommand.indexOf('--target')
     const compiledTarget = build.compilerCommand.find(arg => arg.startsWith('--target='))?.slice('--target='.length)
       ?? (targetFlag < 0 ? undefined : build.compilerCommand[targetFlag + 1])
@@ -229,27 +299,25 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
   if (kind === 'host-reference') {
     const data = evidence.hostReference
     if (data === undefined) return { checksRun: checksRun + 1, failures: [...failures, 'independent original-host reference evidence missing'], metrics }
-    const project = z.object({ cosyvoice: z.object({ revision: z.string() }), checkpoint: z.object({ revision: z.string() }) }).parse(JSON.parse(await readFile(projectFile, 'utf8')))
-    check(data.sourceRevision === project.cosyvoice.revision && data.checkpointRevision === project.checkpoint.revision, 'host reference source/checkpoint differs from pinned original model')
     check(sameFile(data.source, evidence.design.source) && sameFile(data.config, evidence.design.config), 'host reference source/config differs from reproduced original-host design')
     let valuesCompared = 0, mismatches = 0, maxAbsError = 0
+    const stages = new Set<string>()
     for (const item of data.cases) {
-      await read(item.input); await read(item.checkpoint); await read(item.comparator)
-      const compared = await compare(item, item.precision === 'FP32' ? 1e-4 : 0, item.precision === 'FP32' ? 1e-5 : 0, item.precision === 'integer')
+      const compared = await compare(item)
+      stages.add(compared.stage)
       valuesCompared += compared.valuesCompared; mismatches += compared.mismatches; maxAbsError = Math.max(maxAbsError, compared.maxAbsError)
     }
     check(valuesCompared > 0 && mismatches === 0, 'independent original-host reference comparison failed')
-    Object.assign(metrics, { casesRun: data.cases.length, stages: new Set(data.cases.map(x => x.stage)).size, valuesCompared, mismatches, maxAbsError })
+    Object.assign(metrics, { casesRun: data.cases.length, stages: stages.size, valuesCompared, mismatches, maxAbsError })
   }
   if (kind === 'numerical') {
     if (evidence.numerical === undefined) return { checksRun: checksRun + 1, failures: [...failures, 'actual compiled-arm numerical evidence missing'], metrics }
     let valuesCompared = 0, mismatches = 0, maxAbsError = 0
     for (const item of evidence.numerical) {
-      await read(item.input); await read(item.checkpoint); await read(item.comparator)
       check(sameFile(item.compiledSource, evidence.design.source) && sameFile(item.compiledConfig, evidence.design.config), 'numerical arm source/config differs from actual compiled design')
       check(item.precision === evidence.design.compiledPrecision, 'numerical report does not exercise actual compiled precision')
       if (item.precision === 'FP32') check(item.rtol === 1e-4 && item.atol === 1e-5, 'FP32 rules differ from the frozen reference contract')
-      const compared = await compare(item, item.rtol, item.atol)
+      const compared = await compare(item, { rtol: item.rtol, atol: item.atol })
       valuesCompared += compared.valuesCompared; mismatches += compared.mismatches; maxAbsError = Math.max(maxAbsError, compared.maxAbsError)
     }
     check(valuesCompared > 0 && mismatches === 0, 'independent actual-arm comparison failed')
@@ -265,8 +333,8 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
     const integration = evidence.integration
     if (integration === undefined) return { checksRun: checksRun + 1, failures: [...failures, 'recipe/compiler/RTL integration evidence missing'], metrics }
     const mapping = await inspectCompiler(integration)
-    const rtl = netlistSchema.parse(JSON.parse(await read(integration.rtl)))
-    const build = compilerBuild.extend({ rtlTop: z.string(), synthesized: z.boolean() }).parse(JSON.parse(await read(integration.buildReport)))
+    const rtl = parseCandidate(netlistSchema, await read(integration.rtl))
+    const build = parseCandidate(compilerBuild.extend({ rtlTop: z.string(), synthesized: z.boolean() }), await read(integration.buildReport))
     for (const route of integration.routes) {
       const target = mapping.targets.find(target => target.name === route.compilerTarget && target.core === route.core)
       const ball = target?.balls.find(ball => ball.name === route.ball)
@@ -275,7 +343,7 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
       check(ball !== undefined && (module === ball.module || hasModule && rtl.modules[module].attributes.hdlname === ball.module), `RTL instance differs from registered Ball class: ${route.ball}`)
     }
     check(build.exitCode === 0 && build.synthesized && integration.routes.every(route => route.rtlTop === build.rtlTop), 'build did not reproduce the integrated RTL top')
-    const component = z.object({ casesRun: z.number().int().positive(), comparisons: z.number().int().positive(), mismatches: z.number().int().nonnegative(), sourceDigest: z.string(), configDigest: z.string() }).parse(JSON.parse(await read(integration.componentReport)))
+    const component = parseCandidate(z.object({ casesRun: z.number().int().positive(), comparisons: z.number().int().positive(), mismatches: z.number().int().nonnegative(), sourceDigest: z.string(), configDigest: z.string() }), await read(integration.componentReport))
     check(component.sourceDigest === evidence.design.source.digest && component.configDigest === evidence.design.config.digest && component.mismatches === 0, 'component coverage failed or source/config differs')
     Object.assign(metrics, { routes: integration.routes.length, componentCases: component.casesRun, comparisons: component.comparisons })
   }
@@ -298,7 +366,7 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
         conditionsDigest: computeDigest('object', data.boundary), design: data.design, boundary: data.boundary, report: data.report, command: data.command }
     }
     if (kind === 'synthesis' && evidence.synthesis !== undefined) {
-      const rtl = netlistSchema.parse(JSON.parse(await read(evidence.synthesis.rtl)))
+      const rtl = parseCandidate(netlistSchema, await read(evidence.synthesis.rtl))
       const project = z.object({ eda: z.object({ corner: z.string(), librarySha256: z.string() }) }).parse(JSON.parse(await readFile(projectFile, 'utf8')))
       check(data.boundary.library.digest === `sha256:${project.eda.librarySha256}` && data.boundary.corner === project.eda.corner, 'synthesis library/corner differs from pinned project')
       check(Object.hasOwn(rtl.modules, data.design.rtlTop), 'synthesis RTL top is absent from generated netlist')
@@ -322,17 +390,20 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
 
 const entry = process.argv.at(1)
 if (entry !== undefined && import.meta.url === pathToFileURL(resolve(entry)).href) {
-  const args = process.argv.slice(2), option = (name: string) => args[args.indexOf(name) + 1]
-  const kind = z.enum(BUCKYBALL_CHECK_KINDS).parse(option('--kind'))
-  let result: JsonObject
-  try {
-    result = await checkBuckyballEvidence(resolve(option('--root')), kind, option('--manifest'), option('--project'))
+  const main = async () => {
+    const args = process.argv.slice(2), option = (name: string) => args[args.indexOf(name) + 1]
+    const kind = z.enum(BUCKYBALL_CHECK_KINDS).parse(option('--kind'))
+    let result: JsonObject
+    try {
+      result = await checkBuckyballEvidence(resolve(option('--root')), kind, option('--manifest'), option('--project'))
+    }
+    catch (error) {
+      if (!(error instanceof BuckyballEvidenceError)) throw error
+      result = { checksRun: 1, failures: [error instanceof Error ? error.message : String(error)] }
+    }
+    const report = resolve(option('--report'))
+    await mkdir(dirname(report), { recursive: true }); await writeFile(report, JSON.stringify(result, null, 2))
+    console.log(JSON.stringify(result)); process.exitCode = (result.failures as unknown[]).length === 0 ? 0 : 1
   }
-  catch (error) {
-    if (!(error instanceof BuckyballEvidenceError) && !(error instanceof SyntaxError) && !(error instanceof z.ZodError) && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    result = { checksRun: 1, failures: [error instanceof Error ? error.message : String(error)] }
-  }
-  const report = resolve(option('--report'))
-  await mkdir(dirname(report), { recursive: true }); await writeFile(report, JSON.stringify(result, null, 2))
-  console.log(JSON.stringify(result)); process.exitCode = (result.failures as unknown[]).length === 0 ? 0 : 1
+  await main().catch((error: unknown) => { console.error(error); process.exitCode = 2 })
 }

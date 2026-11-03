@@ -72,3 +72,13 @@ root Evidence digest 为 `sha256:72793c63e4c88ce17f20b3b6f0935779fe693d7adb9239d
 终局只读审计 `artifacts/takeover-bounded-20261103-0427/operator-final-audit.json` 为 **complete/valid、issues=[]**，核对生产源码哈希未变、原生 sessionCut/usage、合同/manifest/CAS、两份 root 报告和一份 child 报告身份、公开权限以及唯一封存 trace。root `Evidence.inputs` 恰为 2 个合同输入 Ref + 58 个 child 冻结叶 Ref = 60，完整 id/digest、顺序与 CAS 字节身份全部正确。trace 包含 190 个授权对象、7 个章节，digest 为 `sha256:e455f112bbb3019eb014bee25a78e270892462e14311e9e6489c7463ccf99f1c`。历史首根的归档缺陷仍原样保留，并未被当前根的审计通过覆盖。
 
 本根 **228 调用 / 37114919 reported tokens**，全部结算、unknown=0。全部真实尝试合计 **966 调用 / 135193442 reported tokens**，pending=0；历史 2 次未知用量另预留 **1480000 tokens**，合计仍低于 10 亿 tokens 与 4000 调用，原 12 小时绝对窗口内完成。没有打开 RSI Round、比较候选或激活赢家；当前成功不构成完整 frontend、PPA 或 Method 改善证据。
+
+## 完整真实轮暴露的错误放行及修复
+
+完整根 `artifacts/takeover-full-real-20261103-0750` 使用空Method和完整六项frontend合同，观察到两级自主派发、完整project/guide Ref和技术checks。Flow提交把固定原生FP32参考改为FP64，actual也以FP64生成，但仍标FP32。reviewer独立复现1839/3840原FP32超差后仍pass。正式Evidence `sha256:cfc7b4c51e202a8d2ef82d1435caf0f4c3b5547d8721dfb88938def1a7d2e089`与receipt `sha256:999cdd770db4cf0ecbac5892b31281d236a974e26f41068b64ac143dc13aa2bf`原样归档。它证明旧数组比较器的oracle可被替换，不能证明完整修复有效。
+
+该根08:19停止。operator与DSH同时处理SIGTERM使进程在业务封存前退出，留下partial状态；无完整result/trace，不补写、不恢复。HiFT两组初始输出在容差内，但reviewer扩展长度/streaming用例发现截断和差异；不能把局部初始通过视为完整通过。compiler仍在真实构建时停止；无root提交、完整六项验收、RSI比较或赢家。全部累计1532调用/216722725 reported tokens、unknown3，继续计入同一12小时窗口。
+
+修复后，host-reference与numerical均由冻结领域runner直接调用固定原软件与权重产生expected；reviewer只提供typed输入和独立复现actual。原生FP32合同、整数exact与compiled precision规则保留，删除自填reference/checkpoint/comparator作为oracle的路径。领域runner不复制模型算法，原HiFT内部FP64步骤照常保留。新recipe digest与script在现有CAS依赖链冻结，reviewer首请求前取得完整可执行资源。
+
+真实失败回归 `artifacts/oracle-regression-20261103/regression.json`：0750同一Flow输入/actual，host-reference与numerical均拒绝，**1839/3840超差，maxAbsError=0.0030074119567871094**；归档原生FP32输出作actual时**3840/3840精确一致**。这是针对真实错误放行的正负对照，不等于完整frontend/PPA或Method收益。PR继续Draft，后续完整真实验收通过前不合并。

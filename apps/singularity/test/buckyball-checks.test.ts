@@ -20,7 +20,7 @@ void test('finite Buckyball checks compute compiled-arm errors, mocked native in
     assert.ok(Number(result.checksRun) > 0)
     assert.equal(validateInstanceSchema(BUCKYBALL_RECIPE.resultSchema, result).valid, true)
   }
-  const result = await checkBuckyballEvidence(root, 'numerical', 'evidence.json', join(root, 'missing-numerical-project.json'))
+  const result = await checkBuckyballEvidence(root, 'numerical', 'evidence.json', join(root, 'project.json'))
   assert.deepEqual(result.metrics, { casesRun: 1, valuesCompared: 4, mismatches: 0, maxAbsError: 0 })
 })
 
@@ -54,7 +54,6 @@ void test('host-reference compares a pinned original-software arm without compil
   t.after(() => rm(root, { recursive: true, force: true }))
   const { design, hostReference } = await writeBuckyballEvidence(root)
   assert.ok(hostReference)
-  hostReference.cases[0].precision = 'FP32'
   await replaceJson(root, hostReference.cases[0].actual, [0.000009, 1.00009, 2, 3])
   await writeFile(join(root, 'host.json'), JSON.stringify({ design, hostReference }))
   await rm(join(root, 'mockbaseline'), { recursive: true })
@@ -62,12 +61,13 @@ void test('host-reference compares a pinned original-software arm without compil
   assert.deepEqual(result.failures, [])
   assert.deepEqual({ ...(result.metrics as object), maxAbsError: 0 }, { casesRun: 1, stages: 1, valuesCompared: 4, mismatches: 0, maxAbsError: 0 })
   assert.equal('ppa' in result, false)
-  hostReference.cases[0].precision = 'integer'
+  await replaceJson(root, hostReference.cases[0].input, { stage: 'tokenizer.codes', seed: 0,
+    tensors: { feats: { shape: [1, 128, 1], values: Array.from({ length: 128 }, (_, index) => index) }, feats_length: { shape: [1], values: [1] } } })
   await writeFile(join(root, 'host.json'), JSON.stringify({ design, hostReference }))
   assert.ok(((await checkBuckyballEvidence(root, 'host-reference', 'host.json', join(root, 'project.json'))).failures as string[]).includes('independent original-host reference comparison failed'))
 })
 
-for (const negative of ['wrong-values', 'short-array', 'wrong-revision', 'wrong-source-config', 'empty-cases', 'fractional-integers', 'unsafe-integers'] as const) {
+for (const negative of ['wrong-values', 'short-array', 'unsupported-stage', 'wrong-source-config', 'empty-cases', 'fractional-integers', 'unsafe-integers', 'substituted-oracle'] as const) {
   void test(`host-reference rejects ${negative} with coherent file hashes and a claimed PASS`, async t => {
     const root = await mkdtemp(join(tmpdir(), 'bb-host-reference-bad-'))
     t.after(() => rm(root, { recursive: true, force: true }))
@@ -75,15 +75,25 @@ for (const negative of ['wrong-values', 'short-array', 'wrong-revision', 'wrong-
     assert.ok(hostReference)
     if (negative === 'wrong-values') await replaceJson(root, hostReference.cases[0].actual, [0, 1, 8, 3])
     if (negative === 'short-array') await replaceJson(root, hostReference.cases[0].actual, [0, 1, 2])
-    if (negative === 'wrong-revision') hostReference.checkpointRevision = 'different-checkpoint'
+    if (negative === 'unsupported-stage') await replaceJson(root, hostReference.cases[0].input, { stage: 'candidate-python', seed: 0, tensors: {} })
     if (negative === 'wrong-source-config') hostReference.config = design.source
     if (negative === 'empty-cases') hostReference.cases = []
     if (negative === 'fractional-integers' || negative === 'unsafe-integers') {
       const values = negative === 'fractional-integers' ? [0, 1.5, 2, 3] : [0, 2 ** 53, 2, 3]
-      await replaceJson(root, hostReference.cases[0].reference, values)
+      await replaceJson(root, hostReference.cases[0].input, { stage: 'tokenizer.codes', seed: 0,
+        tensors: { feats: { shape: [1, 128, 1], values: Array.from({ length: 128 }, (_, index) => index) }, feats_length: { shape: [1], values: [1] } } })
       await replaceJson(root, hostReference.cases[0].actual, values)
     }
+    if (negative === 'substituted-oracle') {
+      const actual = hostReference.cases[0].actual
+      await replaceJson(root, actual, [0, 1, 8, 3])
+      Object.assign(hostReference.cases[0], { reference: actual, precision: 'FP32' })
+    }
     await writeFile(join(root, 'host.json'), JSON.stringify({ design, hostReference, verdict: 'PASS' }))
+    if (negative === 'unsupported-stage') {
+      await assert.rejects(checkBuckyballEvidence(root, 'host-reference', 'host.json', join(root, 'project.json')), { name: 'Error' })
+      return
+    }
     const result = await checkBuckyballEvidence(root, 'host-reference', 'host.json', join(root, 'project.json'))
     assert.ok((result.failures as string[]).length > 0)
     assert.ok(!(result.failures as string[]).some(x => x.startsWith('identity mismatch:')))

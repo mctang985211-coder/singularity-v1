@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { mkdtemp,mkdir,readFile,rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFileSync,writeFileSync } from 'node:fs'
+import { mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -15,7 +16,7 @@ import type { Ref,TaskContract } from '@singularity/protocol'
 import { DomainStore,prepareExecutableChecks } from '@singularity/runtime'
 
 import { frontendVerifier } from '../examples/buckyball-acceptance.ts'
-import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE,BUCKYBALL_CHECKER_SOURCE_REF,buckyballCheck,describeBuckyballCheck } from '../examples/buckyball-checks.ts'
+import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE,BUCKYBALL_CHECKER_SOURCE_REF,BUCKYBALL_ORACLE_SOURCE,BUCKYBALL_ORACLE_SOURCE_REF,buckyballCheck,describeBuckyballCheck } from '../examples/buckyball-checks.ts'
 
 import { conv1dTaskSpec,conv1dVerifier,describeConv1dCheck,freezeConv1dChecks } from '../examples/conv1d-checks.ts'
 import { writeBuckyballEvidence } from './fixtures/buckyball-evidence.ts'
@@ -142,6 +143,9 @@ void test('Buckyball executes encoded report filenames and classifies its own ch
   const fixture = await startChatCompletionsFixture((_request, index) => {
     assert.equal(readFileSync(join(reviewRoot, 'check-recipe.json'), 'utf8'), canonicalize(BUCKYBALL_RECIPE), 'the reviewer can read the frozen schema before its first request')
     assert.deepEqual(new Uint8Array(readFileSync(join(reviewRoot, 'frozen-checker.ts'))), BUCKYBALL_CHECKER_SOURCE)
+    assert.deepEqual(new Uint8Array(readFileSync(join(reviewRoot, 'buckyball-oracle.py'))), BUCKYBALL_ORACLE_SOURCE)
+    writeFileSync(join(reviewRoot, 'frozen-checker.ts'), 'throw new Error("Modified preview must not execute")')
+    writeFileSync(join(reviewRoot, 'buckyball-oracle.py'), 'raise Exception("Modified preview must not execute")')
     return { toolCalls: [{ id: `review-${String(index)}`, name: 'buckyball_review_submit',
       arguments: JSON.stringify({ result: { criteria: [{ id: criterionId, verdict: 'pass', reason: 'Synthetic check execution fixture.' }] } }) }], usage: fixtureUsage(index) }
   })
@@ -153,6 +157,7 @@ void test('Buckyball executes encoded report filenames and classifies its own ch
     try {
       assert.deepEqual(await store.putObject(BUCKYBALL_RECIPE_REF.id, new TextEncoder().encode(canonicalize(BUCKYBALL_RECIPE))), BUCKYBALL_RECIPE_REF)
       assert.deepEqual(await store.putObject(BUCKYBALL_CHECKER_SOURCE_REF.id, BUCKYBALL_CHECKER_SOURCE), BUCKYBALL_CHECKER_SOURCE_REF)
+      assert.deepEqual(await store.putObject(BUCKYBALL_ORACLE_SOURCE_REF.id, BUCKYBALL_ORACLE_SOURCE), BUCKYBALL_ORACLE_SOURCE_REF)
       const check = { ...buckyballCheck('numerical'), checkId }
       const { digest, ...payload } = scenario.contract
       void digest
@@ -160,7 +165,7 @@ void test('Buckyball executes encoded report filenames and classifies its own ch
         statement: 'Synthetic finite execution fixture.', required: true, checks: [check] }] } })
       const reviews = join(workspace, 'reviews'), baseline = join(workspace, 'baseline')
       await mkdir(baseline)
-      const verify = frontendVerifier(spike.ctx, { root: reviews, baseline, project: 'synthetic-project.json', agentOptions: agentOptions(), writer: store, frozenSkills: [] })
+      const verify = frontendVerifier(spike.ctx, { root: reviews, baseline, project: join(reviews, Buffer.from('bb-encoded:verify').toString('hex'), 'reproduced/project.json'), agentOptions: agentOptions(), writer: store, frozenSkills: [] })
       const invoke = async (operationId: string, currentTask: TaskContract) => {
         const root = join(reviews, Buffer.from(operationId).toString('hex'))
         reviewRoot = root
@@ -174,6 +179,39 @@ void test('Buckyball executes encoded report filenames and classifies its own ch
       assert.deepEqual(new Uint8Array(await readFile(join(success.root, 'frozen-checker.ts'))), BUCKYBALL_CHECKER_SOURCE)
       const reportPath = join(success.root, 'checks', encodeURIComponent(criterionId), `${encodeURIComponent(checkId)}.json`)
       assert.deepEqual((JSON.parse(await readFile(reportPath, 'utf8')) as { failures: unknown[] }).failures, [])
+      const substitution = await invoke('bb-oracle-substitution:verify', task)
+      const evidencePath = join(substitution.root, 'reproduced/evidence.json')
+      const evidence = JSON.parse(await readFile(evidencePath, 'utf8')) as { numerical: { actual: { path: string; digest: string } }[] }
+      const actual = evidence.numerical[0].actual, replacement = '[0,1,8,3]'
+      await writeFile(join(substitution.root, 'reproduced', actual.path), replacement)
+      actual.digest = `sha256:${createHash('sha256').update(replacement).digest('hex')}`
+      Object.assign(evidence.numerical[0], { reference: actual })
+      await writeFile(evidencePath, JSON.stringify(evidence))
+      const rejected = await verify(substitution.request)
+      assert.equal(rejected.criteria[0].verdict, 'fail', 'reviewer PASS cannot override native oracle mismatch')
+      assert.equal(rejected.criteria[0].checks[0].verdict, 'fail')
+      const rejectedReport = publicCheckReportSchema.parse(parseJsonText(new TextDecoder().decode((await store.readObject(rejected.criteria[0].checks[0].reportRef)).bytes)))
+      assert.equal((rejectedReport.data.metrics as { mismatches: number }).mismatches, 1)
+      const malformed = await invoke('bb-oracle-shape:verify', task)
+      const malformedPath = join(malformed.root, 'reproduced/evidence.json')
+      const malformedEvidence = JSON.parse(await readFile(malformedPath, 'utf8')) as { numerical: { input: { path: string; digest: string } }[] }
+      const input = malformedEvidence.numerical[0].input
+      const malformedInput = JSON.stringify({ stage: 'campplus', seed: 0, tensors: { feats: { shape: [1, 2, 80], values: [0] } } })
+      await writeFile(join(malformed.root, 'reproduced', input.path), malformedInput)
+      input.digest = `sha256:${createHash('sha256').update(malformedInput).digest('hex')}`
+      await writeFile(malformedPath, JSON.stringify(malformedEvidence))
+      const badShape = await verify(malformed.request)
+      assert.equal(badShape.criteria[0].verdict, 'fail', 'invalid tensor dimensions produce a public failure report')
+      const shapeReport = publicCheckReportSchema.parse(parseJsonText(new TextDecoder().decode((await store.readObject(badShape.criteria[0].checks[0].reportRef)).bytes)))
+      assert.match(JSON.stringify(shapeReport.data.failures), /Tensor shape does not match value count/)
+      const hostFailure = await invoke('bb-missing-native:verify', task)
+      const projectPath = join(success.root, 'reproduced/project.json')
+      const projectBytes = await readFile(projectPath)
+      const project = JSON.parse(projectBytes.toString('utf8')) as { referencePython: string }
+      await writeFile(projectPath, JSON.stringify({ ...project, referencePython: join(workspace, 'missing-native-python') }))
+      try {
+        await assert.rejects(verify(hostFailure.request), error => error instanceof Error && error.message.includes('missing-native-python') && error.message.includes('ENOENT'))
+      } finally { await writeFile(projectPath, projectBytes) }
       assert.equal(describeBuckyballCheck({ check, spec: { criteria: [] } }).displayCommand.at(-1), `checks/${encodeURIComponent(checkId)}.json`)
       const timedTask = sealTaskContract({ ...payload, spec: task.spec, limits: { ...task.limits, deadlineAt: Date.now() + 1500 } })
       const timeout = await invoke('bb-timeout:verify', timedTask)

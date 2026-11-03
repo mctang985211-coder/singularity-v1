@@ -298,6 +298,9 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   exhaustSource = false
   operatorStop = true
   const cancellation = new AbortController(), operatorRoot = join(directory, 'operator-stopped')
+  const stop = () => { cancellation.abort('operator-SIGUSR1') }
+  process.once('SIGUSR1', stop)
+  t.after(() => { process.removeListener('SIGUSR1', stop) })
   const requestsBefore = fixture.requests.length, proposersBefore = proposers
   const pending = runBuckyballCampaign(operatorRoot, prepared, {
     deadlineAt: Date.now() + 60_000, maxRequests: 100, maxReportedTokens: 100_000,
@@ -308,7 +311,7 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     await delay(20)
   }
   assert.equal(await readFile(join(directory, 'operator-started'), 'utf8'), 'started')
-  cancellation.abort('operator-stop')
+  process.kill(process.pid, 'SIGUSR1')
   await pending
   const operatorResult = JSON.parse(await readFile(join(operatorRoot, 'result.json'), 'utf8')) as {
     failure?: string; outcomes: unknown[]; usage: { requests: number; completed: number; unknown: number }

@@ -20,7 +20,18 @@ const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 console.log(JSON.stringify({recipe: read(recipe).entrypoints[entrypoint] ?? [], graph: read(graph).entrypoints[entrypoint] ?? [], targets: read(chip).targets}));
 `)
   await chmod(executable, 0o755)
+  const referencePython = join(root, 'mock-native-oracle.cjs')
+  await writeFile(referencePython, `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+if (path.basename(process.argv[2]) !== 'buckyball-oracle.py' || !fs.existsSync(process.argv[3])) throw new Error('Invalid synthetic oracle invocation');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (!['campplus', 'tokenizer.codes'].includes(input.stage) || input.seed !== 0) throw new Error('Invalid synthetic oracle input');
+console.log('[0,1,2,3]');
+`)
+  await chmod(referencePython, 0o755)
   await writeFile(project, JSON.stringify({ source: { destination: baseline }, toolchain: { llvmBuild },
+    referencePython,
     cosyvoice: { revision: 'fixture-source-revision' }, checkpoint: { revision: 'fixture-checkpoint-revision' },
     evidenceLevel: 'Synthetic native-inspection process mock; not MLIR, Chip.pb or hardware validation.' }))
   return { baseline, llvmBuild, project }
@@ -45,8 +56,8 @@ export async function writeBuckyballEvidence(root: string, options: { sourceText
     }])) })
   const value: BuckyballEvidence = {
     design: { source, config, compiledPrecision: 'MXFP8' },
-    numerical: [{ reference: await file('reference.json', '[0,1,2,3]'), actual: await file('actual.json', options.actual ?? '[0,1,2,3]'),
-      input: await file('input.json', '[0,1,2,3]'), checkpoint: await file('checkpoint', 'pinned fixture checkpoint'), comparator: await file('compare.py', '# independently reproduced comparator fixture'),
+    numerical: [{ actual: await file('actual.json', options.actual ?? '[0,1,2,3]'),
+      input: await file('input.json', JSON.stringify({ stage: 'campplus', seed: 0, tensors: { feats: { shape: [1, 1, 80], values: Array.from({ length: 80 }, (_, index) => index) } } })),
       compiledSource: source, compiledConfig: config, precision: 'MXFP8', quantization: 'exactly representable fixture values', rtol: 0, atol: 0 }],
     integration: { recipe: await file('recipe.mock.json', JSON.stringify({ entrypoints: { main: [{ name: 'tosa.conv1d', target: null }] } })),
       graph: await file('graph.mock.json', JSON.stringify({ entrypoints: { main: [{ name: 'buckyball.conv1d', target: 'toy' }] } })),
@@ -69,8 +80,7 @@ export async function writeBuckyballEvidence(root: string, options: { sourceText
   const projectValue = JSON.parse(await readFile(join(root, 'project.json'), 'utf8')) as Record<string, unknown>
   await writeFile(join(root, 'project.json'), JSON.stringify({ ...projectValue, eda: { corner: boundary.corner, librarySha256: library.digest.slice('sha256:'.length) } }))
   const numerical = value.numerical?.[0], integration = value.integration
-  if (numerical !== undefined) value.hostReference = { source, config, sourceRevision: 'fixture-source-revision', checkpointRevision: 'fixture-checkpoint-revision',
-    cases: [{ stage: 'fixture', reference: numerical.reference, actual: numerical.actual, input: numerical.input, checkpoint: numerical.checkpoint, comparator: numerical.comparator, precision: 'integer' }] }
+  if (numerical !== undefined) value.hostReference = { source, config, cases: [{ actual: numerical.actual, input: numerical.input }] }
   if (integration !== undefined) value.compiler = { recipe: integration.recipe, graph: integration.graph, compiler: integration.compiler,
     entrypoint: integration.entrypoint, routes: integration.routes.map(({ operation, mappedOperation, compilerTarget, core, ball, isa }) => ({ operation, mappedOperation, compilerTarget, core, ball, isa })), buildReport: integration.buildReport }
   if (value.ppa !== undefined && integration !== undefined) value.synthesis = { ...value.ppa, rtl: integration.rtl }

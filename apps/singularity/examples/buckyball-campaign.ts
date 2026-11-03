@@ -12,7 +12,7 @@ import { activateRoundCandidate,CommandService,ContractSummaryService,evaluateRs
 import { bootSpikeProfile,buildSingleRunComposition } from '../src/host-composition.ts'
 import { FRONTEND_REVIEW_POLICY,frontendVerifier,compareFrontendPpa,PPA_WEIGHTS } from './buckyball-acceptance.ts'
 import { buckyballFrontendTaskSpec,BUCKYBALL_FRONTEND_CAMPAIGN } from './buckyball-frontend-task.ts'
-import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE,BUCKYBALL_CHECKER_SOURCE_REF,buckyballCheck,describeBuckyballCheck } from './buckyball-checks.ts'
+import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE,BUCKYBALL_CHECKER_SOURCE_REF,BUCKYBALL_ORACLE_SOURCE,BUCKYBALL_ORACLE_SOURCE_REF,buckyballCheck,describeBuckyballCheck } from './buckyball-checks.ts'
 import { nativeAccounting } from './native-accounting.ts'
 import { freezeBuckyballTools } from './buckyball-resources.ts'
 import { freezeBuckyballSkills,readBuckyballSkills } from './buckyball-skills.ts'
@@ -55,10 +55,11 @@ export async function runBuckyballCampaign(root: string, prepared: string, remai
     remaining?.signal?.addEventListener('abort', stop, { once: true })
     if (remaining?.signal?.aborted) stop()
     await service.putObject(BUCKYBALL_CHECKER_SOURCE_REF.id, BUCKYBALL_CHECKER_SOURCE)
+    await service.putObject(BUCKYBALL_ORACLE_SOURCE_REF.id, BUCKYBALL_ORACLE_SOURCE)
     await put(BUCKYBALL_RECIPE_REF.id, BUCKYBALL_RECIPE)
     const fallbackExample = await put('buckyball:example:local', { goal: { summary: 'Verify the exact numerical behavior of the actual compiled component for parent integration.', deliverable: 'result/ with implementation and reproducible evidence', scope: ['Consume authorized inputs and produce an independently checked local component.'], constraints: ['The parent retains final integration and its own checks.'] }, inputs: [], localCriteria: [], localOutputs: [], acceptanceChecks: [{ criterionId: 'task-goal', checks: [buckyballCheck('numerical')] }] })
     const provider = await put('buckyball:acceptance', { v: 1, kind: 'independent-native-review-and-reproduction', policy: FRONTEND_REVIEW_POLICY,
-      checkRecipes: [BUCKYBALL_RECIPE_REF], checkResources: [BUCKYBALL_CHECKER_SOURCE_REF],
+      checkRecipes: [BUCKYBALL_RECIPE_REF], checkResources: BUCKYBALL_RECIPE.dependencies,
       limitations: 'Public trusted local experiment; independent LLM review and rerun evidence, not formal signoff or hidden-data isolation.',
       tracePolicy: 'Include terminal ExecutionRecords as failure evidence; exhausted campaigns seal without opening RSI.', weights: PPA_WEIGHTS })
     const comparatorAsset = await put('buckyball:comparator', { v: 1, metric: 'weighted geometric PPA improvement', weights: PPA_WEIGHTS, minDelta: 0.01, noCaseRegression: true })
