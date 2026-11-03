@@ -329,3 +329,6 @@ Buckyball guide 删除重复平台流程，领域就绪仅固定环境、资源�
 相对 dac8c0e：全部 apps/packages（含测试/配置）+602/-508，净增 94 行；protocol/runtime src 净增 85 行，连同 app src 与通用计量 example 的框架生产源净增 89 行；Buckyball 生产文件 +21/-40，净减 19 行。合并了被新对话/纠正派发用例覆盖的旧 required replacement fixture，保留明确的 REQUIRED_FEEDBACK_REPLAN 拒绝、冻结检查失败、旧 Evidence、required winner 和跨批 CAS 交接断言。删除反馈 Ref 内存副本，读取原生已提交 tool results。
 
 原生接入路径是现有容量 pool → agents.resume → followup(createWakeMessage) → whenIdle/dispose。独立 Task 的 parent 在 yield 后没有 live Agent，不能只调用 live followup；复用已有同进程 yield 及原生 Session 引用即可，无需另一套消息管理器。归档仍不具备续跑入口。验证日志：artifacts/contract-feedback-verify-20261104.log。
+
+
+新真实轮：`artifacts/round6-contract-feedback-20261104-012235`，2026-11-04 01:22:35 +0800 启动，绝对截止 2026-11-04 13:22:35 +0800。冻结修复提交 `94d39c3`，79 个源文件 hash 与启动快照一致；12 小时 / 1,000,000,000 reported tokens / 4,000 requests，maxActive=4，模型 deepseek-flash/reasoning=max，未扩预算。operator PID 2765833、只读进度 monitor PID 2765834；monitor 每 1,800 秒记录实际 Task、closure 中已索引反馈和 blocked Run，不能据此自动宣称修改有效。启动检查已发生 5 个已结算真实请求，52,398 input + 1,596 output tokens，unknown=0，无启动失败。原 round5 不续跑。后续是否改善须核对新轮真实父子对话、复验与集成轨迹；当前不声称 frontend 完成或 RSI 获益。
