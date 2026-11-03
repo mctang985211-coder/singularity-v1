@@ -391,3 +391,7 @@ Flow首次冻结暴露真实数值不合格：submission3aea1ccb…ec3b23、resu
 唯一子代理最终复核补齐两处：全部程序失败允许报告valuesCompared=0，避免正常领域失败被schema变成invalid；正式check目录先清空再从CAS物化，避免reviewer旧依赖残留。42项回归包括两项且通过，未发现其他确定阻断。完整verify首跑的app成功fixture在并行负载下超过原180秒，已按全8stage新增实际执行工作量调整为360秒；随后的中间verify在suite修正时主动停止，保留日志，最终仅以冻结后重跑为准。
 
 10:15:16巡检准时记录到artifacts/operator-checkpoint-20261103-1015.json，shared消费未变，无新增付费请求。最终冻结suite的原生正控8stage/25case/128831值精确一致，真实ONNX/HiFT负控分别10和34超差被拒绝；所有报告绑定同recipe digest 59ec9223…667d2。最终根pnpm verify **503/503**（protocol210、runtime140、app138、inventory15），0失败/取消/跳过，project/build/typecheck/lint通过，日志artifacts/takeover-suite-frozen-verify-20261103.log。完整8项预检进行中；之前携带旧suite digest的预检主动停止，不能计作最终通过。
+
+最终预检artifacts/takeover-suite-ready-preflight-20261103.json **8/8**，实际UVM、toy compiler build、MCP参数失败/取消及原生映射检查均通过。启动前再次按原计划逐项核验并固定源码提交e766a07与全部suite/配方，记录artifacts/takeover-suite-prelaunch-review-20261103.json。10:23:44启动全新完整根artifacts/takeover-full-fixed-suite-20261103-1023（PID2323364），空Method、六项required criteria不变；launch绑定同一预检文件hash与recipe。继承所有历史消费，最多1774调用/677642970 tokens，仍14:15:16截止，不续跑旧根。
+
+启动审计partial/valid、issues=[]、生产源码哈希未变；首批真实请求正常。root先触发READ_SELF_FIRST/PLAN_FIRST，再自行读完self、形成计划和探索。此处只证明正常启动与约束反馈，不当作完整验收或工作能力提升。只读watch按原02:15:16窗口起点继续，下一10:45:16；当前提交CI进行中，PR38保持Draft。

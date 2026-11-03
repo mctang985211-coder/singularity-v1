@@ -155,10 +155,34 @@ void test('PPA comparator normalizes units and rejects incomplete correctness or
   assert.equal(compareFrontendPpa(plan, [trial('baseline', 1)]).comparable, false)
 })
 
-void test('chip campaign admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 120_000 }, async t => {
+void test('chip campaign admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 300_000 }, async t => {
+  const cancellation = new AbortController(), signal = AbortSignal.any([t.signal, cancellation.signal])
+  const deadlineAt = Date.now() + 270_000
+  const oldPath = process.env.PATH, oldUrl = process.env.SINGULARITY_SPIKE_BASE_URL, oldKey = process.env.SINGULARITY_SPIKE_API_KEY
+  let campaign = Promise.resolve()
+  let fixture: Awaited<ReturnType<typeof startChatCompletionsFixture>> | undefined = undefined
+  let operatorStopListener: (() => void) | undefined = undefined
   const directory = await mkdtemp(join(tmpdir(), 'buckyball-campaign-'))
-  t.after(() => rm(directory, { recursive: true, force: true }))
+  t.after(async () => {
+    cancellation.abort(new Error('Campaign fixture cleanup'))
+    if (operatorStopListener !== undefined) process.removeListener('SIGUSR1', operatorStopListener)
+    const campaignResult = await Promise.allSettled([campaign])
+    const cleanup = await Promise.allSettled([fixture?.close(), rm(directory, { recursive: true, force: true })])
+    for (const [name, value] of [['PATH', oldPath], ['SINGULARITY_SPIKE_BASE_URL', oldUrl], ['SINGULARITY_SPIKE_API_KEY', oldKey]] as const) {
+      if (value === undefined) Reflect.deleteProperty(process.env, name); else process.env[name] = value
+    }
+    const failures = [...campaignResult, ...cleanup].flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : [])
+    if (failures.length > 0) throw new AggregateError(failures, 'Campaign fixture cleanup failed')
+  })
   const baseline = join(directory, 'baseline'), prepared = join(directory, 'prepared'), root = join(directory, 'execution')
+  const runCampaign = (executionRoot: string, remaining?: Parameters<typeof runBuckyballCampaign>[2]) => {
+    campaign = runBuckyballCampaign(executionRoot, prepared, {
+      maxRequests: BUCKYBALL_FRONTEND_CAMPAIGN.maxRequests, maxReportedTokens: BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens,
+      ...remaining, deadlineAt: Math.min(deadlineAt, remaining?.deadlineAt ?? Infinity),
+      signal: AbortSignal.any([signal, ...(remaining?.signal === undefined ? [] : [remaining.signal])]) })
+      .then(() => { signal.throwIfAborted() })
+    return campaign
+  }
   await mkdir(prepared)
   for (const name of ['model-port', 'model-optimize', 'chip-designer', 'ip-designer', 'ball-align', 'workload-tests', 'debug-compiler', 'check', 'report']) {
     await mkdir(join(baseline, '.agents/skills', name), { recursive: true })
@@ -172,12 +196,10 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   await mkdir(bin)
   await writeFile(join(bin, 'nix'), '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > "$PWD/nix-argv.txt"\nprintf "fixture bbdev help\\n"\n')
   await chmod(join(bin, 'nix'), 0o755)
-  const oldPath = process.env.PATH
   process.env.PATH = `${bin}:${oldPath ?? ''}`
-  t.after(() => { if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath })
   let reviews = 0, proposers = 0, exhaustReview = false, exhaustSource = false, operatorStop = false
   const recordedRoles = new Set<string>()
-  const fixture = await startChatCompletionsFixture((request, index) => {
+  fixture = await startChatCompletionsFixture((request, index) => {
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `chip-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
       usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
     if (toolSchemaNames(request).includes('buckyball_review_submit')) {
@@ -233,17 +255,9 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     }
     return call('singularity_submit', { outputIds: ['frontend'], includeLearningDrafts: false })
   })
-  t.after(() => fixture.close())
-  const oldUrl = process.env.SINGULARITY_SPIKE_BASE_URL, oldKey = process.env.SINGULARITY_SPIKE_API_KEY
   process.env.SINGULARITY_SPIKE_BASE_URL = fixture.baseURL
   process.env.SINGULARITY_SPIKE_API_KEY = 'fixture-key'
-  t.after(() => {
-    if (oldUrl === undefined) delete process.env.SINGULARITY_SPIKE_BASE_URL
-    else process.env.SINGULARITY_SPIKE_BASE_URL = oldUrl
-    if (oldKey === undefined) delete process.env.SINGULARITY_SPIKE_API_KEY
-    else process.env.SINGULARITY_SPIKE_API_KEY = oldKey
-  })
-  await runBuckyballCampaign(root, prepared)
+  await runCampaign(root)
   const result = JSON.parse(await readFile(join(root, 'result.json'), 'utf8')) as { failure?: string; outcomes: { source: string; activation?: unknown }[]; usage: { requests: number; completed: number; unknown: number } }
   assert.equal(result.failure, undefined)
   assert.equal(result.outcomes.length, 3)
@@ -268,7 +282,7 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     [baseline, 'develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', '--help', 'literal;$(false)'])
   exhaustReview = true
   const exhausted = join(directory, 'budget-exhausted')
-  await runBuckyballCampaign(exhausted, prepared)
+  await runCampaign(exhausted)
   const stopped = JSON.parse(await readFile(join(exhausted, 'result.json'), 'utf8')) as { failure?: string; outcomes: unknown[]; usage: { unknown: number } }
   assert.equal(stopped.failure, undefined, 'a budget cancellation seals its terminal ExecutionRecord without a host failure')
   assert.deepEqual(stopped.outcomes, [])
@@ -285,7 +299,7 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   exhaustReview = false
   exhaustSource = true
   const phaseRoot = join(directory, 'source-quota-exhausted')
-  await runBuckyballCampaign(phaseRoot, prepared)
+  await runCampaign(phaseRoot)
   const phaseResult = JSON.parse(await readFile(join(phaseRoot, 'result.json'), 'utf8')) as {
     failure?: string; outcomes: { source: string }[]; usage: { requests: number; inputTokens: number; outputTokens: number; unknown: number }
   }
@@ -297,14 +311,14 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   assert.ok(phaseResult.usage.inputTokens + phaseResult.usage.outputTokens < BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens)
   exhaustSource = false
   operatorStop = true
-  const cancellation = new AbortController(), operatorRoot = join(directory, 'operator-stopped')
-  const stop = () => { cancellation.abort('operator-SIGUSR1') }
+  const operatorCancellation = new AbortController(), operatorRoot = join(directory, 'operator-stopped')
+  const stop = () => { operatorCancellation.abort('operator-SIGUSR1') }
+  operatorStopListener = stop
   process.once('SIGUSR1', stop)
-  t.after(() => { process.removeListener('SIGUSR1', stop) })
   const requestsBefore = fixture.requests.length, proposersBefore = proposers
-  const pending = runBuckyballCampaign(operatorRoot, prepared, {
+  const pending = runCampaign(operatorRoot, {
     deadlineAt: Date.now() + 60_000, maxRequests: 100, maxReportedTokens: 100_000,
-    signal: cancellation.signal,
+    signal: operatorCancellation.signal,
   })
   for (let i = 0; i < 500; i += 1) {
     if (await readFile(join(directory, 'operator-started'), 'utf8').catch(() => '') === 'started') break

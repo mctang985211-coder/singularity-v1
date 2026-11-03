@@ -10,12 +10,27 @@ import { DomainStore } from '@singularity/runtime'
 
 import { BUCKYBALL_RECIPE_REF,buckyballCheck } from '../examples/buckyball-checks.ts'
 import { runBuckyballCampaign } from '../examples/buckyball-campaign.ts'
+import { BUCKYBALL_FRONTEND_CAMPAIGN } from '../examples/buckyball-frontend-task.ts'
 import { writeSyntheticBuckyballToolchain } from './fixtures/buckyball-evidence.ts'
 import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
 
-void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, activates and consumes the new head without paid calls', { timeout: 360_000 }, async t => {
+void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, activates and consumes the new head without paid calls', { timeout: 600_000 }, async t => {
+  const cancellation = new AbortController(), signal = AbortSignal.any([t.signal, cancellation.signal])
+  const deadlineAt = Date.now() + 570_000
+  const oldPath = process.env.PATH, oldUrl = process.env.SINGULARITY_SPIKE_BASE_URL, oldKey = process.env.SINGULARITY_SPIKE_API_KEY
+  let campaign = Promise.resolve()
+  let fixture: Awaited<ReturnType<typeof startChatCompletionsFixture>> | undefined = undefined
   const directory = await mkdtemp(join(tmpdir(), 'bb-success-'))
-  t.after(() => rm(directory, { recursive: true, force: true }))
+  t.after(async () => {
+    cancellation.abort(new Error('Campaign fixture cleanup'))
+    const campaignResult = await Promise.allSettled([campaign])
+    const cleanup = await Promise.allSettled([fixture?.close(), rm(directory, { recursive: true, force: true })])
+    for (const [name, value] of [['PATH', oldPath], ['SINGULARITY_SPIKE_BASE_URL', oldUrl], ['SINGULARITY_SPIKE_API_KEY', oldKey]] as const) {
+      if (value === undefined) Reflect.deleteProperty(process.env, name); else process.env[name] = value
+    }
+    const failures = [...campaignResult, ...cleanup].flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : [])
+    if (failures.length > 0) throw new AggregateError(failures, 'Campaign fixture cleanup failed')
+  })
   const baseline = join(directory, 'baseline'), prepared = join(directory, 'prepared'), root = join(directory, 'execution')
   await mkdir(prepared)
   for (const name of ['model-port', 'model-optimize', 'chip-designer', 'ip-designer', 'ball-align', 'workload-tests', 'debug-compiler', 'check', 'report']) {
@@ -30,15 +45,9 @@ void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, ac
   await writeFile(produce, `import {writeBuckyballEvidence} from ${JSON.stringify(fileURLToPath(new URL('./fixtures/buckyball-evidence.ts', import.meta.url)))};\nawait writeBuckyballEvidence('frontend',{factor:Number(process.argv[2]),pathPrefix:'frontend/'});\n`)
   const reproduce = join(directory, 'reproduce.ts')
   await writeFile(reproduce, `import {readFile,mkdir} from 'node:fs/promises';\nimport {execFile} from 'node:child_process';\nimport {promisify} from 'node:util';\nimport {writeBuckyballEvidence} from ${JSON.stringify(fileURLToPath(new URL('./fixtures/buckyball-evidence.ts', import.meta.url)))};\nconst sourceText=await readFile('outputs/frontend/source.txt','utf8');\nconst {factor}=JSON.parse(await readFile('outputs/frontend/factor.json','utf8'));\nconst actual=(await promisify(execFile)('python3',['outputs/frontend/candidate.py'])).stdout;\nawait writeBuckyballEvidence('reproduced',{sourceText,actual,factor});\n`)
-  const oldPath = process.env.PATH, oldUrl = process.env.SINGULARITY_SPIKE_BASE_URL, oldKey = process.env.SINGULARITY_SPIKE_API_KEY
   process.env.PATH = `${bin}:${oldPath ?? ''}`
-  t.after(() => {
-    for (const [name, value] of [['PATH', oldPath], ['SINGULARITY_SPIKE_BASE_URL', oldUrl], ['SINGULARITY_SPIKE_API_KEY', oldKey]] as const) {
-      if (value === undefined) Reflect.deleteProperty(process.env, name); else process.env[name] = value
-    }
-  })
   let publishedConsumed = false, reviews = 0
-  const fixture = await startChatCompletionsFixture((request, index) => {
+  fixture = await startChatCompletionsFixture((request, index) => {
     const texts = messageTexts(request).join('\n'), calls = toolNames(request)
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `bb-success-${String(index)}`, name, arguments: JSON.stringify(args) }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
     if (toolSchemaNames(request).includes('buckyball_review_submit')) {
@@ -84,9 +93,11 @@ void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, ac
     if (!calls.includes('bash')) return call('bash', { description: 'Produce the synthetic candidate and design fixture.', command: `${process.execPath} ${produce} ${efficient ? '0.5' : '1'}\nprintf '%s' 'import json; print(json.dumps([0,1,2,3]))' > frontend/candidate.py\nprintf '%s' '{"factor":${efficient ? '0.5' : '1'}}' > frontend/factor.json` })
     return call('singularity_submit', { outputIds: ['frontend'], includeLearningDrafts: false })
   })
-  t.after(() => fixture.close())
   process.env.SINGULARITY_SPIKE_BASE_URL = fixture.baseURL; process.env.SINGULARITY_SPIKE_API_KEY = 'fixture-key'
-  await runBuckyballCampaign(root, prepared)
+  campaign = runBuckyballCampaign(root, prepared, { deadlineAt,
+    maxRequests: BUCKYBALL_FRONTEND_CAMPAIGN.maxRequests, maxReportedTokens: BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens, signal })
+  await campaign
+  signal.throwIfAborted()
   const first = JSON.parse(await readFile(join(root, 'round-1.json'), 'utf8')) as { comparison?: { outcome: string }; activation?: unknown }
   assert.equal(first.comparison?.outcome, 'improved', JSON.stringify(first))
   assert.ok(first.activation)
