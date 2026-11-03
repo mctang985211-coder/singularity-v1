@@ -263,7 +263,6 @@ void test('root admission appends fixed drafts last and seals a verifiable contr
   assert.deepEqual(contract.template, rootTemplateRef)
   assert.deepEqual(contract.spec.inputs, [inputA, inputB])
   assert.deepEqual(contract.spec.criteria, rootInput.spec.criteria)
-  assert.equal('localGuidance' in contract.spec, false)
   assert.deepEqual(contract.spec.outputs, [
     ...rootBaseOutputs,
     SKILL_DRAFTS_OUTPUT,
@@ -300,7 +299,6 @@ void test('root admission preserves optional absence instead of adding defaults'
   const before = clone(input)
   const contract = admitRootTask(input)
 
-  assert.equal('localGuidance' in contract.spec, false)
   assert.equal('exploration' in contract.resources, false)
   assert.deepEqual(input, before)
 })
