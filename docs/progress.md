@@ -306,4 +306,4 @@ recipe Run1虽已合并四路真实数值参考，仍因plan/graphs参数路径�
 
 真实模型测试已停止，本次仅运行本地协议与脚本化 DSH 回归。旧记录中的 seed 完整传递、数值验收成功和当前运行状态，以 [Task 修复审计](task-repair-20261103.md) 的逐项更正为准；已撤除首轮配方、固定 suite 和项目 skill 挂载，改由 parent 编写 child 验收，并修复 self Ref 与工作流指引。
 
-相对 `dac8c0e`：core 源码净增 57 行；整个 apps/packages（含源码、测试与配置）净增 62 行；Buckyball 生产代码净减 18 行，含测试净减 16 行。project/build/typecheck/lint 通过；本地测试 445 项通过、1 项被宿主 inotify 配额耗尽阻断（runtime 的既有 CAS 原子发布 fs.watch 测试，ENOSPC；8192/8192 已占用），app 单独完整 92/92 通过。未修改测试跳过它，未终止编辑器或改系统配额；日志 `artifacts/thin-repair-final-{verify,app,protocol-targeted}.log`。PR 保持 Draft，独立 CI 状态见 PR checks；本次没有新增真实模型行为改善证据。
+相对 `dac8c0e`：core 源码净增 57 行；整个 apps/packages（含源码、测试与配置）净增 62 行；Buckyball 生产代码净减 18 行，含测试净减 16 行。project/build/typecheck/lint 通过；本地测试 445 项通过、1 项被宿主 inotify 配额耗尽阻断（runtime 的既有 CAS 原子发布 fs.watch 测试，ENOSPC；8192/8192 已占用），app 单独完整 92/92 通过；独立 CI 在 `2f2ea05` 上完整 446/446 通过。本轮恢复通用原生 shell 注册并重跑 CAS 命令及 app 回归，日志 `artifacts/task-repair-{audit-verify,app,frozen-checks}-20261103.log`；未跳过测试或修改系统配额。PR 保持 Draft，最终提交的 CI 状态见 PR checks；本次没有新增真实模型行为改善证据。

@@ -1,6 +1,6 @@
 # Task 修复审计（2026-11-03）
 
-以 `dac8c0e` 为比较基线；修改前的工作区已备份为 `7e75517`。本次选择撤除首轮新增体系，再沿原 Task 路径修复。真实模型测试保持停止，未启动新的真实模型请求。
+以 `dac8c0e` 为比较基线；修改前工作区已备份为 `7e75517`，本轮核验前再次备份为 `bf5018c`。本次选择撤除首轮新增体系，再沿原 Task 路径修复。真实模型测试保持停止，未启动新的真实模型请求。
 
 ## 偏离发生在哪里
 
@@ -22,4 +22,4 @@ host 复用 DSH 原生 shell，在 fresh 目录物化 CAS 合同输入和冻结�
 
 Buckyball 撤除项目旧 skill 的打包、改写和注册；root 合同只给出 `.agents/skills/` 的参考文档绝对路径。root 领域验收继续由 operator/domain 固定；child 目标、接口和验收由 parent 自己写。Singularity 自产 Method skill 的现有机制保留。
 
-验证包括协议与原生 DSH 脚本化集成：真实 tool self 返回二进制 Ref 并向 child/grandchild 传递、跨批冻结交接、独立命令拒绝 reviewer 误报通过、失败后的 replan/replacement、本层集成及 deadline 取消。最终检查与行数记录见 [进度](progress.md)。这些证据验证机制可用，尚不能证明真实模型已自主正确使用 Task；按最新停止要求，本次不重跑真实模型。
+验证包括协议与原生 DSH 脚本化集成：真实 tool self 返回二进制 Ref 并向 child/grandchild 传递、跨批冻结交接、独立命令拒绝 reviewer 误报通过、失败后的 replan/replacement、本层集成及 deadline 取消。本轮复验发现未提交删减误移除了通用 profile 的 shell 注册，导致普通 Task 验收访问 undefined.execute；已恢复两行原生注册，并保留 CAS、pipeline 失败、review 否决与取消回归。最终检查与行数记录见 [进度](progress.md)。这些证据验证机制可用，尚不能证明真实模型已自主正确使用 Task；按最新停止要求，本次不重跑真实模型。

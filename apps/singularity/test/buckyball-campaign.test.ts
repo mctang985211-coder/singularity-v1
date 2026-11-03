@@ -199,6 +199,7 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
       return { content: 'No justified reusable improvement from this deliberately incomplete fixture.', usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
     }
     const calls = toolNames(request)
+    assert.equal(toolSchemaNames(request).includes('skill'), false, 'project reference documents are never mounted as skills')
     if (calls.length === 0) return call('singularity_read', { kind: 'self' })
     const pages = (request.messages ?? []).filter(value => value.role === 'tool').map(value => wireText(value.content)).filter(value => value.startsWith('{')).map(value => JSON.parse(value) as { data?: string; nextCursor?: string; contextEpoch: string })
       .filter(value => typeof value.data === 'string')
@@ -242,6 +243,7 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     cases: { spec: { inputs: { id: string; object: { digest: string } }[]; goal: { constraints: string[] } } }[]
   }
   const seedInput = launch.sourceSpec.inputs.find(value => value.id === 'public-seed')
+  assert.ok(launch.sourceSpec.goal.constraints.some(value => value.includes(`${baseline}/.agents/skills/`)))
   assert.ok(seedInput)
   assert.deepEqual(await readFile(join(root, 'domain/objects', seedInput.object.digest.slice('sha256:'.length))), seedBytes)
   for (const { spec } of launch.cases) {
