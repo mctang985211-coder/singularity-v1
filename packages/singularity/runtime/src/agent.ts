@@ -31,6 +31,7 @@ usesExploration,
 import type { ExecuteSingleRunRequest,PreparedRun } from './run.ts'
 import type { RunToolController } from './tools.ts'
 import type { WakeDeliveryOutcome } from './wake.ts'
+import type { WakeRequest } from './wake.ts'
 import { batchWakeRequest,deliverWakeOnceOrFail,startWakeText } from './wake.ts'
 
 export type OpenedRunMode = 'create' | 'resume'
@@ -53,6 +54,7 @@ interface DriveAgentOptions {
   readonly prepared: PreparedRun
   readonly request: ExecuteSingleRunRequest
   readonly mode: OpenedRunMode
+  readonly wake?: WakeRequest
   readonly controller: RunToolController
   readonly checkBudget: (tokens?: number, steps?: number) => boolean
   readonly stopBudget: () => void
@@ -119,8 +121,8 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
     if (!options.checkBudget()) throw budgetExhausted
     // Start and batch wakes share the current Task budget projection.
     const state = await options.controllerState()
-    const wake = mode === 'resume'
-      ? batchWakeRequest(state, request.runId, options.budget()) : undefined
+    const wake = options.wake ?? (mode === 'resume'
+      ? batchWakeRequest(state, request.runId, options.budget()) : undefined)
     wakeOutcome = await deliverWakeOnceOrFail(handle.agent, wake ?? {
       wakeId: `${request.runId}:start`,
       text: startWakeText(contract.taskId, request.runId, options.budget()),

@@ -67,7 +67,11 @@ export async function loadDirectChildren(
     const task = state.tasks.get(childId)
     if (task === undefined) continue
     const lastRun = state.runs.get(task.runIds.at(-1) ?? '')
-    const result = await loadRunResult(service, task.phase === 'closed' ? lastRun : undefined, `children/${encodeURIComponent(childId)}`, childId)
+    let result = await loadRunResult(service, task.phase === 'closed' ? lastRun : undefined, `children/${encodeURIComponent(childId)}`, childId)
+    if (task.phase === 'closed' && lastRun?.submitted === undefined) {
+      const frozen = task.runIds.map(id => state.runs.get(id)).findLast(run => run?.submitted !== undefined && run.closed !== undefined)
+      result = { ...result, outputs: (await loadRunResult(service, frozen, `children/${encodeURIComponent(childId)}`, childId)).outputs }
+    }
     results.push({ ...result, task })
   }
   const current = results.filter(result => result.task.parentRunId === runId)

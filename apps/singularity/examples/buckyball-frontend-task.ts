@@ -30,7 +30,6 @@ export function buckyballFrontendTaskSpec(project: Ref): TaskSpec {
         'Use the isolated Buckyball checkout and existing bbdev, native tools and project reference documents.',
         'Exclude all full-chip simulation, including whole-model BEMU and chip-level RTL runs; exclude P2E, FPGA bitstreams and physical backend work.',
         'Run focused component tests within the operator resource limits. RTL elaboration is allowed.',
-        'Discover each Task\'s local workflow from the repository; refine the initial plan after exploration, create direct responsibility units with usable interfaces in successive batches, and perform bounded local technical work plus integration and checks.',
         'Report incomplete or unsupported stages and failed experiments with their evidence.'],
     },
     criteria: [

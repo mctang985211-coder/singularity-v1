@@ -8,6 +8,7 @@ JsonValue,
 PlanningSketch,
 Ref,
 TaskContract,
+TaskFeedback,
 } from '@singularity/protocol'
 import {
 canonicalize,
@@ -94,6 +95,7 @@ export interface RunToolControllerOptions {
   readonly submitDenial?: () => 'CHILD_BATCH_ACTIVE' | 'REQUIRED_FEEDBACK_REPLAN' | undefined
   readonly requiredFailure?: () => boolean
   readonly verifierInputs?: readonly Ref[]
+  readonly replyTarget?: (id: string) => TaskFeedback | undefined
 }
 
 export interface TaskReadQuery {
@@ -116,6 +118,7 @@ export interface RunToolSnapshot {
   readonly stopped?: { readonly reason: 'blocked' | 'unsolved'; readonly message: string }
   readonly contextEpoch: ContextEpoch
   readonly feedbackRefs?: readonly Ref[]
+  readonly feedbackWait?: Ref
 }
 
 interface MutableRunToolState {
@@ -125,6 +128,7 @@ interface MutableRunToolState {
   submitted: boolean
   childBatchPending: boolean
   childBatchActive: boolean
+  feedbackWait?: Ref
   planningSketchRef?: Ref
   submission?: FrozenSubmission
   stopped?: { readonly reason: 'blocked' | 'unsolved'; readonly message: string }
@@ -143,7 +147,6 @@ export class RunToolController {
   private readonly state: MutableRunToolState
   private agent: Agent | undefined
   private failure: Error | undefined
-  private readonly feedbackRefs = new Map<string, Ref>()
 
   constructor(options: RunToolControllerOptions) {
     this.options = options
@@ -218,12 +221,12 @@ export class RunToolController {
 
   private denialCode(name: string, agent: Agent | undefined, args: unknown): string | undefined {
     if (this.state.submitted) return 'ALREADY_SUBMITTED'
-    if (this.state.stopped !== undefined || this.failure !== undefined) return 'RUN_CLOSED'
+    if (this.state.stopped !== undefined || this.state.feedbackWait !== undefined || this.failure !== undefined) return 'RUN_CLOSED'
     if (this.agent === undefined || agent !== this.agent) return 'INVALID_ARGUMENT'
     // A committed (or in-flight) child batch makes the parent waiting-children.
-    // Read-only status/self reads stay available; every other action must wait.
+    // Reads and dispatcher feedback remain available; implementation waits.
     if ((this.state.childBatchPending || this.state.childBatchActive)
-      && name !== 'singularity_read') {
+      && name !== 'singularity_read' && name !== 'singularity_feedback') {
       return 'CHILD_BATCH_ACTIVE'
     }
     if (name === 'singularity_submit') {
@@ -267,7 +270,7 @@ export class RunToolController {
     }
     if (!this.options.checkBudget()) return 'LIMIT_EXCEEDED'
     if (!this.state.readSelf) return 'READ_SELF_FIRST'
-    if (name === 'singularity_plan') return undefined
+    if (name === 'singularity_plan' || name === 'singularity_feedback') return undefined
     if (this.state.planningSketchRef === undefined) return 'PLAN_FIRST'
     return undefined
   }
@@ -275,14 +278,10 @@ export class RunToolController {
   /** Current durable tool facts for settlement; no extra state authority. */
   snapshot(): RunToolSnapshot {
     this.refreshEpoch()
-    if (this.agent !== undefined) {
-      for (const ref of feedbackRefsFromSession(this.agent.session)) {
-        this.feedbackRefs.set(`${ref.id}:${ref.digest}`, ref)
-      }
-    }
     return {
       ...(this.failure === undefined ? {} : { failure: this.failure }),
-      feedbackRefs: [...this.feedbackRefs.values()],
+      feedbackRefs: this.agent === undefined ? [] : feedbackRefsFromSession(this.agent.session),
+      ...(this.state.feedbackWait === undefined ? {} : { feedbackWait: this.state.feedbackWait }),
       ...(this.state.planningSketchRef === undefined
         ? {}
         : { planningSketchRef: this.state.planningSketchRef }),
@@ -553,11 +552,11 @@ export class RunToolController {
   private feedbackTool() {
     return defineTool({
       name: 'singularity_feedback',
-      description: 'Send structured feedback to your direct parent and continue this Run.',
+      description: 'Ask your dispatcher and yield. Reply with replyTo=child feedback.id. Contracts stay frozen; use stop(blocked) for correction in a new Task.',
       parameters: {
         kind: { type: 'string', enum: ['needs-replan', 'input-invalid', 'acceptance-concern', 'blocked'], required: true },
         summary: { type: 'string', required: true },
-        proposedChanges: { type: 'array', items: { type: 'json' }, required: true, description: '[{field: goal|inputs|outputs|child-purpose|order, suggestion: string}]' },
+        replyTo: { type: 'string', description: 'Omit to ask your direct parent; set to a direct child feedback.id to reply.' },
         refs: { type: 'array', items: { type: 'json' }, required: true, description: 'Frozen public refs from this Run, or [].' },
       },
       output: {
@@ -582,11 +581,12 @@ export class RunToolController {
           input,
           createdAt: this.options.clock(),
           writer: this.options.writer,
+          authorizedRefs: this.options.verifierInputs ?? [],
+          ...(input.replyTo === undefined ? {} : { reply: this.options.replyTarget?.(input.replyTo) }),
         })
-        this.feedbackRefs.set(`${feedbackRef.id}:${feedbackRef.digest}`, feedbackRef)
         const origin = this.options.contract.origin
-        if (origin.kind !== 'child') throw this.toolError('INPUT_NOT_AUTHORIZED')
-        return { feedbackRef, directParentTaskId: origin.parentId, remainingBudgetPct: this.options.budget() }
+        if (input.replyTo === undefined) { this.state.feedbackWait = feedbackRef; exec.concludeTurn() }
+        return { feedbackRef, directParentTaskId: origin.kind === 'child' && input.replyTo === undefined ? origin.parentId : this.options.contract.taskId, remainingBudgetPct: this.options.budget() }
       },
     })
   }

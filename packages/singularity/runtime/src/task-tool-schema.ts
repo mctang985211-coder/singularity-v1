@@ -15,7 +15,7 @@ export const taskToolExamples: Record<string, JsonValue> = {
     ackPreview: `sha256:${'0'.repeat(64)}`, task: { goal: EXPLORE_EXAMPLE.goal,
       inputs: [{ id: 'records', object: { id: 'example:records', digest: `sha256:${'0'.repeat(64)}` }, path: 'records.json', access: 'copy-to-work' }],
       acceptanceCriteria: EXPLORE_EXAMPLE.acceptanceCriteria, localOutputs: EXPLORE_EXAMPLE.localOutputs } }] },
-  singularity_feedback: { kind: 'needs-replan', summary: 'Clarify this component boundary.', proposedChanges: [], refs: [] },
+  singularity_feedback: { kind: 'needs-replan', summary: 'Clarify this component boundary.', refs: [] },
   singularity_submit: { outputIds: ['result', 'totals'], includeLearningDrafts: false },
   singularity_stop: { reason: 'unsolved', message: 'The required result is incomplete.' },
 }
@@ -60,7 +60,7 @@ export const planningInputSchema: ToolDefinition['parameters'] = {
 export const decomposeParameters = {
   action: { type: 'string', required: true, description: '"prepare" reads an example; "commit" admits a prepared batch.' },
   bindingId: { type: 'string', description: 'NodeView childOptions bindingId for prepare.' },
-  children: { type: 'json', description: 'ackPreview=previewRef.digest. Probe allows multiple instances per batch and later batches; required one per batch. Use complete authorized input refs. Author nonempty acceptanceCriteria with concrete pass rules and self-contained shell checks; declared paths are relative to the workspace root. Required outputs inherited; localOutputs adds supporting outputs or [].' },
+  children: { type: 'json', description: 'ackPreview=previewRef.digest. Copy authorized InputRefs unchanged. Nonempty acceptanceCriteria require pass rules and self-contained shell checks, rerun in a fresh directory with ONLY frozen declared inputs/outputs; worker checkout/build/workspace are absent. Inherit required outputs; localOutputs adds supporting files or []. Probe may repeat within/later batches; required once per batch.' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)

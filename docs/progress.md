@@ -311,3 +311,21 @@ recipe Run1虽已合并四路真实数值参考，仍因plan/graphs参数路径�
 后续 prompt 补齐（修改前备份 `e084a7d`）：将弱化职责的探索 brief 和两处算术示例替换为拥有解析、汇总及集成责任的阶段合同；工具示例复用同一合同，按需协议文档展示前批冻结 totals → 后批完整 InputRef → parent 最终消费者复验。worker 明确为 workflow 节点，派发时说明输入来源、输出消费者和接口；未新增机制或预设真实任务树。相对 `dac8c0e`，core 净增 78 行，apps/packages 净增 83 行；Buckyball 仍净减 18 行（含测试净减 16 行）。
 
 原生 shell 的示例正例通过，陈旧 totals、错误 CLI、重复 key 丢失均被拒绝，0 模型请求；worker 1967/2048 bytes，带 checkout/bbdev 的生产 prepare 返回 3562/32768 bytes，见 `artifacts/workflow-example-smoke-20261103.json`。project/build/typecheck/lint 和 app 92/92 通过；本地完整 verify 仍仅被既有 fs.watch ENOSPC 阻断，见 `artifacts/workflow-refinement-{verify,app}-20261103.log`，最终 CI 见 PR checks。真实模型测试保持停止；领域 root 证据检查、独立完成能力评测和 BB 成功链路仍未完成，详见审计的剩余范围。
+
+
+### 契约反馈修订（2026-11-04，amendment 017）
+
+按用户“先停掉这一轮，修完了开个新的，改之前提交 git commit 备份”执行。round5-thin-20261103-2215 的 operator/子进程和独立 monitor 已停止；operator-stop.json 保存最后已结算计量：2,326 请求，277,869,770 input + 2,744,212 output tokens，unknown=1。保留原 open facts，不伪造 closure 或结果。施工前 checkpoint 为 e18e281。
+
+该轮证据显示实际职责树和逐层集成已出现，但不能判定目标已解决：child checks 冻结了互相矛盾的 exit_code 条件、错误的 KV 维度，并依赖复验目录中不存在的 buckyball checkout；相同契约被重复执行。另有真实实现/数值缺陷，不能一律归为验收错误。
+
+当前变更将 fresh CAS-only 检查环境明确写入 worker card 和工具说明；feedback 简化为 kind/summary/refs/replyTo，直接提问 yield、parent 在整批结束前答复、同 Run/session 续接。stop(blocked) 明确交回派发者，不自动 retry；普通 failed/unsolved retry 保留。最后 Run 无提交时仍向 parent 提供该 Task 最近已冻结的产物，最新 blocker record 不被旧 Evidence 覆盖。scheduler 诊断复用 closure，删除预演 retry 的重复分支。没有新 fact、消息副本、broker 或归档恢复；读取保留在 live yield 中的原生 Session，因为 DSH dispose 会移除 live registry 条目。
+
+Buckyball guide 删除重复平台流程，领域就绪仅固定环境、资源、root 问题/验收和预算；不要求预制非 root 检查或求解树。项目既有 skills 仍仅由 root 参考文档路径暴露。完整 RSI 评测就绪与普通探索就绪分开描述。
+
+验证：原生 DSH fixture 已覆盖 maxActive=1 提问→父答复→同 Run 继续，以及错误契约失败→retry 中提问→blocked 交回而不进入第三次 retry→新 required Task 复用旧冻结产物并通过，root 验收和原合同 digest 保持不变。根 pnpm verify 已通过：protocol 206、runtime 136、app 92、inventory 13，共 447/447，0 fail/skip。worker persona/card/exploration 合计 2023/2048 bytes；Buckyball 真实 surface 的脚本化 campaign fixture 也通过既有 12 KiB schema 门禁。新轮启动结果另记，不把 fixture 当作真实模型改善证据。
+
+
+相对 dac8c0e：全部 apps/packages（含测试/配置）+602/-508，净增 94 行；protocol/runtime src 净增 85 行，连同 app src 与通用计量 example 的框架生产源净增 89 行；Buckyball 生产文件 +21/-40，净减 19 行。合并了被新对话/纠正派发用例覆盖的旧 required replacement fixture，保留明确的 REQUIRED_FEEDBACK_REPLAN 拒绝、冻结检查失败、旧 Evidence、required winner 和跨批 CAS 交接断言。删除反馈 Ref 内存副本，读取原生已提交 tool results。
+
+原生接入路径是现有容量 pool → agents.resume → followup(createWakeMessage) → whenIdle/dispose。独立 Task 的 parent 在 yield 后没有 live Agent，不能只调用 live followup；复用已有同进程 yield 及原生 Session 引用即可，无需另一套消息管理器。归档仍不具备续跑入口。验证日志：artifacts/contract-feedback-verify-20261104.log。

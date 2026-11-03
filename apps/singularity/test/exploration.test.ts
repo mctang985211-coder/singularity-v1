@@ -26,7 +26,7 @@ void test('empty Method plans three levels, commits direct children only, and in
   await withHarness((request, index) => {
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `explore-${String(index)}`, name, arguments: JSON.stringify(args) }], usage: fixtureUsage(index) })
     assert.ok(scenario)
-    if ([0, 6, 10, 14, 20].includes(index)) {
+    if ([0, 6, 10, 14, 18, 21, 25].includes(index)) {
       if (index === 0) {
         const plan = request.tools?.find(tool => tool.function?.name === 'singularity_plan')
         assert.ok(plan)
@@ -39,17 +39,17 @@ void test('empty Method plans three levels, commits direct children only, and in
       }
       assert.match(messageTexts(request).join('\n'), /"mode":"exploration"/)
       assert.match(messageTexts(request).join('\n'), /public-handbook/)
-      if (index === 20) {
+      if (index === 25) {
         assert.match(messageTexts(request).join('\n'), /"feedback":\{"count":1,/)
         assert.match(messageTexts(request).join('\n'), /reason=children-terminal;.*remainingBudgetPct=\{"tokensPct":\d+,/)
       }
       return call('singularity_read', { kind: 'self' })
     }
-    if ([1, 7, 11, 15, 21].includes(index)) {
-      const current = index === 11 ? grandchild : index === 7 || index === 15 ? child : scenario.contract
+    if ([1, 7, 11, 15, 22, 26].includes(index)) {
+      const current = index === 11 ? grandchild : index === 7 || index === 15 || index === 22 ? child : scenario.contract
       assert.ok(current)
       const reply = planReply({ ...scenario, contract: current }, current.taskId,
-        index === 11 ? grandchildRunId : index === 7 || index === 15 ? childRunId : runId,
+        index === 11 ? grandchildRunId : index === 7 || index === 15 || index === 22 ? childRunId : runId,
         contextEpochFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) ?? '')
       assert.ok(reply.toolCalls)
       const args = JSON.parse(reply.toolCalls[0].arguments) as { sketch: { levels: unknown[]; directPlan: unknown[] } }
@@ -78,20 +78,27 @@ void test('empty Method plans three levels, commits direct children only, and in
       }), localOutputs: [],
     } }] })
     if (index === 12) return call('bash', { command: `python3 -c "from pathlib import Path; assert Path('seed.bin').read_bytes() == bytes([0,255,7])" && mkdir -p result && printf child-result > result/finding.txt` })
-    if (index === 13 || index === 19) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
+    if (index === 13 || index === 24) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
     if (index === 16) return call('singularity_read', { kind: 'children' })
-    if (index === 17) return call('singularity_feedback', { kind: 'needs-replan', summary: 'Preserve the reusable local finding as a skill draft.', proposedChanges: [{ field: 'outputs', suggestion: 'Include a public learning draft when integrating this finding.' }], refs: [] })
-    if (index === 18) {
+    if (index === 17) return call('singularity_feedback', { kind: 'needs-replan', summary: 'Preserve the reusable local finding as a skill draft.', refs: [] })
+    if (index === 19) {
+      const text = messageTexts(request).findLast(text => text.includes('reason=feedback; '))
+      assert.ok(text)
+      const question = JSON.parse(text.slice(text.indexOf('reason=feedback; ') + 17).split('. Read self;')[0]) as { feedback: { id: string } }
+      return call('singularity_feedback', { kind: 'needs-replan', summary: 'Confirmed. Deliver your result; I will preserve the reusable draft during integration.', replyTo: question.feedback.id, refs: [] })
+    }
+    if (index === 20) return { content: 'Waiting for the direct result.', usage: fixtureUsage(index) }
+    if (index === 23) {
       assert.ok(grandchild)
       return call('bash', { command: `mkdir -p result\ncat 'children/${encodeURIComponent(grandchild.taskId)}/result/finding.txt' > result/finding.txt` })
     }
-    if (index === 22) return call('singularity_read', { kind: 'feedback' })
-    if (index === 23) {
+    if (index === 27) return call('singularity_read', { kind: 'feedback' })
+    if (index === 28) {
       assert.ok(child)
       assert.match(messageTexts(request).join('\n'), /Preserve the reusable local finding as a skill draft/)
       return call('bash', { command: `cat 'children/${encodeURIComponent(child.taskId)}/result/finding.txt' > result.txt\nmkdir -p learning-drafts/skills/finding\nprintf '# Useful finding\n\nReuse the observed public approach.\n' > learning-drafts/skills/finding/SKILL.md` })
     }
-    if (index === 24) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: true })
+    if (index === 29) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: true })
     return { content: 'Unexpected fixture request.', usage: fixtureUsage(index) }
   }, async ({ spike, storeRoot, workspace, fixture }) => {
     const original = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1, maxStepsPerRun: 30, maxDepth: 3, maxTasks: 3,
@@ -161,7 +168,7 @@ void test('empty Method plans three levels, commits direct children only, and in
       assert.deepEqual(grandchild.method, active.contract.method)
       assert.equal(grandchild.origin.kind === 'child' && grandchild.origin.parentId, child.taskId)
       assert.deepEqual(verified, [grandchild.taskId, child.taskId, taskId])
-      assert.equal(fixture.requests.length, 25)
+      assert.equal(fixture.requests.length, 30)
       const batches = writer.facts().filter(fact => fact.type === 'task/children-admitted')
       assert.equal(batches.length, 2)
       assert.deepEqual(batches.map(fact => fact.data.parentRunId), [runId, childRunId])
@@ -169,8 +176,8 @@ void test('empty Method plans three levels, commits direct children only, and in
       const rootSubmission = submissions.find(fact => fact.data.runId === runId)
       const childSubmission = submissions.find(fact => fact.data.runId === childRunId)
       assert.ok(rootSubmission)
-      assert.deepEqual(rootSubmission.data.feedbackRefs, childSubmission?.data.feedbackRefs)
-      assert.equal(rootSubmission.data.feedbackRefs.length, 1)
+      assert.ok(childSubmission?.data.feedbackRefs.every(ref => rootSubmission.data.feedbackRefs.some(rootRef => rootRef.digest === ref.digest)))
+      assert.equal(rootSubmission.data.feedbackRefs.length, 2)
       assert.equal([...((await writer.taskRunState([])).tasks.values())].filter(task => task.phase === 'closed').length, 3)
     } finally {
       await writer.close()

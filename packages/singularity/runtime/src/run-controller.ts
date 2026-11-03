@@ -1,4 +1,4 @@
-import type { Session } from '@deepseek-ai/dsh-session'
+import type { Session,SessionId } from '@deepseek-ai/dsh-session'
 import type { Fact,JsonValue,Ref,UsageRecord } from '@singularity/protocol'
 
 import { snapshotSession } from './agent.ts'
@@ -13,6 +13,7 @@ import { clampPercent } from './prompt.ts'
 import { usesExploration } from './resources.ts'
 import { closedSubtreeUsage,commitFact,usageCost } from './run-settlement.ts'
 import type { ExecuteSingleRunRequest,PreparedRun,RuntimeContext } from './run.ts'
+import { yieldedRunSession } from './run.ts'
 import type { CommandService } from './service.ts'
 import { loadDirectFeedback,readDirectFeedback } from './task-feedback.ts'
 import { RunToolController } from './tools.ts'
@@ -37,7 +38,9 @@ export async function createToolController(
     runtime.lastAttempt?.outputsPath ?? '')
   await mountRunOutputs(service, runtime.workspace, [...children.results.flatMap(result => result.outputs), ...previous.outputs], prepared.mountedChildOutputs)
   const authorizedInputs = () => [...runtime.contract.spec.inputs, ...children.inputs, ...previous.outputs]
-  const feedbackCount = (await loadDirectFeedback({ state, parentTaskId: runtime.contract.taskId, reader: service })).length
+  const session = (runId: string) => request.ctx.sessions.get(state.runs.get(runId)?.opened.sessionId as SessionId) ?? yieldedRunSession(service, runId)
+  const feedbackEntries = await loadDirectFeedback({ state, parentTaskId: runtime.contract.taskId, reader: service, session })
+  const feedbackCount = feedbackEntries.length
   const prior = closedSubtreeUsage(state, runtime.contract.taskId)
   const taskStartedAt = service.facts().find(fact => fact.type === 'run/opened'
     && fact.data.taskId === runtime.contract.taskId)?.at ?? runtime.startedAt
@@ -108,11 +111,12 @@ export async function createToolController(
     submitDenial: () => children.submitDenial,
     requiredFailure: () => children.requiredFailure,
     verifierInputs: authorizedInputs().map(input => input.object),
+    replyTarget: id => feedbackEntries.find(entry => entry.feedback.id === id)?.feedback,
     readTask: async query => query.kind === 'ancestor' && request.summaries !== undefined
       ? request.summaries.readAncestor(await service.taskRunState(runtime.transientInvalidReasons), runtime.contract.taskId, query, runtime.clock())
       : query.kind === 'feedback'
       ? readDirectFeedback({ state: await service.taskRunState(runtime.transientInvalidReasons),
-        parentTaskId: runtime.contract.taskId, reader: service,
+        parentTaskId: runtime.contract.taskId, reader: service, session,
         ...(query.id === undefined ? {} : { id: query.id }),
         ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
         ...(query.page === undefined ? {} : { page: query.page }),
@@ -135,6 +139,7 @@ export async function createToolController(
     epoch: () => initialContextEpoch(request.sessionId),
     onAgent: agent => {
       liveAgent = agent
+      prepared.session = agent.session
     },
     commitSubmission: async (frozen, sessionId, transcriptSeq) => {
       if (!checkBudget()) throw new Error('Run budget unavailable')

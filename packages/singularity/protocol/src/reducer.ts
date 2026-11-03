@@ -299,6 +299,7 @@ export function decideRetryPolicy(
       }
       break
     case 'failed':
+      if (closure.reason === 'blocked') return { allowed: false, reason: 'worker returned a blocker to its dispatcher' }
       break
   }
   if (input.runCount >= input.maxRuns) {

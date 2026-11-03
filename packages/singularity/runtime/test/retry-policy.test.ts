@@ -66,3 +66,9 @@ void test('invalid Runs require a pre-listed transient reason; verified and canc
     },
   }, []).allowed, false)
 })
+
+void test('explicit blocked handback ends retries; ordinary unsolved work still retries', () => {
+  assert.ok(base.closure?.source === 'run/closed')
+  assert.equal(decideRetryPolicy({ ...base, closure: { ...base.closure, reason: 'blocked' } }, []).allowed, false)
+  assert.equal(decideRetryPolicy({ ...base, closure: { ...base.closure, reason: 'unsolved' } }, []).allowed, true)
+})

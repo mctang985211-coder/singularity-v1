@@ -68,10 +68,7 @@ export type PlanningSketch = z.infer<typeof planningSketchSchema>
 export const taskFeedbackInputSchema = closedObject({
   kind: z.enum(['needs-replan', 'input-invalid', 'acceptance-concern', 'blocked']),
   summary: z.string(),
-  proposedChanges: z.array(closedObject({
-    field: z.enum(['goal', 'inputs', 'outputs', 'child-purpose', 'order']),
-    suggestion: z.string(),
-  })),
+  replyTo: z.string().optional(),
   refs: z.array(refSchema),
 })
 
@@ -81,7 +78,7 @@ export type TaskFeedbackInput = z.infer<typeof taskFeedbackInputSchema>
 export const taskFeedbackSchema = taskFeedbackInputSchema.extend({
   v: z.literal(1),
   id: z.string(),
-  source: z.enum(['scheduler', 'child-worker']),
+  source: z.enum(['scheduler', 'child-worker', 'parent-worker']),
   sourceTaskId: z.string(),
   sourceRunId: z.string(),
   directParentTaskId: z.string(),
