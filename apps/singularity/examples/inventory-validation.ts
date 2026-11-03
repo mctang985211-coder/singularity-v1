@@ -8,7 +8,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import {
 compareInventory,
 INVENTORY_CASES,INVENTORY_COMPARATOR_ASSET,INVENTORY_PUBLIC_GUIDE,INVENTORY_VERIFIER_ASSET,
-inventoryGuidedBaseline,inventoryMetric,inventoryTaskSpec,inventoryWarehouseTaskSpec,verifyInventory,INVENTORY_RECIPE,INVENTORY_RECIPE_REF,describeInventoryCheck,inventoryCheck,
+inventoryGuidedBaseline,inventoryMetric,inventoryTaskSpec,inventoryWarehouseTaskSpec,verifyInventory,
 } from '@singularity/domain-inventory'
 import type { FactPayloadMap,FactType,GlobalResourceSnapshot,JsonValue,Ref,TaskContract,TaskLimits } from '@singularity/protocol'
 import { admitRootTask,canonicalize,closedObject,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseJsonText,parseProtocolValue,resolveTemplateView,roundPlanSchema,sealMethodRevision,taskCriterionSchema,taskLimitsSchema } from '@singularity/protocol'
@@ -143,8 +143,6 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
   let failure: string | undefined
   const failures: unknown[] = []
   try {
-    await service.putObject(INVENTORY_RECIPE_REF.id, bytes(INVENTORY_RECIPE))
-    const fallbackExample = await service.putObject('inventory:fallback-example', bytes({ goal: inventoryTaskSpec({ id: 'example', digest: INVENTORY_RECIPE_REF.digest }).goal, inputs: [{ id: 'transactions', exampleText: INVENTORY_CASES[0].csv }], localCriteria: [], localOutputs: [{ id: 'report', path: 'report.json', kind: 'file', description: 'Exact inventory report for independent checking.' }], acceptanceChecks: [{ criterionId: 'task-goal', checks: [inventoryCheck()] }] }))
     const provider = await service.putObject('inventory:verifier', bytes(INVENTORY_VERIFIER_ASSET))
     const comparatorRef = await service.putObject('inventory:comparator', bytes(INVENTORY_COMPARATOR_ASSET))
     const baseTool = await service.putObject('base-tool:bash', bytes({ v: 1, name: 'bash' }))
@@ -154,7 +152,7 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
     const snapshotValue: GlobalResourceSnapshot = { v: 1,
       documents: [{ id: 'inventory-guide', description: 'Public CSV reconciliation rules.', object: document },
         { id: 'task-protocol', description: 'Current planning hierarchy, Task schemas and native skill paths; read before inferring protocol rules from errors.', object: protocol }],
-      ...publicResources, baseTools: [baseTool], fallbackExample, fallbackAcceptance: provider, fallbackJoin: 'probe' }
+      ...publicResources, baseTools: [baseTool], fallbackAcceptance: provider, fallbackJoin: 'probe' }
     const snapshot = await freezeGlobalResources(service, 'inventory:global-resources', snapshotValue)
     const seed = await service.putObject('inventory:seed', bytes({ v: 1, seed: 'inventory-2026-10-31' }))
     const options: AgentOptions = { provider: budget.provider, model: budget.model, maxTokens: budget.maxOutputTokens,
@@ -181,7 +179,7 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
         agentOptions: options, base: { v: 1, seed } })
       return executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace, runId, sessionId,
         admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt } },
-        composition, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: { provider, verify: request => verifyInventory(request, service), describeCheck: describeInventoryCheck }, actor,
+        composition, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: { provider, verify: verifyInventory }, actor,
         maxActive: slot?.maxActive ?? budget.maxActive, workspaceRoot: join(root, 'runs'), summaries,
         signal: slot === undefined ? cancellation.signal : AbortSignal.any([cancellation.signal, slot.signal]),
         checkReportedBudget: reported => withinBudget() && (slot?.checkReportedBudget(reported) ?? true),
@@ -189,7 +187,7 @@ export async function runInventoryValidation(root: string, rounds = 1, previousR
         async resolveRun(input) {
           return { composition: await buildSingleRunComposition(spike.ctx, { store: service, id: input.runId,
             contract: input.contract, agentOptions: options, base: { v: 1, seed } }),
-            agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: { provider: input.contract.acceptance, verify: request => verifyInventory(request, service), describeCheck: describeInventoryCheck } }
+            agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: { provider: input.contract.acceptance, verify: verifyInventory } }
         },
       }, service)
     }

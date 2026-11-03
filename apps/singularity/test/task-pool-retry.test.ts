@@ -1,4 +1,3 @@
-import { describeFixtureCheck, fixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -56,7 +55,7 @@ void test('maxActive=2 child retry counts its own descendants, excludes an expen
     }
     const prepare = (bindingId: string) => call('singularity_decompose', { action: 'prepare', bindingId })
     const commit = (bindingIds: readonly string[]) => call('singularity_decompose', { action: 'commit', children: bindingIds.map(bindingId => ({
-      bindingId, ackPreview: preview(request, bindingId), task: { acceptanceChecks: [],
+      bindingId, ackPreview: preview(request, bindingId), task: {
         goal: { summary: 'Produce exact fixture bytes in child.txt.', deliverable: 'child.txt', scope: [], constraints: [] },
         inputs: [], localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Direct frozen result.' }],
       },
@@ -124,7 +123,7 @@ void test('maxActive=2 child retry counts its own descendants, excludes an expen
           { bindingId: 'parallel-work', templateId: leaf.id, brief: 'Produce a parallel supporting result.', join: 'probe' },
         ] }, leaf,
         { ...leaf, id: 'retry-parent', children: [{ bindingId: 'grandchild', templateId: leaf.id, brief: 'Inspect one local subproblem.', join: 'probe' }],
-          requiredCriteria: [{ checks: [fixtureCheck()], id: 'exact-child-bytes', statement: 'Produce the exact fixture bytes.', required: true }] },
+          requiredCriteria: [{ id: 'exact-child-bytes', statement: 'Produce the exact fixture bytes.', required: true }] },
       ] })
       const methodRef = await service.putObject(method.id, jsonBytes(method), 'method')
       const contract = sealTaskContract({ ...contractPayload(original.contract), method: methodRef,
@@ -133,13 +132,13 @@ void test('maxActive=2 child retry counts its own descendants, excludes an expen
         agentOptions: agentOptions(), base: { v: 1, seed: contract.environment.seed } })
       scenario = { ...original, method, contract, composition }
       tasks.set(taskId, contract)
-      const verifier = (task: TaskContract): RunVerifier => ({ describeCheck: describeFixtureCheck, provider: task.acceptance, async verify(request) {
+      const verifier = (task: TaskContract): RunVerifier => ({ provider: task.acceptance, async verify(request) {
         const output = request.outputs[0]
         assert.ok(output)
         assert.equal(new TextDecoder().decode((await request.readObject(output, 'object')).bytes), FROZEN_OUTPUT)
         return sealPublicReceipt({ v: 1, provider: task.acceptance, operationId: request.operationId, contractDigest: task.digest,
           inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-          criteria: await fixtureCriterionResults(request, storeRoot, task.spec.criteria.filter(value => value.required).map(value => ({ id: value.id, verdict: 'pass', reason: 'Exact frozen bytes.' }))),
+          criteria: task.spec.criteria.filter(value => value.required).map(value => ({ id: value.id, verdict: 'pass', reason: 'Exact frozen bytes.' })),
           exit: { code: 0, signal: null }, timedOut: false })
       } })
       const result = await executeTaskTree({ ctx: spike.ctx, journalRoot: storeRoot, workspace, runId, sessionId,

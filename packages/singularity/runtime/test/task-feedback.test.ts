@@ -1,4 +1,3 @@
-import {checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -15,7 +14,7 @@ function contract(taskId: string, parentId?: string): TaskContract {
   return sealTaskContract({
     v: 1,
     taskId,
-    spec: { goal: { summary: 'Local goal', deliverable: 'Result', scope: [], constraints: [] }, criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:checkRecipeRef,params:{}}]}], inputs: [], outputs: [] },
+    spec: { goal: { summary: 'Local goal', deliverable: 'Result', scope: [], constraints: [] }, criteria: [], inputs: [], outputs: [] },
     origin: parentId === undefined ? { kind: 'root', purpose: 'work', requestRef: ref }
       : { kind: 'child', parentId, parentRunId: 'parent-run', batchId: 'batch', bindingId: 'binding' },
     method: ref,

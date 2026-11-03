@@ -252,7 +252,7 @@ void test('rejects unsupported transport, invalid join, unknown fields, and malf
   assert.throws(() => childBindingSchema.parse({ ...childBinding(), join: invalidJoin }))
   assert.throws(() => childBindingSchema.parse(withExtra(childBinding())))
 
-  const criterion: TaskCriterion = {checks: [{checkId: 'criterion-a', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}],
+  const criterion: TaskCriterion = {
     id: 'criterion-a',
     statement: 'The result is traceable.',
     required: true,

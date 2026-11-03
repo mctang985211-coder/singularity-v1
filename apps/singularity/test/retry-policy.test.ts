@@ -1,4 +1,3 @@
-import { describeFixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -50,7 +49,7 @@ void test('one configured host retry policy survives transient invalid retry, Ro
         admission: source.runAdmission, composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
         maxActive: 1, workspaceRoot: join(workspace, 'runs'),
         // The ordinary runner inherits the writer policy; no per-Run list.
-        verifier: { describeCheck: describeFixtureCheck,
+        verifier: {
           provider: source.contract.acceptance,
           async verify(request) {
             const output = request.outputs[0]
@@ -60,7 +59,7 @@ void test('one configured host retry policy survives transient invalid retry, Ro
             return sealPublicReceipt({
               v: 1, provider: source.contract.acceptance, operationId: request.operationId, contractDigest: source.contract.digest,
               inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-              criteria: await fixtureCriterionResults(request, storeRoot, source.contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Fixture byte check.' }))),
+              criteria: source.contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Fixture byte check.' })),
               exit: { code: timedOut ? null : 0, signal: null }, timedOut,
             })
           },

@@ -1,5 +1,7 @@
 import type { GlobalResourceSnapshot,Ref } from '@singularity/protocol'
 import {
+EXPLORE_EXAMPLE,
+EXPLORE_EXAMPLE_REF,
 EXPLORE_GUIDANCE,
 EXPLORE_GUIDANCE_REF,
 canonicalize,
@@ -37,11 +39,12 @@ export async function freezeGlobalResources(writer: CasObjectWriter & CasObjectR
   }
   await readSkills(writer, snapshot, template, snapshot.skills.map(skill => skill.bundle))
   await readMcpServers(writer, snapshot, template, snapshot.tools.map(tool => tool.server.bundle))
-  for (const ref of [...snapshot.documents.map(document => document.object), ...snapshot.baseTools, snapshot.fallbackAcceptance, snapshot.fallbackExample]) {
+  for (const ref of [...snapshot.documents.map(document => document.object), ...snapshot.baseTools, snapshot.fallbackAcceptance]) {
     await writer.readObject(ref, 'object')
   }
   const encoder = new TextEncoder()
   await writer.putObject(EXPLORE_GUIDANCE_REF.id, encoder.encode(canonicalize(EXPLORE_GUIDANCE)), 'object')
+  await writer.putObject(EXPLORE_EXAMPLE_REF.id, encoder.encode(canonicalize(EXPLORE_EXAMPLE)), 'object')
   return writer.putObject(id, encoder.encode(canonicalize(snapshot)), 'object')
 }
 

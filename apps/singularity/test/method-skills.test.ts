@@ -1,4 +1,3 @@
-import { describeFixtureCheck } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { readFileSync,statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
@@ -93,7 +92,7 @@ void test('S4-A2 create discovers the bound Method skill and reads it without to
         composition: scenario.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: { describeCheck: describeFixtureCheck,
+        verifier: {
           provider: scenario.provider,
           verify() { throw new Error('S4-A2 create must not verify without submission') },
         },
@@ -238,7 +237,7 @@ void test('S4-A2 unbound skill dispatch is refused before the DSH skill body', {
       composition: scenario.composition,
       agentOptions: agentOptions(),
       maxOutputBytes: 1024 * 1024,
-      verifier: { describeCheck: describeFixtureCheck,
+      verifier: {
         provider: scenario.provider,
         verify() { throw new Error('unbound skill must not verify') },
       },
@@ -293,7 +292,7 @@ void test('S4-A2 dual-skill discovery keeps template order in NodeView and guard
         composition: scenario.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: { describeCheck: describeFixtureCheck,
+        verifier: {
           provider: scenario.provider,
           verify() { throw new Error('dual skill create must not verify') },
         },

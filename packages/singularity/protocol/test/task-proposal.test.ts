@@ -32,9 +32,9 @@ const goal = {
   constraints: ['treat the RTL as a read-only input', 'cover every input combination'],
 }
 
-const baseProposal: TaskProposal = {acceptanceChecks: [],
+const baseProposal: TaskProposal = {
   goal,
-  localCriteria: [
+  acceptanceCriteria: [
     { id: 'traceable', statement: 'Results should be traceable to this input' },
   ],
   inputs: [
@@ -50,8 +50,8 @@ const baseProposal: TaskProposal = {acceptanceChecks: [],
   ],
 }
 
-function firstLocalCriterion(proposal: TaskProposal) {
-  const first = proposal.localCriteria?.[0]
+function firstAcceptanceCriterion(proposal: TaskProposal) {
+  const first = proposal.acceptanceCriteria?.[0]
   if (first === undefined) throw new Error('expected a local criterion')
   return first
 }
@@ -88,7 +88,7 @@ const forbiddenProposalFields: readonly (readonly [string, unknown])[] = [
   ['supersedesChildIds', ['child-1']],
   ['feedbackRef', ref('feedback-1')],
   ['digest', digestA],
-  ['criteria', [{checks: [{checkId: 'criterion-1', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'criterion-1', statement: 'model-supplied acceptance', required: true }]],
+  ['criteria', [{ id: 'criterion-1', statement: 'model-supplied acceptance', required: true }]],
 ]
 
 const proposalUnknownFields: readonly {
@@ -100,9 +100,9 @@ const proposalUnknownFields: readonly {
     mutate: proposal => { (proposal.goal as unknown as Record<string, unknown>)['unexpected'] = true },
   },
   {
-    label: 'unknown localCriterion field',
+    label: 'unknown acceptanceCriterion field',
     mutate: proposal => {
-      (firstLocalCriterion(proposal) as unknown as Record<string, unknown>)['unexpected'] = true
+      (firstAcceptanceCriterion(proposal) as unknown as Record<string, unknown>)['unexpected'] = true
     },
   },
   {
@@ -126,10 +126,10 @@ const proposalUnknownFields: readonly {
 void test('TaskProposal accepts a complete proposal and a minimal proposal', () => {
   assert.deepEqual(parseProtocolValue(taskProposalSchema, baseProposal), baseProposal)
 
-  const minimal: TaskProposal = {acceptanceChecks: [], goal, inputs: [] }
+  const minimal: TaskProposal = { goal, inputs: [] }
   const parsed = parseProtocolValue(taskProposalSchema, minimal)
   assert.deepEqual(parsed, minimal)
-  assert.equal('localCriteria' in parsed, false)
+  assert.equal('acceptanceCriteria' in parsed, false)
   assert.equal('localOutputs' in parsed, false)
 })
 
@@ -189,9 +189,9 @@ void test('local values keep the frozen value constraints', () => {
 })
 
 void test('TaskExample is derived from TaskProposal with embedded example inputs', () => {
-  const example: TaskExample = {acceptanceChecks: [],
+  const example: TaskExample = {
     goal,
-    localCriteria: baseProposal.localCriteria,
+    acceptanceCriteria: baseProposal.acceptanceCriteria,
     inputs: [
       {
         id: 'rtl-example',
@@ -218,9 +218,9 @@ void test('TaskExample is derived from TaskProposal with embedded example inputs
 })
 
 void test('TaskExample rejects unknown fields, fake refs, and missing example text', () => {
-  const example: TaskExample = {acceptanceChecks: [],
+  const example: TaskExample = {
     goal,
-    localCriteria: baseProposal.localCriteria,
+    acceptanceCriteria: baseProposal.acceptanceCriteria,
     inputs: [{ id: 'rtl-example', exampleText: 'module add4; endmodule' }],
     localOutputs: baseProposal.localOutputs,
   }
@@ -289,7 +289,7 @@ void test('decompose prepare and commit inputs accept their frozen shapes', () =
     action: 'commit',
     children: [
       commitChild,
-      { bindingId: 'second-binding', ackPreview: digestB, task: {acceptanceChecks: [], goal, inputs: [] } },
+      { bindingId: 'second-binding', ackPreview: digestB, task: { goal, inputs: [] } },
     ],
   }
   assert.deepEqual(parseProtocolValue(decomposeInputSchema, ordered), ordered)
@@ -408,7 +408,7 @@ void test('decompose commit accepts only TaskProposal, never a complete TaskCont
       action: 'commit',
       children: [{
         ...commitChild,
-        task: { ...baseProposal, criteria: [{checks: [{checkId: 'c', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'c', statement: 's', required: true }] },
+        task: { ...baseProposal, criteria: [{ id: 'c', statement: 's', required: true }] },
       }],
     }),
   )

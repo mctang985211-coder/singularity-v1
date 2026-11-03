@@ -1,4 +1,3 @@
-import { seedFixtureExample } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -9,18 +8,18 @@ import { canonicalize,parseJsonText,sealTaskContract } from '@singularity/protoc
 import {
 closeRsiRound,
 CommandService,DomainStore,evaluationCaseFromContract,executeRsiProposer,executeSingleRun,freezeEvaluationCase,isSettledRunResult,openRsiRound,
-PROPOSER_PERSONA,WORKER_PERSONA,precheckMethodPatch,readPublicTrace,readTraceAsset,readTracePage,sealPublicTrace,
+precheckMethodPatch,readPublicTrace,readTraceAsset,readTracePage,sealPublicTrace,
 } from '@singularity/runtime'
 
 import { buildSingleRunComposition } from '../src/host-composition.ts'
-import { messageTexts,roleSurfaceDiagnostic,toolSchemaNames } from './fixtures/chat-completions.ts'
+import { messageTexts,toolSchemaNames } from './fixtures/chat-completions.ts'
 import {
 compositionBase,contractPayload,passingVerifier,selfReadAndPlan,submitReply,withHarness,writeOutputReply,
 } from './run-fixture.ts'
 import type { Scenario } from './task-fixture.ts'
 import { ACTOR,agentOptions,fixtureUsage,jsonBytes,makeScenario } from './task-fixture.ts'
 
-void test('C-14 sealed public trace drives an independent scoped DSH proposer and atomic candidate precheck', { timeout: 120_000 }, async t => {
+void test('C-14 sealed public trace drives an independent scoped DSH proposer and atomic candidate precheck', { timeout: 120_000 }, async () => {
   let scenario: Scenario | undefined
   let nextScenario: Scenario | undefined
   let patch: MethodPatch | undefined
@@ -35,11 +34,6 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
     if (index === 11) return submitReply()
     assert.deepEqual(toolSchemaNames(request).sort(), ['rsi_read', 'rsi_submit_patch'])
     if (index === 4) {
-      const systemText = messageTexts(request).join('\n')
-      assert.ok(systemText.includes(PROPOSER_PERSONA))
-      assert.equal(systemText.includes(WORKER_PERSONA), false)
-      assert.equal(systemText.includes('helpful software engineer assistant'), false)
-      t.diagnostic(roleSurfaceDiagnostic('proposer', request, PROPOSER_PERSONA))
       assert.equal(messageTexts(request).some(text => text.includes('You execute one Singularity Task as one level')), false)
       assert.match(messageTexts(request).filter(text => text.includes('"proposer":')).join('\n'), /"tokens":100/, 'an in-flight request must not hide the remaining reported-token budget')
       const context = messageTexts(request).filter(text => text.includes('"proposer":')).join('\n')
@@ -83,7 +77,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       const snapshot = await sourceStore.putObject('resources:s5-global', jsonBytes({
         v: 1, documents: [{ id: 'document:s5-public', description: 'A public source document.', object: document }],
         skills: [], tools: [], baseTools: scenario.contract.resources.baseTools,
-        fallbackAcceptance: scenario.provider, fallbackJoin: 'probe', fallbackExample: await seedFixtureExample(sourceStore),
+        fallbackAcceptance: scenario.provider, fallbackJoin: 'probe',
       }))
       const contract = sealTaskContract({ ...contractPayload(scenario.contract), resources: { ...scenario.contract.resources, exploration: snapshot } })
       const composition = await buildSingleRunComposition(spike.ctx, {
@@ -146,7 +140,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
           } } },
           { op: 'put-template', template: {
             ...template, guidance: 'Read the criteria, produce the output and check it with the bound review skill.',
-            example: { acceptanceChecks: [], goal: { summary: 'Produce result.txt with the requested content.', deliverable: 'result.txt', scope: ['Write the requested text.'], constraints: ['Use the declared output path.'] }, inputs: [{ id: 'request', exampleText: 'Write the requested text.' }] },
+            example: { goal: { summary: 'Produce result.txt with the requested content.', deliverable: 'result.txt', scope: ['Write the requested text.'], constraints: ['Use the declared output path.'] }, inputs: [{ id: 'request', exampleText: 'Write the requested text.' }] },
             skills: ['skill:s5-review'],
           } },
         ], predictedRisks: ['Review may add cost.'], transferPlan: 'Measure against the frozen paired cases.',

@@ -1,4 +1,3 @@
-import {putCheckAssets,describeCheck,preparedChecks,checkRecipeRef,checkPolicyRef,withCheckReports} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtemp,rm,writeFile } from 'node:fs/promises'
@@ -12,11 +11,10 @@ import type { ToolDefinition,ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 import type {
 PublicReceipt,
-PublicCheckReport,
 Ref,
 TaskContract,
 } from '@singularity/protocol'
-import { canonicalize, parseJsonText, publicCheckReportSchema, sealPublicCheckReport, sealPublicReceipt,sealTaskContract } from '@singularity/protocol'
+import { sealPublicReceipt,sealTaskContract } from '@singularity/protocol'
 
 import type { DecomposeCommitResult } from '../src/decompose-commit.ts'
 import { initialContextEpoch } from '../src/epoch.ts'
@@ -44,7 +42,7 @@ function makeContract(constraints: string[] = []): TaskContract {
         scope: [],
         constraints,
       },
-      criteria: [{checks: [{checkId: 'crit', recipeRef: checkRecipeRef,params:{}}], id: 'crit', statement: 'must pass', required: true }],
+      criteria: [{ id: 'crit', statement: 'must pass', required: true }],
       inputs: [{ id: 'input', object: { id: 'input', digest: digestA }, path: 'in.txt', access: 'read' }],
       outputs: [
         { id: 'out', path: 'out.txt', kind: 'file', role: 'deliverable', required: true },
@@ -54,7 +52,7 @@ function makeContract(constraints: string[] = []): TaskContract {
     method: { id: 'method', digest: digestB },
     template: { id: 'template', digest: digestB },
     resources: { baseTools: [], skills: [], mcpServers: [] },
-    acceptance: checkPolicyRef,
+    acceptance: { id: 'acceptance', digest: digestA },
     environment: {
       seed: { id: 'seed', digest: digestA },
       profile: { id: 'profile', digest: digestB },
@@ -71,8 +69,7 @@ function makeContract(constraints: string[] = []): TaskContract {
   })
 }
 
-async function receipt(
-  store: DomainStore,
+function receipt(
   contract: TaskContract,
   provider: Ref,
   overrides: Partial<{
@@ -83,8 +80,8 @@ async function receipt(
     inputDigest: string
     outputDigest: string
   }> = {},
-): Promise<PublicReceipt> {
-  const result = sealPublicReceipt({
+): PublicReceipt {
+  return sealPublicReceipt({
     v: 1,
     provider,
     operationId: 'run-verify:verify',
@@ -92,7 +89,7 @@ async function receipt(
     inputDigests: [overrides.inputDigest ?? digestA],
     outputDigests: [overrides.outputDigest ?? digestB],
     criteria: [
-      {checks: [],
+      {
         id: 'crit',
         verdict: overrides.verdict ?? 'pass',
         reason: 'public criterion reason',
@@ -104,16 +101,12 @@ async function receipt(
     },
     timedOut: overrides.timedOut ?? false,
   })
-  const payload: Partial<PublicReceipt> = { ...result }
-  delete payload.digest
-  return sealPublicReceipt({...payload,criteria:await withCheckReports(store,contract,result)})
 }
 
 async function withStore<T>(operation: (store: DomainStore) => Promise<T>): Promise<T> {
   const root = await mkdtemp(join(tmpdir(), 'singularity-verify-store-'))
   const store = await DomainStore.open({ root })
   try {
-    await putCheckAssets(store)
     return await operation(store)
   } finally {
     await store.close()
@@ -148,7 +141,7 @@ void test('verifier deadline cancels native domain work and waits for process cl
     let closed = false
     const result = await run(store, {
       contract, outputRef,
-      verifier: {describeCheck, provider: contract.acceptance, verify: request => new Promise((_resolve, reject) => {
+      verifier: { provider: contract.acceptance, verify: request => new Promise((_resolve, reject) => {
         const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'],
           { signal: request.signal, stdio: 'ignore' })
         let failure: Error | undefined
@@ -172,11 +165,11 @@ void test('host rejects receipts returned at the deadline', async () => {
     let now = contract.limits.deadlineAt - 1
     const result = await run(store, {
         contract, outputRef,
-        verifier: {describeCheck,
+        verifier: {
           provider: contract.acceptance,
           verify() {
             now = contract.limits.deadlineAt
-            return Promise.resolve(receipt(store, contract, contract.acceptance, { outputDigest: outputRef.digest }))
+            return Promise.resolve(receipt(contract, contract.acceptance, { outputDigest: outputRef.digest }))
           },
         },
       }, () => now)
@@ -191,7 +184,7 @@ void test('an upstream TimeoutError is a host failure, not the verifier deadline
     const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'))
     const failure = new DOMException('upstream request timed out', 'TimeoutError')
     await assert.rejects(run(store, { contract, outputRef,
-      verifier: {describeCheck, provider: contract.acceptance, verify: () => Promise.reject(failure) },
+      verifier: { provider: contract.acceptance, verify: () => Promise.reject(failure) },
     }), error => error === failure)
   })
 })
@@ -206,13 +199,13 @@ void test('host classifies verified and failed receipts and writes the receipt t
     const verified = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
         async verify(request: VerifierRequest) {
           assert.equal(request.operationId, 'run-verify:verify')
           const { bytes } = await request.readObject(outputRef, 'object')
           readBack = new TextDecoder().decode(bytes)
-          return receipt(store, contract, provider, { outputDigest: outputRef.digest })
+          return receipt(contract, provider, { outputDigest: outputRef.digest })
         },
       },
     })
@@ -225,9 +218,9 @@ void test('host classifies verified and failed receipts and writes the receipt t
     const failed = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
-        verify: () => Promise.resolve(receipt(store, contract, provider, {
+        verify: () => Promise.resolve(receipt(contract, provider, {
           verdict: 'fail',
           code: 0,
           outputDigest: outputRef.digest,
@@ -247,10 +240,10 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
     const selfVerdict = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
-        verify: async () => ({
-          ...await receipt(store, contract, provider),
+        verify: () => Promise.resolve({
+          ...receipt(contract, provider),
           verdict: 'verified',
         }),
       },
@@ -260,9 +253,9 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
     const timedOut = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
-        verify: () => Promise.resolve(receipt(store, contract, provider, {
+        verify: () => Promise.resolve(receipt(contract, provider, {
           timedOut: true,
           code: null,
         })),
@@ -274,9 +267,9 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
     const signalled = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
-        verify: () => Promise.resolve(receipt(store, contract, provider, {
+        verify: () => Promise.resolve(receipt(contract, provider, {
           code: null,
           signal: 'SIGKILL',
         })),
@@ -288,9 +281,9 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
     const wrongProvider = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
-        verify: () => Promise.resolve(receipt(store, contract, { id: 'other-provider', digest: digestB })),
+        verify: () => Promise.resolve(receipt(contract, { id: 'other-provider', digest: digestB })),
       },
     })
     assert.equal(wrongProvider.verdict, 'invalid')
@@ -298,9 +291,9 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
     const wrongDigest = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
-        verify: () => Promise.resolve(receipt(store, contract, provider, {
+        verify: () => Promise.resolve(receipt(contract, provider, {
           outputDigest: digestA,
         })),
       },
@@ -310,16 +303,16 @@ void test('verifier self-reported verdict, timeout, signal, and identity mismatc
     const allPassExitOne = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
-        verify: () => Promise.resolve(receipt(store, contract, provider, { code: 1 })),
+        verify: () => Promise.resolve(receipt(contract, provider, { code: 1 })),
       },
     })
     assert.equal(allPassExitOne.verdict, 'invalid')
 
     const hostFailure = new Error('infrastructure down')
     await assert.rejects(run(store, { contract, outputRef,
-      verifier: {describeCheck, provider, verify: () => Promise.reject(hostFailure) },
+      verifier: { provider, verify: () => Promise.reject(hostFailure) },
     }), error => error === hostFailure)
   })
 })
@@ -332,9 +325,9 @@ void test('timeout reason is stable for transient retry policy matching', async 
     const result = await run(store, {
       contract,
       outputRef,
-      verifier: {describeCheck,
+      verifier: {
         provider,
-        verify: () => Promise.resolve(receipt(store, contract, provider, { timedOut: true, code: null })),
+        verify: () => Promise.resolve(receipt(contract, provider, { timedOut: true, code: null })),
       },
     })
     if (result.verdict !== 'invalid') assert.fail('expected invalid timeout')
@@ -355,52 +348,16 @@ void test('frozen acceptance rejects a substituted verifier before it receives C
       await assert.rejects(run(store, {
         contract,
         outputRef,
-        verifier: {describeCheck,
+        verifier: {
           provider,
           verify() {
             called = true
-            return Promise.resolve(receipt(store, contract, provider, { outputDigest: outputRef.digest }))
+            return Promise.resolve(receipt(contract, provider, { outputDigest: outputRef.digest }))
           },
         },
       }), { code: 'COMPOSITION_MISMATCH' })
       assert.equal(called, false)
     }
-  })
-})
-
-void test('independent check reports bind every receipt identity and invalid public reports never become valid receipts', async () => {
-  await withStore(async store => {
-    const contract = makeContract()
-    const outputRef = await store.putObject('output', new TextEncoder().encode('out!!'))
-    const valid = await receipt(store, contract, contract.acceptance, { outputDigest: outputRef.digest })
-    const check = valid.criteria[0].checks[0]
-    const original = publicCheckReportSchema.parse(parseJsonText(new TextDecoder().decode((await store.readObject(check.reportRef, 'object')).bytes)))
-    const reportBody: Partial<PublicCheckReport> = { ...original }
-    delete reportBody.digest
-    const receiptBody: Partial<PublicReceipt> = { ...valid }
-    delete receiptBody.digest
-    const mutations = [
-      { operationId: 'other-run:verify' }, { contractDigest: digestB }, { criterionId: 'other' }, { checkId: 'other' },
-      { recipeRef: { ...original.recipeRef, id: 'untrusted-recipe' } }, { inputDigests: [] }, { outputDigests: [] },
-      { verdict: 'fail' }, { timedOut: true }, { exit: { code: 1, signal: null } }, { data: { fixture: 'wrong type' } },
-    ]
-    for (const [index, mutation] of mutations.entries()) {
-      const report = sealPublicCheckReport({ ...reportBody, ...mutation })
-      const reportRef = await store.putObject(`tampered-report:${String(index)}`, new TextEncoder().encode(canonicalize(report)))
-      const result = await run(store, { contract, outputRef, verifier: { provider: contract.acceptance, describeCheck,
-        verify: () => Promise.resolve(sealPublicReceipt({ ...receiptBody,
-          criteria: [{ ...valid.criteria[0], checks: [{ ...check, reportRef }] }] })) } })
-      assert.equal(result.verdict, 'invalid', JSON.stringify(mutation))
-    }
-    const reportRef = await store.putObject('malformed-report', new TextEncoder().encode(canonicalize({ unrelated: true })))
-    const malformed = sealPublicReceipt({ ...receiptBody, criteria: [{ ...valid.criteria[0], checks: [{ ...check, reportRef }] }] })
-    assert.equal((await run(store, { contract, outputRef, verifier: { provider: contract.acceptance, describeCheck,
-      verify: () => Promise.resolve(malformed) } })).verdict, 'invalid')
-    const failure = new Error('report CAS storage unavailable')
-    await assert.rejects(verifyRunSubmission({ contract, runId: 'run-verify', inputs: [{ id: 'input', digest: digestA }],
-      outputs: [outputRef], verifier: { provider: contract.acceptance, describeCheck, verify: () => Promise.resolve(valid) },
-      writer: store, reader: { readObject: (ref, domain) => ref.id === check.reportRef.id
-        ? Promise.reject(failure) : store.readObject(ref, domain) } }, () => 0), error => error === failure)
   })
 })
 
@@ -420,7 +377,7 @@ void test('skill dispatch is denied after stop and after submission', async () =
       })
       const setup = () => {
         const definitions = new Map<string, ToolDefinition>()
-        const controller = new RunToolController({acceptanceChecks:preparedChecks,
+        const controller = new RunToolController({
           contract,
           runId: 'skill-guard-run',
           sessionId: 'skill-guard-session',
@@ -519,7 +476,7 @@ void test('MCP dispatch guard admits only frozen public tools/resources and keep
         deferContext() {}, concludeTurn() {},
       })
       const definitions = new Map<string, ToolDefinition>()
-      const controller = new RunToolController({acceptanceChecks:preparedChecks,
+      const controller = new RunToolController({
         contract,
         runId: 'mcp-guard-run',
         sessionId: 'mcp-guard-session',
@@ -592,7 +549,7 @@ void test('MCP dispatch guard admits only frozen public tools/resources and keep
 
       await writeFile(join(workspace, 'out.txt'), 'x', 'utf8')
       const submittedDefinitions = new Map<string, ToolDefinition>()
-      const submittedController = new RunToolController({acceptanceChecks:preparedChecks,
+      const submittedController = new RunToolController({
         contract,
         runId: 'mcp-guard-run',
         sessionId: 'mcp-guard-session',
@@ -661,7 +618,7 @@ void test('tool dispatch uses the exact host budget check while preserving read 
     const contextEpoch = initialContextEpoch('session-guard')
     const definitions = new Map<string, ToolDefinition>()
     let allowed = true
-    const controller = new RunToolController({acceptanceChecks:preparedChecks,
+    const controller = new RunToolController({
       contract,
       runId: 'run-guard',
       sessionId: 'session-guard',
@@ -772,7 +729,7 @@ void test('S4-B1/B2 registers decompose for empty child bindings and accepts dup
       mcpServers: [],
     } as unknown as FrozenMethodResources
 
-    const noChild = new RunToolController({acceptanceChecks:preparedChecks,
+    const noChild = new RunToolController({
       contract,
       runId: 'b1-no-child-run',
       sessionId: 'b1-guard-session',
@@ -780,7 +737,7 @@ void test('S4-B1/B2 registers decompose for empty child bindings and accepts dup
       skillNames: [],
       mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
       childBindingIds: [],
-      decompose: {describeCheck, methodResources: resources, reader: store },
+      decompose: { methodResources: resources, reader: store },
       writer: store,
       maxOutputBytes: 1024,
       clock: () => 1000,
@@ -802,7 +759,7 @@ void test('S4-B1/B2 registers decompose for empty child bindings and accepts dup
       /BINDING_FIXED/,
     )
 
-    const planner = new RunToolController({acceptanceChecks:preparedChecks,
+    const planner = new RunToolController({
       contract,
       runId: 'b1-plan-run',
       sessionId: 'b1-guard-session',
@@ -874,7 +831,7 @@ void test('S4-B1 prepare is gated by self read and the current PlanningSketch', 
       mcpServers: [],
     } as unknown as FrozenMethodResources
     const definitions = new Map<string, ToolDefinition>()
-    const controller = new RunToolController({acceptanceChecks:preparedChecks,
+    const controller = new RunToolController({
       contract,
       runId: 'b1-gate-run',
       sessionId: 'b1-gate-session',
@@ -882,7 +839,7 @@ void test('S4-B1 prepare is gated by self read and the current PlanningSketch', 
       skillNames: [],
       mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
       childBindingIds: ['b1'],
-      decompose: {describeCheck, methodResources: resources, reader: store },
+      decompose: { methodResources: resources, reader: store },
       writer: store,
       maxOutputBytes: 1024,
       clock: () => 1000,
@@ -957,14 +914,14 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
       skills: [],
       mcpServers: [],
     } as unknown as FrozenMethodResources
-    const task = {acceptanceChecks: [],
+    const task = {
       goal: {
         summary: 'Inspect the authorized sample.',
         deliverable: 'One result.',
         scope: ['child'],
         constraints: [],
       },
-      localCriteria: [{ id: 'local', statement: 'Record the result.' }],
+      acceptanceCriteria: [{ id: 'local', statement: 'Record the result.' }],
       inputs: [],
       localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
     }
@@ -981,7 +938,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
       deliveryReceiptRefs: [],
       fact: {} as never,
     }
-    const controller = new RunToolController({acceptanceChecks:preparedChecks,
+    const controller = new RunToolController({
       contract,
       runId: 'run-s4b2-guard',
       sessionId,
@@ -989,7 +946,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
       skillNames: [],
       mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
       childBindingIds: ['b1'],
-      decompose: {describeCheck, methodResources: resources, reader: store },
+      decompose: { methodResources: resources, reader: store },
       writer: store,
       maxOutputBytes: 1024,
       clock: () => 1000,
@@ -1084,7 +1041,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
     )
     assert.equal(calls.length, 1)
 
-    const retryController = new RunToolController({acceptanceChecks:preparedChecks,
+    const retryController = new RunToolController({
       contract,
       runId: 'run-s4b2-retry',
       sessionId,
@@ -1092,7 +1049,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
       skillNames: [],
       mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
       childBindingIds: ['b1'],
-      decompose: {describeCheck, methodResources: resources, reader: store },
+      decompose: { methodResources: resources, reader: store },
       writer: store,
       maxOutputBytes: 1024,
       clock: () => 1000,
@@ -1134,7 +1091,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
     )
     assert.equal(codeOf(retryController.checkGuard(execution('singularity_decompose', commitArgs))), undefined)
 
-    const activeController = new RunToolController({acceptanceChecks:preparedChecks,
+    const activeController = new RunToolController({
       contract,
       runId: 'run-s4b2-active',
       sessionId,
@@ -1143,7 +1100,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
       mcpPlan: { serverNames: [], publicToolNames: [], resourceToolNames: [] },
       childBindingIds: ['b1'],
       childBatchActive: true,
-      decompose: {describeCheck, methodResources: resources, reader: store },
+      decompose: { methodResources: resources, reader: store },
       writer: store,
       maxOutputBytes: 1024,
       clock: () => 1000,

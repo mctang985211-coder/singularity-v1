@@ -5,7 +5,6 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import type { Ref } from '@singularity/protocol'
-import { inventoryCheck } from '@singularity/domain-inventory'
 import { DomainStore } from '@singularity/runtime'
 
 import { runInventoryValidation } from '../examples/inventory-validation.ts'
@@ -36,9 +35,9 @@ void test('example runs empty Method, evolves native skill/MCP bindings, evaluat
         hypothesis: 'Replace repeated exploratory reads with one reusable direct calculation.', predictedRisks: [], transferPlan: 'All signed CSV cases.',
         changes: [{ op: 'put-template', template: { id: 'inventory-compact-entry', brief: 'Compute and check the declared inventory report.',
           guidance: `Read self, plan, calculate the signed totals and row count from every declared CSV, write report.json and submit.${texts.includes('"roundId":"inventory:round:2"') ? ' Check zero totals before submission.' : ''}`,
-          example: { acceptanceChecks: [], goal: { summary: 'Reconcile a CSV.', deliverable: 'report.json', scope: [], constraints: [] },
-            inputs: [{ id: 'transactions', exampleText: 'sku,delta\nA,1\n' }], localCriteria: [], localOutputs: [] },
-          instanceSchema: {}, requiredCriteria: [{ checks: [inventoryCheck()], id: 'inventory-exact', statement: 'Exact signed inventory totals.', required: true }],
+          example: { goal: { summary: 'Reconcile a CSV.', deliverable: 'report.json', scope: [], constraints: [] },
+            inputs: [{ id: 'transactions', exampleText: 'sku,delta\nA,1\n' }], acceptanceCriteria: [], localOutputs: [] },
+          instanceSchema: {}, requiredCriteria: [{ id: 'inventory-exact', statement: 'Exact signed inventory totals.', required: true }],
           requiredOutputs: [{ id: 'report', path: 'report.json', kind: 'file', role: 'deliverable', required: true }],
           acceptancePolicy: provider, children: [], skills: ['inventory-review'], tools: ['inventory-bound-mcp'] } },
           { op: 'put-skill', skill: { id: 'inventory-review', name: 'inventory-review', description: 'Review exact inventory reports.',

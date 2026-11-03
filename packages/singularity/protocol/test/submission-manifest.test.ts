@@ -52,7 +52,7 @@ function contractWith(outputs: TaskContractPayload['spec']['outputs']): TaskCont
         scope: ['submission'],
         constraints: ['strict output order'],
       },
-      criteria: [{checks: [{checkId: 'criterion-1', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'criterion-1', statement: 'The result is public', required: true }],
+      criteria: [{ id: 'criterion-1', statement: 'The result is public', required: true }],
       inputs: [],
       outputs,
     },

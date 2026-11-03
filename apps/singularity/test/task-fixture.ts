@@ -1,4 +1,3 @@
-import { fixtureCheck, fixturePolicyFields, seedFixtureRecipe } from './check-fixture.ts'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import assert from 'node:assert/strict'
@@ -64,7 +63,6 @@ export type ScriptedReply = FixtureReply
 export type ReplyScript = ChatCompletionReplyScript
 
 export interface Scenario {
-  readonly storeRoot: string
   readonly runAdmission: SingleRunAdmission
   readonly contract: TaskContract
   readonly method: MethodRevision
@@ -267,7 +265,6 @@ export async function makeScenario(
 ): Promise<Scenario> {
   const store = await DomainStore.open({ root: storeRoot })
   try {
-    await seedFixtureRecipe(store)
     const skillAssets: SkillAsset[] = []
     const skillBundles: Ref[] = []
     for (const skill of options.skills ?? []) {
@@ -297,19 +294,15 @@ export async function makeScenario(
         v: 1,
         text: options.otherGuidanceText,
       })
-    const example = await seedObject(store, 'example:s3c', {
-      goal: { summary: 'Write the requested exact bytes.', deliverable: OUTPUT_PATH, scope: [], constraints: [] },
-      inputs: [], acceptanceChecks: [], localCriteria: [], localOutputs: [],
-    } satisfies TaskExample)
+    const example = await seedObject(store, 'example:s3c', { v: 1, goal: 'fixture example' })
     const childExample = options.childBinding === undefined
       ? undefined
       : await seedObject(store, 'example:s3c-child', options.childBinding.example)
-    const acceptancePolicy = await seedObject(store, 'acceptance-policy:s3c', { v: 1, kind: 'fixture-policy', ...fixturePolicyFields })
+    const acceptancePolicy = await seedObject(store, 'acceptance-policy:s3c', { v: 1, kind: 'fixture-policy' })
     const verifierObject = seal('object', {
       v: 1,
       kind: 'verifier-identity',
       name: PROVIDER_ID,
-      ...fixturePolicyFields,
     })
     await store.putObject(PROVIDER_ID, jsonBytes(verifierObject), 'object')
     const provider: Ref = { id: PROVIDER_ID, digest: verifierObject.digest }
@@ -320,7 +313,7 @@ export async function makeScenario(
       guidance,
       example,
       instanceSchema: {},
-      requiredCriteria: [{ id: CRITERION_ID, statement: 'The declared output has the exact requested bytes.', required: true, checks: [fixtureCheck()] }],
+      requiredCriteria: [],
       requiredOutputs: [],
       acceptancePolicy,
       skills: skillAssets.map(skill => skill.id),
@@ -352,7 +345,7 @@ export async function makeScenario(
         guidance,
         example: childExample,
         instanceSchema: {},
-        requiredCriteria: [{ id: CRITERION_ID, statement: 'The declared output has the exact requested bytes.', required: true, checks: [fixtureCheck()] }],
+        requiredCriteria: [],
         requiredOutputs: [],
         acceptancePolicy,
         skills: skillAssets.map(skill => skill.id),
@@ -393,7 +386,7 @@ export async function makeScenario(
             `${OUTPUT_PATH} must contain exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline`,
           ],
         },
-        criteria: [{ checks: [fixtureCheck()],
+        criteria: [{
           id: CRITERION_ID,
           statement: `The declared output ${OUTPUT_PATH} exists and contains exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline.`,
           required: true,
@@ -456,7 +449,7 @@ export async function makeScenario(
       workspaceSeedBytes: jsonBytes({ v: 1, seed: 's3c-seed' }),
     }
 
-    return { runAdmission, contract, method, composition, provider, storeRoot }
+    return { runAdmission, contract, method, composition, provider }
   } finally {
     await store.close()
   }

@@ -45,9 +45,4 @@ export { taskProtocolReference } from './task-tool-schema.ts'
 export { withToolExample } from './tool-example.ts'
 export * from './trace.ts'
 
-export { compareBundlePath,readTreeBundle,sealTreeManifest } from './resource-bundle.ts'
-
-export { createSkillResourceRoot,materializeSkills,registerSkills,removeSkillResourceRoot } from './agent-skills.ts'
-export type { FrozenSkillResource } from './skill-resources.ts'
-export * from './checks.ts'
-export { readSkills } from './skill-resources.ts'
+export { readTreeBundle } from './resource-bundle.ts'

@@ -1,4 +1,3 @@
-import {checkPolicy,putCheckAssets,describeCheck,checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp,readdir,rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -106,14 +105,14 @@ function statusCall(seq: number, turn: number, step: number, callId: string): Fa
 }
 
 function exampleBody(marker = 'complete example'): Record<string, unknown> {
-  return {acceptanceChecks: [],
+  return {
     goal: {
       summary: `Use the ${marker} and return one result.`,
       deliverable: 'One result.',
       scope: ['sample'],
       constraints: ['Read-only sample.'],
     },
-    localCriteria: [{ id: 'local', statement: 'Record the sample.' }],
+    acceptanceCriteria: [{ id: 'local', statement: 'Record the sample.' }],
     inputs: [{ id: 'sample', exampleText: 'sample text' }],
     localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
   }
@@ -131,21 +130,20 @@ async function makeFixture(
   options: { readonly example?: Record<string, unknown> } = {},
 ): Promise<Fixture> {
   const store = await DomainStore.open({ root })
-  await putCheckAssets(store)
   const guidance = await store.putObject('guidance', bytes({ v: 1, text: 'Follow the frozen guidance.' }), 'object')
   const example = await store.putObject(
     'child-example',
     bytes(options.example ?? exampleBody()),
     'object',
   )
-  const acceptance = await store.putObject('acceptance', bytes({ v: 1, kind: 'fixture-policy', ...checkPolicy }), 'object')
+  const acceptance = await store.putObject('acceptance', bytes({ v: 1, kind: 'fixture-policy' }), 'object')
   const childTemplate: TaskTemplate = {
     id: 'template-child',
     brief: 'Inspect the sample.',
     guidance,
     example,
     instanceSchema: {},
-    requiredCriteria: [{id:'task-goal',statement:'Check the sample.',required:true,checks:[{checkId:'sample',recipeRef:checkRecipeRef,params:{}}]}],
+    requiredCriteria: [],
     requiredOutputs: [],
     acceptancePolicy: acceptance,
     skills: [],
@@ -204,10 +202,7 @@ void test('S4-B1 prepare returns the frozen example and writes preview plus obje
     const session = fakeSession([prepareCall(0, 1, 1, 'prepare-1')], [])
     const budget = { tokensPct: 90, stepsPct: 90, wallClockPct: 90, depthPct: 100, taskSlotsPct: 100 }
     const before = await objectCount(join(root, 'objects'))
-    const result = await prepareDecompose({describeCheck: request => {
-      assert.deepEqual(request.spec.inputs, [{ path: 'samples/sample' }])
-      return describeCheck(request)
-    },
+    const result = await prepareDecompose({
       contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -224,7 +219,7 @@ void test('S4-B1 prepare returns the frozen example and writes preview plus obje
     assert.equal(result.response.status, 'preview')
     assert.equal(result.response.join, 'probe')
     assert.equal(result.response.example.goal.summary.includes('complete example'), true)
-    assert.equal(result.response.interface.requiredCriteria.length, 1)
+    assert.equal(result.response.interface.requiredCriteria.length, 0)
     assert.equal(result.response.resolved.skills.length, 0)
     assert.equal(result.response.resolved.mcpServers.length, 0)
     assert.equal(await objectCount(join(root, 'objects')), before + 2)
@@ -238,7 +233,7 @@ void test('S4-B1 prepare returns the frozen example and writes preview plus obje
 
 void test('S4-B1 repeated prepare keeps the preview content ref and creates a new delivery receipt', async () => {
   await withFixture(async ({ store, contract, resources }) => {
-    const base = {describeCheck,
+    const base = {
       contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -268,7 +263,7 @@ void test('S4-B1 repeated prepare keeps the preview content ref and creates a ne
 
 void test('S4-B1 rejects unknown binding, oversized example, and malformed example without CAS writes', async () => {
   await withFixture(async ({ store, contract, resources }, root) => {
-    const base = {describeCheck,
+    const base = {
       contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -293,7 +288,7 @@ void test('S4-B1 rejects unknown binding, oversized example, and malformed examp
   const hugeStore = await makeFixture(hugeRoot, { example: exampleBody('x'.repeat(13 * 1024)) })
   try {
     const before = await objectCount(join(hugeRoot, 'objects'))
-    await assert.rejects(prepareDecompose({describeCheck,
+    await assert.rejects(prepareDecompose({
       contract: hugeStore.contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -318,7 +313,7 @@ void test('S4-B1 rejects unknown binding, oversized example, and malformed examp
 
 void test('S4-B1 status reader distinguishes current, same-step, stale, and identity failures', async () => {
   await withFixture(async ({ store, contract, resources }) => {
-    const base = {describeCheck,
+    const base = {
       contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -446,7 +441,7 @@ void test('S4-B1 example cap accepts 12288 bytes and rejects 12289 without CAS w
   const okStore = await makeFixture(okRoot, { example: makeAt(target) })
   try {
     const before = await objectCount(join(okRoot, 'objects'))
-    await prepareDecompose({describeCheck,
+    await prepareDecompose({
       contract: okStore.contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -470,7 +465,7 @@ void test('S4-B1 example cap accepts 12288 bytes and rejects 12289 without CAS w
   const overStore = await makeFixture(overRoot, { example: makeAt(target + 1) })
   try {
     const before = await objectCount(join(overRoot, 'objects'))
-    await assert.rejects(prepareDecompose({describeCheck,
+    await assert.rejects(prepareDecompose({
       contract: overStore.contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -506,7 +501,7 @@ void test('S4-B1 prepare result cap rejects an oversized brief before CAS writes
       },
     }
     const before = await objectCount(join(root, 'objects'))
-    await assert.rejects(prepareDecompose({describeCheck,
+    await assert.rejects(prepareDecompose({
       contract: fixture.contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -541,7 +536,7 @@ void test('S4-B1 rejects duplicate binding ids on the parent template', async ()
       },
     }
     const before = await objectCount(join(root, 'objects'))
-    await assert.rejects(prepareDecompose({describeCheck,
+    await assert.rejects(prepareDecompose({
       contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -562,7 +557,7 @@ void test('S4-B1 rejects duplicate binding ids on the parent template', async ()
 
 void test('S4-B1 failed or replacement tool results never become current prepare deliveries', async () => {
   await withFixture(async ({ store, contract, resources }) => {
-    const prepared = await prepareDecompose({describeCheck,
+    const prepared = await prepareDecompose({
       contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -613,7 +608,7 @@ void test('S4-B1 prepare result accepts exactly 32768 bytes and rejects oversize
     const prepare = async (brief: string, callId: string) => {
       const binding = resources.template.children[0]
       assert.ok(binding)
-      return prepareDecompose({describeCheck,
+      return prepareDecompose({
         contract,
         runId: 'run-1',
         sessionId: 'session-s4b1',
@@ -665,7 +660,7 @@ void test('S4-B1 missing, non-UTF8, unknown-field, and malformed examples fail c
     example: { ...exampleBody(), unexpected: true },
   })
   try {
-    await assert.rejects(prepareDecompose({describeCheck,
+    await assert.rejects(prepareDecompose({
       contract: unknownFixture.contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',
@@ -698,7 +693,7 @@ void test('S4-B1 missing, non-UTF8, unknown-field, and malformed examples fail c
             template.id === 'template-child' ? { ...template, example: exampleRef } : template),
         },
       }
-      await assert.rejects(prepareDecompose({describeCheck,
+      await assert.rejects(prepareDecompose({
         contract: rawFixture.contract,
         runId: 'run-1',
         sessionId: 'session-s4b1',
@@ -721,7 +716,7 @@ void test('S4-B1 missing, non-UTF8, unknown-field, and malformed examples fail c
 
 void test('S4-B1 result identity, duplicates, and payload tampering are rejected', async () => {
   await withFixture(async ({ store, contract, resources }) => {
-    const prepared = await prepareDecompose({describeCheck,
+    const prepared = await prepareDecompose({
       contract,
       runId: 'run-1',
       sessionId: 'session-s4b1',

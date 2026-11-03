@@ -46,8 +46,8 @@ const rootBody: TaskContractPayload = {
   spec: {
     goal,
     criteria: [
-      {checks: [{checkId: 'contract-sealed', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'contract-sealed', statement: 'The contract is sealed under the contract domain', required: true },
-      {checks: [{checkId: 'proposal-rejected', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'proposal-rejected', statement: 'Model-supplied binding fields are rejected', required: false },
+      { id: 'contract-sealed', statement: 'The contract is sealed under the contract domain', required: true },
+      { id: 'proposal-rejected', statement: 'Model-supplied binding fields are rejected', required: false },
     ],
     localGuidance: [{ id: 'local-trace', statement: 'Keep local notes traceable to this task' }],
     inputs: [
@@ -140,7 +140,7 @@ const tamperings: readonly Tampering[] = [
   { label: 'spec.goal.constraints[0]', mutate: body => { body.spec.goal.constraints[0] = 'changed constraint' } },
   { label: 'spec.criteria[0].id', mutate: body => { body.spec.criteria[0].id = 'changed-criterion' } },
   { label: 'spec.criteria[0].statement', mutate: body => { body.spec.criteria[0].statement += ' changed' } },
-  { label: 'spec.criteria[1].required', mutate: body => { body.spec.criteria[1].required = true } },
+  { label: 'spec.criteria[0].required', mutate: body => { body.spec.criteria[0].required = false } },
   { label: 'spec.localGuidance[0].id', mutate: body => { firstLocalGuidance(body).id = 'changed-guidance' } },
   { label: 'spec.localGuidance[0].statement', mutate: body => { firstLocalGuidance(body).statement += ' changed' } },
   { label: 'spec.inputs[0].id', mutate: body => { body.spec.inputs[0].id = 'changed-input' } },

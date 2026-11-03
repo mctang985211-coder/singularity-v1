@@ -10,8 +10,7 @@ import { readGlobalResource } from './global-resources.ts'
 import { mcpDispatchPlan } from './mcp-resources.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
 import { clampPercent } from './prompt.ts'
-import { usesExploration, resolveResourceTemplate } from './resources.ts'
-import { readAcceptanceCheckResource } from './checks.ts'
+import { usesExploration } from './resources.ts'
 import { closedSubtreeUsage,commitFact,usageCost } from './run-settlement.ts'
 import type { ExecuteSingleRunRequest,PreparedRun,RuntimeContext } from './run.ts'
 import type { CommandService } from './service.ts'
@@ -102,7 +101,6 @@ export async function createToolController(
   })
   const controller: RunToolController = new RunToolController({
     contract: runtime.contract,
-    acceptanceChecks: prepared.checks,
     runId: request.runId,
     sessionId: request.sessionId,
     workspace: runtime.workspace,
@@ -121,11 +119,6 @@ export async function createToolController(
       })
       : (query.kind === 'resource' && usesExploration(prepared.methodResources) && prepared.methodResources.exploration !== undefined
         ? await readGlobalResource(service, prepared.methodResources.exploration, query) : undefined)
-        ?? await readAcceptanceCheckResource(service, [runtime.contract.acceptance,
-          ...prepared.methodResources.template.children.flatMap(binding => {
-            const template = resolveResourceTemplate(prepared.methodResources, binding.templateId)
-            return template === undefined ? [] : [template.acceptancePolicy]
-          })], query)
         ?? await readChildData(service, children, runtime.contract.spec.inputs, query, previous),
     skillNames: prepared.methodResources.skills.map(skill => skill.name),
     mcpPlan: mcpDispatchPlan(prepared.methodResources.mcpServers),
@@ -133,7 +126,6 @@ export async function createToolController(
     decompose: {
       methodResources: prepared.methodResources,
       reader: service,
-      describeCheck: runtime.verifier.describeCheck,
     },
     writer: service,
     maxOutputBytes: runtime.maxOutputBytes,
@@ -179,7 +171,6 @@ export async function createToolController(
         transientInvalidReasons: runtime.transientInvalidReasons,
         liveTokens: live.tokens,
         args,
-        describeCheck: runtime.verifier.describeCheck,
         authorizedInputs: authorizedInputs(),
       })
       state = await service.taskRunState(runtime.transientInvalidReasons)

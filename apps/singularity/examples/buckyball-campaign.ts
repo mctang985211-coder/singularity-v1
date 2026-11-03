@@ -5,42 +5,32 @@ import { pathToFileURL } from 'node:url'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GlobalResourceSnapshot,JsonValue,Ref,TaskContract,TaskSpec } from '@singularity/protocol'
-import { admitRootTask,canonicalize,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseProtocolValue,resolveTemplateView,sealMethodRevision } from '@singularity/protocol'
+import { admitRootTask,canonicalize,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseProtocolValue,resolveTemplateView,seal,sealMethodRevision } from '@singularity/protocol'
 import type { EvaluationTaskRequest } from '@singularity/runtime'
 import { activateRoundCandidate,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
 
 import { bootSpikeProfile,buildSingleRunComposition } from '../src/host-composition.ts'
 import { FRONTEND_REVIEW_POLICY,frontendVerifier,compareFrontendPpa,PPA_WEIGHTS } from './buckyball-acceptance.ts'
 import { buckyballFrontendTaskSpec,BUCKYBALL_FRONTEND_CAMPAIGN } from './buckyball-frontend-task.ts'
-import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE,BUCKYBALL_CHECKER_SOURCE_REF,BUCKYBALL_ORACLE_SOURCE,BUCKYBALL_ORACLE_SOURCE_REF,BUCKYBALL_CASES_SOURCE,BUCKYBALL_CASES_SOURCE_REF,buckyballCheck,describeBuckyballCheck } from './buckyball-checks.ts'
 import { nativeAccounting } from './native-accounting.ts'
 import { freezeBuckyballTools } from './buckyball-resources.ts'
-import { freezeBuckyballSkills,readBuckyballSkills } from './buckyball-skills.ts'
 
 const actor = { kind: 'runtime', id: 'buckyball-campaign' } as const
 const bytes = (value: unknown) => new TextEncoder().encode(canonicalize(value))
 /** One trusted public experiment, using existing Task/RSI APIs without chip branches in runtime. */
-export async function runBuckyballCampaign(root: string, prepared: string, remaining?: {
-  deadlineAt: number; maxReportedTokens: number; maxRequests: number; signal?: AbortSignal
-}) {
+export async function runBuckyballCampaign(root: string, prepared: string) {
   const project = JSON.parse(await readFile(join(prepared, 'project.json'), 'utf8')) as {
     source: { destination: string }
     publicSeed?: { archive: string; description: string }
   }
   const baseline = project.source.destination
-  const startedAt = Date.now()
-  const deadlineAt = Math.min(startedAt + BUCKYBALL_FRONTEND_CAMPAIGN.maxWallClockMs, remaining?.deadlineAt ?? Infinity)
-  const budget = { ...BUCKYBALL_FRONTEND_CAMPAIGN, maxWallClockMs: deadlineAt - startedAt,
-    maxReportedTokens: Math.min(BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens, remaining?.maxReportedTokens ?? Infinity),
-    maxRequests: Math.min(BUCKYBALL_FRONTEND_CAMPAIGN.maxRequests, remaining?.maxRequests ?? Infinity) }
-  if (deadlineAt <= startedAt || budget.maxReportedTokens <= 0 || budget.maxRequests <= 0) throw new Error('Buckyball campaign has no remaining launch budget')
+  const startedAt = Date.now(), deadlineAt = startedAt + BUCKYBALL_FRONTEND_CAMPAIGN.maxWallClockMs
   await mkdir(root)
   const cancellation = new AbortController()
-  const stop = () => { cancellation.abort(remaining?.signal?.reason) }
   const patch = join(root, 'compaction.patch.yml')
   await copyFile(new URL('./buckyball.patch.yml', import.meta.url), patch)
   const spike = await bootSpikeProfile({ home: join(root, 'dsh'), patchFiles: [patch] })
-  const accounting = nativeAccounting(spike.ctx, { ...budget, deadlineAt, cancellation, log: join(root, 'requests.jsonl') })
+  const accounting = nativeAccounting(spike.ctx, { ...BUCKYBALL_FRONTEND_CAMPAIGN, deadlineAt, cancellation, log: join(root, 'requests.jsonl') })
   const service = await CommandService.open({ root: join(root, 'domain'), actor, clock: Date.now })
   const timer = setTimeout(() => { cancellation.abort('campaign-deadline') }, Math.max(0, deadlineAt - Date.now()))
   const commit = <T extends 'method/registered' | 'method/activated'>(type: T, data: Parameters<typeof service.commit<T>>[0]['data'], id: string) => service.commit({
@@ -52,80 +42,57 @@ export async function runBuckyballCampaign(root: string, prepared: string, remai
   const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
-    remaining?.signal?.addEventListener('abort', stop, { once: true })
-    if (remaining?.signal?.aborted) stop()
-    await service.putObject(BUCKYBALL_CHECKER_SOURCE_REF.id, BUCKYBALL_CHECKER_SOURCE)
-    await service.putObject(BUCKYBALL_ORACLE_SOURCE_REF.id, BUCKYBALL_ORACLE_SOURCE)
-    await service.putObject(BUCKYBALL_CASES_SOURCE_REF.id, BUCKYBALL_CASES_SOURCE)
-    await put(BUCKYBALL_RECIPE_REF.id, BUCKYBALL_RECIPE)
-    const fallbackExample = await put('buckyball:example:local', { goal: { summary: 'Verify the exact numerical behavior of the actual compiled component for parent integration.', deliverable: 'result/ with implementation and reproducible evidence', scope: ['Consume authorized inputs and produce an independently checked local component.'], constraints: ['The parent retains final integration and its own checks.'] }, inputs: [], localCriteria: [], localOutputs: [], acceptanceChecks: [{ criterionId: 'task-goal', checks: [buckyballCheck('numerical', 'campplus', 'result/evidence.json')] }] })
     const provider = await put('buckyball:acceptance', { v: 1, kind: 'independent-native-review-and-reproduction', policy: FRONTEND_REVIEW_POLICY,
-      checkRecipes: [BUCKYBALL_RECIPE_REF], checkResources: BUCKYBALL_RECIPE.dependencies,
       limitations: 'Public trusted local experiment; independent LLM review and rerun evidence, not formal signoff or hidden-data isolation.',
       tracePolicy: 'Include terminal ExecutionRecords as failure evidence; exhausted campaigns seal without opening RSI.', weights: PPA_WEIGHTS })
     const comparatorAsset = await put('buckyball:comparator', { v: 1, metric: 'weighted geometric PPA improvement', weights: PPA_WEIGHTS, minDelta: 0.01, noCaseRegression: true })
     const baseTools = await Promise.all(['bash', 'job_output', 'job_list', 'job_kill'].map(name => put(`base-tool:${name}`, { v: 1, name })))
     const protocol = await put('buckyball:task-protocol', taskProtocolReference)
-    const guideText = `Autonomous CosyVoice3 chip frontend experiment. Read project.json and your own TaskContract. Explore the real source before selecting architecture. Start from existing cores, Balls and compiler paths to establish an integrated frontend early; then add IP where workload evidence justifies it. Explicitly map each stage to accelerator or original host execution. Integrate through current chip/core/compiler/recipe interfaces and test that path; isolated primitives and documentation do not complete the frontend. Own your Task's completion path and integration. Use the frozen contract to choose the nearest next layer of work units. Define consumable handoffs, retain local technical work and check the integrated result. Schedule dependent work in successive batches. Each unit develops its own workflow. Bind executable checks through TaskProposal.acceptanceChecks before admitting a unit. Select host-reference for original-software vectors, compiler for a recipe/MLIR/Chip.pb mapping, synthesis for a standalone RTL synthesis boundary, and numerical/integration/implementation/ppa for their integrated contracts. delivery only checks file identity; it cannot alone satisfy task-goal. For numerical/host-reference bind one check per needed stage with params.stage and a manifest inside the delivery tree (result/evidence.json for exploration children; frontend/evidence.json for root). The entire frozen public stage suite is mandatory. Read public-numerical-cases or run the public checker with --list-cases STAGE to obtain exact typed inputs. numerical delivers one Python stdin-case/stdout-array entrypoint plus its full dependencies and source/config identities per check-recipe.json; the host executes it from CAS. host-reference delivers vectors keyed by every required caseId. Never select only passing inputs, relax original tolerances or substitute a FP64 reference. If no fixed check covers a proposed technical goal, keep the work local or report the validation gap. Use the shared campaign deadline when planning child scope. Start with empty Method. Register discoveries only through RSI after root closure; keep learning drafts in learning-drafts/skills or learning-drafts/mcp-servers.\nUse the registered mcp__buckyball__bbdev tool for bbdev operations, passing your own absolute checkout path and CLI argv. The operator-prepared MCP activates nix develop in that directory. Use native bash for source edits and standalone component tools. No full-chip simulation, whole-model BEMU, P2E/FPGA or physical backend. Focused standalone IP/component/subgraph tests and logical synthesis are allowed. Autonomous architecture/design choices and routine fixes inside this experiment are authorized; record evidence and rationale. Load experiment-adapted technical references by native skill(name=...) and bundled files from their returned resourceBase.\nShared baseline ${baseline} is read-only. For mutation/build, call mcp__buckyball__checkout with the absolute path to buckyball/ under your workspace. This domain tool copies the complete operator-prepared baseline and installs local configs; it preserves submodules, dependencies, the Nix toolchain link, scripts/nix/download.sh repair and untracked gemmini. Use this prepared copy for your patches and builds. Do not build against baseline, parent or sibling checkouts. The operator-prepared baseline includes the bbdev dependencies/config; preserve them in your independent copy. The domain MCP returns the existing CLI result; use its help and native status commands as needed. Do not alter Singularity source, host profile, verifier or other runs.\nDeliver frontend/ with implementation patches (including separately identified submodule patches), architecture/numerical/interface contracts, original-reference vectors, focused tests, actual logs and reproducible commands. Exclude weights and build trees. Parent can read direct child's frozen files through protocol, then integrate into its own copy. Exploration children inherit the required result/ delivery tree: put patches, reports and test evidence there and submit output ID result. localOutputs may add supporting files; other Method templates use their frozen contract outputs. Final root must cover LLM, Flow, HiFT and host boundaries, not only Qwen. PPA is synthesis-estimated: weights power 30%, critical delay 40%, cell area 30%. Retain identical library/corner/clock/activity and offload conditions for comparison. Missing PPA cannot win. Read the frozen acceptance-policy document for exact review criteria. Report genuine failures and incomplete work.\nLong task limits: root 4096 steps, 256 tasks, depth 8, deadline shared across the whole campaign. Native auto compaction runs at 75% context pressure and is counted. Never reduce the goal just to claim completion.`
+    const guideText = `Autonomous CosyVoice3 chip frontend experiment. Read project.json and your own TaskContract. Explore the real source before selecting architecture. Start from existing cores, Balls and compiler paths to establish an integrated frontend early; then add IP where workload evidence justifies it. Explicitly map each stage to accelerator or original host execution. Integrate through current chip/core/compiler/recipe interfaces and test that path; isolated primitives and documentation do not complete the frontend. Each Task discovers and owns its local workflow. After reading relevant resources, refine the initial sketch around responsibilities, outputs, interfaces and checks. Create direct responsibility units with usable interfaces, including sequential stages in successive batches; each child discovers deeper workflow. Perform bounded technical work and integrate direct results locally. Use the shared campaign deadline when planning child scope. Existing project skills are reference documents at ${baseline}/.agents/skills/; read relevant files as technical references under this Task contract. They are not mounted skills. Author each child goal, interfaces and executable acceptanceCriteria yourself before dispatch. Start with empty Method. Register discoveries only through RSI after root closure; keep learning drafts in learning-drafts/skills or learning-drafts/mcp-servers.\nUse the registered mcp__buckyball__bbdev tool for bbdev operations, passing your own absolute checkout path and CLI argv. The operator-prepared MCP activates nix develop in that directory. Use native bash for source edits and standalone component tools. No full-chip simulation, whole-model BEMU, P2E/FPGA or physical backend. Focused standalone IP/component/subgraph tests and logical synthesis are allowed. Autonomous architecture/design choices and routine fixes inside this experiment are authorized; record rationale rather than stopping for approval required by old skills.\nShared baseline ${baseline} is read-only. For mutation/build, call mcp__buckyball__checkout with the absolute path to buckyball/ under your workspace. This domain tool copies the complete operator-prepared baseline and installs local configs; it preserves submodules, dependencies, the Nix toolchain link, scripts/nix/download.sh repair and untracked gemmini. Use this prepared copy for your patches and builds. Do not build against baseline, parent or sibling checkouts. The operator-prepared baseline includes the bbdev dependencies/config; preserve them in your independent copy. The domain MCP returns the existing CLI result; use its help and native status commands as needed. Do not alter Singularity source, host profile, verifier or other runs.\nDeliver frontend/ with implementation patches (including separately identified submodule patches), architecture/numerical/interface contracts, original-reference vectors, focused tests, actual logs and reproducible commands. Exclude weights and build trees. Parent can read direct child's frozen files through protocol, then integrate into its own copy. Exploration children inherit the required result/ delivery tree: put patches, reports and test evidence there and submit output ID result. localOutputs may add supporting files; other Method templates use their frozen contract outputs. Final root must cover LLM, Flow, HiFT and host boundaries, not only Qwen. PPA is synthesis-estimated: weights power 30%, critical delay 40%, cell area 30%. Retain identical library/corner/clock/activity and offload conditions for comparison. Missing PPA cannot win. Read the frozen acceptance-policy document for exact review criteria. Report genuine failures and incomplete work.\nLong task limits: root 4096 steps, 256 tasks, depth 8, deadline shared across the whole campaign. Native auto compaction runs at 75% context pressure and is counted. Never reduce the goal just to claim completion.`
     const guide = await put('buckyball:guide', { v: 1, text: guideText })
-    const skills = await freezeBuckyballSkills(service, baseline)
     const tools = await freezeBuckyballTools(service, baseline)
-    const snapshotValue: GlobalResourceSnapshot = { v: 1, skills, tools, baseTools, fallbackExample, fallbackAcceptance: provider, fallbackJoin: 'probe',
-      documents: [{ id: 'frontend-guide', description: 'Task workflow, independent checkout, delivery and PPA policy. Read before domain operations.', object: guide },
+    const snapshotValue: GlobalResourceSnapshot = { v: 1, skills: [], tools, baseTools, fallbackAcceptance: provider, fallbackJoin: 'probe',
+      documents: [{ id: 'frontend-guide', description: 'Scope overrides, independent checkout, delivery and PPA policy. Read before domain operations.', object: guide },
         { id: 'task-protocol', description: 'Current Task planning, direct decomposition, schemas and resource usage.', object: protocol },
-        { id: 'public-numerical-cases', description: 'Complete frozen stage cases. Every case in the selected stage must pass; never filter failing cases.', object: BUCKYBALL_CASES_SOURCE_REF },
         { id: 'acceptance-policy', description: 'Independent review criteria, original-reference checks and synthesis PPA conditions.', object: provider }] }
     const snapshot = await freezeGlobalResources(service, 'buckyball:global-resources', snapshotValue)
     const seed = await put('buckyball:seed', { v: 1, name: 'cosyvoice3-frontend-20261101' })
-    const profile = await put('buckyball:profile', { v: 1, options, compaction: { threshold: 0.75, maxTokens: 40000 }, budget })
+    const profile = await put('buckyball:profile', { v: 1, options, compaction: { threshold: 0.75, maxTokens: 40000 }, budget: BUCKYBALL_FRONTEND_CAMPAIGN })
     const method = await service.putObject('buckyball:method-empty', bytes(sealMethodRevision({ v: 1, id: 'buckyball:method-empty', templates: [], skills: [], tools: [] })), 'method')
     await commit('method/registered', { revision: method }, 'buckyball:register-empty')
     await commit('method/activated', { next: method, approval: await put('buckyball:initial-approval', { v: 1, purpose: 'empty-initialization' }) }, 'buckyball:activate-empty')
     const summaries = new ContractSummaryService({ ctx: spike.ctx, writer: service, agentOptions: options })
-    const verify = frontendVerifier(spike.ctx, { root: join(root, 'reviews'), baseline, project: join(prepared, 'project.json'), agentOptions: options, writer: service, frozenSkills: await readBuckyballSkills(service, skills) })
-    const runTask = async (contract: TaskContract, slot?: EvaluationTaskRequest, phase: keyof typeof budget.phases = slot === undefined ? 'source' : 'evaluationSlot') => {
+    const verify = frontendVerifier(spike.ctx, { root: join(root, 'reviews'), baseline, project: join(prepared, 'project.json'), agentOptions: options })
+    const runTask = async (contract: TaskContract, slot?: EvaluationTaskRequest) => {
       const runId = `${contract.taskId}:run:1`, sessionId = `${runId}:session`
       const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract, agentOptions: options, base: { v: 1, seed } })
-      const quota = budget.phases[phase], startUsage = { ...accounting.usage }, phaseCancellation = new AbortController()
-      const phaseDeadline = AbortSignal.timeout(Math.max(0, Math.min(deadlineAt - Date.now(), quota.maxWallClockMs)))
-      const release = spike.ctx.on('llm/stream', async function* (_request, next) {
-        if (accounting.usage.requests - startUsage.requests >= quota.maxRequests
-          || accounting.usage.inputTokens + accounting.usage.outputTokens - startUsage.inputTokens - startUsage.outputTokens >= quota.maxTokens) {
-          phaseCancellation.abort(`${phase}-budget-exhausted`)
-          throw phaseCancellation.signal.reason
-        }
-        yield* next()
-      }, { prepend: true })
-      try { return await executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace: join(root, 'workspaces', Buffer.from(contract.taskId).toString('hex')),
-        runId, sessionId, admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt: contract.limits.deadlineAt } },
-        composition, agentOptions: options, maxOutputBytes: BUCKYBALL_FRONTEND_CAMPAIGN.maxOutputBytes, verifier: { provider, verify, describeCheck: describeBuckyballCheck }, actor,
+      return executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace: join(root, 'workspaces', Buffer.from(contract.taskId).toString('hex')),
+        runId, sessionId, admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt } },
+        composition, agentOptions: options, maxOutputBytes: BUCKYBALL_FRONTEND_CAMPAIGN.maxOutputBytes, verifier: { provider, verify }, actor,
         maxActive: slot?.maxActive ?? BUCKYBALL_FRONTEND_CAMPAIGN.maxActive, workspaceRoot: join(root, 'runs'), summaries,
-        signal: AbortSignal.any([cancellation.signal, phaseCancellation.signal, phaseDeadline, ...(slot === undefined ? [] : [slot.signal])]),
+        signal: slot === undefined ? cancellation.signal : AbortSignal.any([cancellation.signal, slot.signal]),
         checkReportedBudget: value => accounting.available() && (slot?.checkReportedBudget(value) ?? true),
         ...(slot === undefined ? {} : { canOpenRun: slot.canOpenRun }),
         async resolveRun(input) { return { composition: await buildSingleRunComposition(spike.ctx, { store: service, id: input.runId, contract: input.contract, agentOptions: options, base: { v: 1, seed } }),
-          agentOptions: options, maxOutputBytes: BUCKYBALL_FRONTEND_CAMPAIGN.maxOutputBytes, verifier: { provider: input.contract.acceptance, verify, describeCheck: describeBuckyballCheck } } },
-      }, service) } finally { release() }
+          agentOptions: options, maxOutputBytes: BUCKYBALL_FRONTEND_CAMPAIGN.maxOutputBytes, verifier: { provider: input.contract.acceptance, verify } } },
+      }, service)
     }
-    const contractFor = async (taskId: string, spec: TaskSpec, pinned: Ref, purpose: 'work' | 'evaluation', requestRef: Ref,
-      phase: keyof typeof budget.phases = 'evaluationSlot') => {
+    const contractFor = async (taskId: string, spec: TaskSpec, pinned: Ref, purpose: 'work' | 'evaluation', requestRef: Ref) => {
       const revision = parseProtocolValue(methodRevisionSchema, JSON.parse(new TextDecoder().decode((await service.readObject(pinned, 'method')).bytes)))
       const templateId = revision.entryTemplateId ?? EXPLORE_TEMPLATE_ID
       const view = resolveTemplateView(revision, templateId, snapshotValue)
       if (view === undefined) throw new Error('Missing pinned entry template')
       return admitRootTask({ taskId, spec, origin: { kind: 'root', purpose, requestRef }, method: pinned, template: { id: templateId, digest: pinned.digest },
         resources: { baseTools, exploration: snapshot,
-          skills: view.skills.map(id => { const asset = [...revision.skills, ...skills].find(value => value.id === id); if (asset === undefined) throw new Error(`Missing skill ${id}`); return asset.bundle }),
+          skills: view.skills.map(id => { const asset = revision.skills.find(value => value.id === id); if (asset === undefined) throw new Error(`Missing skill ${id}`); return asset.bundle }),
           mcpServers: view.tools.map(id => { const asset = [...revision.tools, ...tools].find(value => value.id === id); if (asset === undefined) throw new Error(`Missing tool ${id}`); return asset.server.bundle }) },
-        acceptance: provider, environment: { seed, profile }, limits: { ...budget.task,
-          maxTokens: Math.min(budget.maxReportedTokens, budget.phases[phase].maxTokens),
-          deadlineAt: phase === 'evaluationSlot' ? deadlineAt : Math.min(deadlineAt, Date.now() + budget.phases[phase].maxWallClockMs) } })
+        acceptance: provider, environment: { seed, profile }, limits: { ...BUCKYBALL_FRONTEND_CAMPAIGN.task, deadlineAt } })
     }
     const publicSeed = project.publicSeed === undefined ? undefined : await service.putObject('buckyball:public-seed', await readFile(resolve(prepared, project.publicSeed.archive)))
     const specFor = (input: Ref) => {
       const spec = buckyballFrontendTaskSpec(input)
       spec.inputs.push({ id: 'experiment-guide', object: guide, path: 'experiment-guide.json', access: 'copy-to-work' })
-      spec.goal.constraints.push('Read experiment-guide.json before domain work; use the frozen experiment-adapted skills as technical references under this Task contract.')
+      spec.goal.constraints.push('Read experiment-guide.json before domain work; its operator scope overrides the public skills.')
       if (publicSeed !== undefined) {
         spec.inputs.push({ id: 'public-seed', object: publicSeed, path: 'public-seed.tar.gz', access: 'copy-to-work' })
         spec.goal.constraints.push('Inspect public-seed.tar.gz and its provenance.json before implementation. Reuse applicable references/components and correct recorded failures, then plan the remaining implementation and integration. Pass the authorized seed input to children that need these artifacts. Complete the full frontend goal; prior verdicts do not establish this Run\'s acceptance. Baseline and candidate receive the same frozen seed.')
@@ -148,21 +115,20 @@ export async function runBuckyballCampaign(root: string, prepared: string, remai
       const contract = await contractFor(`buckyball:definition:${definition.id}`, spec, method, 'evaluation', profile)
       cases.push({ spec, ref: await freezeEvaluationCase(service, `buckyball:case:${definition.id}`, evaluationCaseFromContract(contract)) })
     }
-    await writeFile(join(root, 'launch.json'), JSON.stringify({ v: 1, startedAt, deadlineAt, pid: process.pid, sourceSpec, cases, budget,
+    await writeFile(join(root, 'launch.json'), JSON.stringify({ v: 1, startedAt, deadlineAt, pid: process.pid, sourceSpec, cases, budget: BUCKYBALL_FRONTEND_CAMPAIGN,
       ppaWeights: PPA_WEIGHTS, prepared, emptyMethod: method, independentReview: provider, compaction: 'native enabled; all llm/stream calls accounted' }, null, 2))
     console.log(JSON.stringify({ event: 'campaign-started', pid: process.pid, root, startedAt, deadlineAt }))
     for (let index = 0; index < 3 && accounting.available(); index += 1) {
-      const roundId = `buckyball:${String(startedAt)}:round:${String(index + 1)}`, taskId = `${roundId}:source`
+      const roundId = `buckyball:round:${String(index + 1)}`, taskId = `${roundId}:source`
       const active = (await service.methodRoundState()).productionHead
       if (active === undefined) throw new Error('Missing active Method')
-      const source = await runTask(await contractFor(taskId, sourceSpec, active, 'work', await put(`${taskId}:request`, { v: 1, purpose: 'autonomous-chip-frontend' }), 'source'))
+      const source = await runTask(await contractFor(taskId, sourceSpec, active, 'work', await put(`${taskId}:request`, { v: 1, purpose: 'autonomous-chip-frontend' })))
       const trace = await sealPublicTrace({ ctx: spike.ctx, service, actor, rootTaskId: taskId, summaries, acceptsExecutionRecord: () => true })
       if (!accounting.available()) break
       const remaining = Math.max(1, deadlineAt - Date.now())
       const plan = { v: 1 as const, cases: cases.slice(0, 2).map(value => value.ref), validationCases: [cases[2].ref],
         metric: { name: 'frontend-ppa', weights: PPA_WEIGHTS }, thresholds: { minDelta: 0.01, maxRegression: 0 }, trialsPerCase: 1,
-        proposerBudget: { ...budget.proposerBudget, maxWallClockMs: Math.min(remaining, budget.proposerBudget.maxWallClockMs) },
-        budget: { ...budget.evaluationBudget, maxWallClockMs: Math.min(remaining, budget.evaluationBudget.maxWallClockMs) },
+        proposerBudget: { ...BUCKYBALL_FRONTEND_CAMPAIGN.proposerBudget, maxWallClockMs: remaining }, budget: { ...BUCKYBALL_FRONTEND_CAMPAIGN.evaluationBudget, maxWallClockMs: remaining },
         validation: 'required-by-domain' as const, claim: 'domain-evaluation' as const, comparator: comparatorAsset, sourceSeed: seed, expectedPreviousActiveMethod: active }
       await openRsiRound({ service, actor, roundId, sourceTrace: trace.trace, baseMethod: active, plan, proposerSessionId: `${roundId}:proposer` })
       const workspace = join(root, 'proposers', String(index + 1)); await mkdir(workspace, { recursive: true })
@@ -192,7 +158,7 @@ export async function runBuckyballCampaign(root: string, prepared: string, remai
         const head = (await service.methodRoundState()).productionHead
         if (head === undefined) throw new Error('Published Method absent')
         const publishedId = `${roundId}:published-work`
-        await runTask(await contractFor(publishedId, sourceSpec, head, 'work', await put(`${publishedId}:request`, { v: 1, purpose: 'post-publication-verification' }), 'published'), undefined, 'published')
+        await runTask(await contractFor(publishedId, sourceSpec, head, 'work', await put(`${publishedId}:request`, { v: 1, purpose: 'post-publication-verification' })))
       }
     }
   } catch (error) {
@@ -200,7 +166,6 @@ export async function runBuckyballCampaign(root: string, prepared: string, remai
     failure = error instanceof Error ? error.stack ?? error.message : String(error)
   } finally {
     clearTimeout(timer)
-    remaining?.signal?.removeEventListener('abort', stop)
     try { await spike.dispose() } catch (error) { failures.push(error) }
     accounting.dispose()
     try { await service.close() } catch (error) { failures.push(error) }

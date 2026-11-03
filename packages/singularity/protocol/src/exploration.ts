@@ -1,10 +1,12 @@
 import { z } from 'zod'
 
 import { computeDigest } from './digest.ts'
+import type { JsonValue } from './json.ts'
 import { skillAssetSchema, toolAssetSchema } from './method.ts'
 import type { MethodRevision, TaskTemplate } from './method.ts'
 import { refSchema } from './refs.ts'
 import { closedObject } from './schema.ts'
+import type { TaskExample } from './task.ts'
 
 /** Frozen public resources explicitly selected by domain/operator (§6.1). */
 export const globalResourceSnapshotSchema = closedObject({
@@ -14,7 +16,6 @@ export const globalResourceSnapshotSchema = closedObject({
   tools: z.array(toolAssetSchema),
   baseTools: z.array(refSchema),
   fallbackAcceptance: refSchema,
-  fallbackExample: refSchema,
   fallbackJoin: z.enum(['required', 'probe']),
 })
 
@@ -25,10 +26,23 @@ export const EXPLORE_BINDING_ID = 'platform:explore-child'
 
 export const EXPLORE_GUIDANCE = {
   v: 1,
-  text: 'Own this Task\'s local workflow, technical work and direct-result integration. Discover the completion path from frozen public documents, skills and tools, then refine the sketch. Delegate distinct bounded responsibilities with consumable outputs and executable checks to direct children; sequential dependencies use later batches. A bounded leaf may complete directly. Copy complete authorized InputRefs from self or child results when passing frozen artifacts; inputs:[] is for work independent of Task artifacts. Prepare the complete example, bind acceptanceChecks for task-goal from policy-authorized recipes, and freeze each child before dispatch. localCriteria is guidance. Run the published checks during work; independent verification repeats them on frozen outputs. Deliver artifacts and reproducible evidence under result/ and submit output ID result. Use feedback and a new Task when a frozen contract is wrong. Preserve reusable skill or MCP drafts under learning-drafts for RSI registration.',
+  text: 'Discover the completion path for this Task. Choose direct responsibility scopes with usable interfaces; dependent work uses later batches. Each child plans its own work. Author acceptanceCriteria with concrete pass rules and self-contained shell checks before dispatch. Checks run at the workspace root with declared input/output paths, during work and independently after submission. Use complete frozen InputRefs from self or child results. Deliver under result/. A bounded leaf may finish directly. Integrate direct results and recheck this Task; preserve reusable discoveries as learning drafts.',
 } as const
 
+export const EXPLORE_EXAMPLE: TaskExample = {
+  goal: {
+    summary: 'Evaluate the supplied arithmetic expression.',
+    deliverable: 'result/value.txt containing the evaluated integer.',
+    scope: ['One independently useful local question.'],
+    constraints: ['Use only frozen inputs and public resources authorized for this Task.'],
+  },
+  acceptanceCriteria: [{ id: 'local-result', statement: 'The result reproduces the expected value from the supplied input.', check: "python3 - <<'PY'\nfrom pathlib import Path\nassert Path('result/value.txt').read_text().strip() == '4'\nPY" }],
+  inputs: [{ id: 'source', exampleText: '2 + 2 = 4; write the value to result/value.txt.' }],
+  localOutputs: [],
+}
+
 export const EXPLORE_GUIDANCE_REF = { id: 'platform:explore-guidance', digest: computeDigest('object', EXPLORE_GUIDANCE) }
+export const EXPLORE_EXAMPLE_REF = { id: 'platform:explore-example', digest: computeDigest('object', EXPLORE_EXAMPLE as unknown as JsonValue) }
 
 /** Fixed platform template, bound only to this frozen domain resource snapshot. */
 export function explorationTemplate(snapshot: GlobalResourceSnapshot): TaskTemplate {
@@ -36,14 +50,13 @@ export function explorationTemplate(snapshot: GlobalResourceSnapshot): TaskTempl
     id: EXPLORE_TEMPLATE_ID,
     brief: 'Explore one local goal using frozen public resources.',
     guidance: EXPLORE_GUIDANCE_REF,
-    example: snapshot.fallbackExample,
+    example: EXPLORE_EXAMPLE_REF,
     instanceSchema: {
       type: 'object', additionalProperties: false,
-      required: ['goal', 'inputs', 'acceptanceChecks'],
-      properties: { goal: { type: 'object' }, localCriteria: { type: 'array' }, inputs: { type: 'array' }, localOutputs: { type: 'array' }, acceptanceChecks: { type: 'array' } },
+      required: ['goal', 'inputs', 'acceptanceCriteria'],
+      properties: { goal: { type: 'object' }, acceptanceCriteria: { type: 'array' }, inputs: { type: 'array' }, localOutputs: { type: 'array' } },
     },
-    requiredCriteria: [{ id: 'task-goal', required: true,
-      statement: 'Submitted outputs and reproducible evidence fulfill this Task\'s frozen goal, deliverable, scope and constraints.', checks: [] }],
+    requiredCriteria: [],
     requiredOutputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
     acceptancePolicy: snapshot.fallbackAcceptance,
     skills: snapshot.skills.map(skill => skill.id),

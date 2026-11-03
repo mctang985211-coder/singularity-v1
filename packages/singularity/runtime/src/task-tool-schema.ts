@@ -11,9 +11,9 @@ export const taskToolExamples: Record<string, JsonValue> = {
     levels: [0, 1].map(level => ({ level, purpose: 'Work at this level.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
     directPlan: [], assumptions: [] } },
   singularity_decompose: { action: 'commit', children: [{ bindingId: 'platform:explore-child',
-    ackPreview: `sha256:${'0'.repeat(64)}`, task: { goal: { summary: 'Implement a stream adapter for parent integration.', deliverable: 'result/ with the adapter and reproducible stream checks.', scope: ['Consume the frozen kernel; parent retains the final all-suite integration check.'], constraints: ['Consumer interface: JSON stream requests -> exact output records.'] },
-      inputs: [{ id: 'kernel', object: { id: 'frozen-kernel', digest: `sha256:${'0'.repeat(64)}` }, path: 'kernel', access: 'copy-to-work' }], localCriteria: [], localOutputs: [],
-      acceptanceChecks: [{ criterionId: 'task-goal', checks: [{ checkId: 'stream', recipeRef: { id: 'public-stream-check', digest: `sha256:${'0'.repeat(64)}` }, params: { candidate: 'result/adapter', suite: 'stream' } }] }] } }] },
+    ackPreview: `sha256:${'0'.repeat(64)}`, task: { goal: { summary: 'Evaluate the supplied arithmetic expression.', deliverable: 'result/value.txt with the integer value.', scope: [], constraints: [] },
+      inputs: [], acceptanceCriteria: [{ id: 'exact-result', statement: 'The independently reproduced result equals 4.',
+        check: "python3 - <<'PY'\nfrom pathlib import Path\nassert Path('result/value.txt').read_text().strip() == '4'\nPY" }], localOutputs: [] } }] },
   singularity_feedback: { kind: 'needs-replan', summary: 'Clarify this component boundary.', proposedChanges: [], refs: [] },
   singularity_submit: { outputIds: ['result'], includeLearningDrafts: false },
   singularity_stop: { reason: 'unsolved', message: 'The required result is incomplete.' },
@@ -23,70 +23,44 @@ export const taskToolExamples: Record<string, JsonValue> = {
 export const taskProtocolReference: JsonValue = {
   v: 1,
   planning: {
-    levels: 'Exactly [0,1] or [0,1,2]. Levels describe responsibility scopes: 0=this Task, 1=direct next-layer units, 2=possible deeper units. Levels do not schedule execution; describe dependencies in the completion path and execute dependent work in successive batches.',
-    execution: 'Describe the completion path, dependencies, retained work, handoffs and unassigned responsibilities using objective, expectedInputs/expectedOutputs, directPlan.purpose and assumptions. Refine after resource discovery or feedback. Create next-layer work units with consumable outputs and direct checks; each unit owns its scope and integration. Only a later commit creates direct children. Work locally on bounded directly verifiable goals.',
+    levels: 'Exactly [0,1] or [0,1,2]. Level 0 is the current Task, level 1 its direct children, level 2 possible grandchildren. Levels describe responsibility scopes; dependencies execute in successive batches.',
+    execution: 'Refine the initial sketch after resource discovery. Choose direct responsibility scopes by interfaces and executable checks, using successive batches for sequential stages. Only directPlan and a later decompose commit select direct children; each child organizes deeper work. A sketch creates no Tasks. A leaf goal is one bounded, directly verifiable unit.',
     epoch: 'Read the current contextEpoch from NodeView. Resume or native compaction can change it; a child admission alone is not proof of an epoch change.',
     schema: protocolJsonSchema(planningSketchSchema),
   },
   decompose: protocolJsonSchema(decomposeCommitSchema),
-  dependentBatches: {
-    first: {
-      prepare: { action: 'prepare', bindingId: 'platform:explore-child' },
-      commitOnLaterStep: { action: 'commit', children: [{ bindingId: 'platform:explore-child', ackPreview: `sha256:${'0'.repeat(64)}`,
-        task: {
-          goal: { summary: 'Implement the bounded kernel interface.', deliverable: 'result/ with a kernel consumed by the next stream-adapter unit.',
-            scope: ['Consume the frozen source specification; produce the exact per-record kernel interface.'],
-            constraints: ['Parent retains stream adaptation and final all-suite integration.'] },
-          inputs: [{ id: 'source', object: { id: 'frozen-source', digest: `sha256:${'0'.repeat(64)}` }, path: 'source.json', access: 'copy-to-work' }],
-          localCriteria: [], localOutputs: [],
-          acceptanceChecks: [{ criterionId: 'task-goal', checks: [{ checkId: 'kernel', recipeRef: { id: 'public-kernel-check', digest: `sha256:${'0'.repeat(64)}` }, params: { candidate: 'result/kernel', suite: 'kernel' } }] }],
-        } }],
-      },
-    },
-    handoff: 'After the batch is terminal, read children and evidence. Check the produced interface locally. Copy the complete returned output InputRef; use the frozen output as the next unit input.',
-    second: 'Prepare again and use examples.singularity_decompose for a stream adapter consuming that frozen kernel. Replace every illustrative Ref and ackPreview with the current authorized values; select an allowed recipe and valid params. Use acceptanceChecks:[] when template checks are already complete.',
-    integrate: 'Read the adapter result, integrate locally and run the parent all-suite check against the real consumer. A local child pass covers its own contract.',
-  },
   examples: taskToolExamples,
   method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Register skill/MCP assets in the Method before binding their IDs; public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
-  skills: 'Use skills as technical references and candidate procedures for this Task. Choose relevant parts from the current goal, inputs and checks; build your own local workflow under the frozen scope and acceptance policy. Load referenced skills by native skill(name=...) and bundled references/scripts from the returned resourceBase.',
-  checks: 'Read self for bound checks, allowed recipe refs/params and derived command/report previews. Bind checks for every required criterion through acceptanceChecks before admission; use [] only when the template already supplies every required check. localCriteria is guidance. Execute public checks during work and correct failures; submit freezes outputs for independent reproduction of the same checks.',
-  inputs: 'Copy complete authorized InputRefs from self or direct children, including object.id/object.digest, path and access. inputs:[] is for public-resource work independent of Task artifacts. A binary resource is available at its authorized local path; obtain its Ref from self rather than computing a digest.',
-  results: 'Read evidence with a direct child ID or lastAttempt.runId. Join every data text page to parse {result,publicReceipt?}; publicReceipt.criteria contains the independent findings. Frozen child outputs are under children/; the previous attempt is under lastAttempt.outputsPath. Read each failed criterion and check report before retry. Update the sketch with the observed implementation, interface, evidence, input or environment problem and the assumption it disproved. Choose local correction, a new bounded batch or a concrete blocker. Reuse useful frozen artifacts, rerun checks affected by changes, then integrate and verify the actual consumer. Prior transcripts and private receipts are not exposed.',
+  skills: 'Bound skills use native DSH discovery; directory resources include frozen relative files. Use the path returned by the skill tool for bundled scripts.',
+  results: 'Read evidence with a direct child ID or lastAttempt.runId. Join every data text page to parse {result,publicReceipt?}; publicReceipt.criteria contains the independent findings. Frozen child outputs are under children/; the previous attempt is under lastAttempt.outputsPath. Copy useful artifacts to your current outputs and correct the observed failures before resubmitting. Prior transcripts and private receipts are not exposed.',
 }
 
 export const planningParameters = {
   sketch: { type: 'json', required: true,
-    description: 'Use levels [0,1] or [0,1,2]. Creates no Task.',
+    description: 'Hierarchy [0,1] or [0,1,2]: self, children, possible grandchildren. Refine after discovery; delegate long-chain stages in direct batches. A bounded verifiable leaf has no children.',
   },
 } as const
 
-const planning = protocolJsonSchema(planningSketchSchema, { reused: 'ref' })
+const planning = protocolJsonSchema(planningSketchSchema)
 delete planning.$schema
-const planningDefinitions = planning.$defs
-delete planning.$defs
 export const planningInputSchema: ToolDefinition['parameters'] = {
   ...parameterSchemaSpecToJsonSchema(planningParameters),
-  $defs: planningDefinitions,
   properties: { sketch: { ...planning, description: planningParameters.sketch.description } },
 }
 
 /** DSH declarations for Task tools; protocol admission remains authoritative. */
 export const decomposeParameters = {
-  action: { type: 'string', required: true, description: 'prepare or commit.' },
-  bindingId: { type: 'string', description: 'Prepare binding from NodeView.' },
-  children: { type: 'json', description: 'ackPreview=previewRef.digest. Probe: many instances; required: one/batch. Copy full InputRefs. Bind required acceptanceChecks. Chain dependent batches. localOutputs adds supporting outputs or [].' },
+  action: { type: 'string', required: true, description: '"prepare" reads an example; "commit" admits a prepared batch.' },
+  bindingId: { type: 'string', description: 'NodeView childOptions bindingId for prepare.' },
+  children: { type: 'json', description: 'ackPreview=previewRef.digest. Probe allows multiple instances per batch and later batches; required one per batch. Use complete authorized input refs. Author nonempty acceptanceCriteria with concrete pass rules and self-contained shell checks; declared paths are relative to the workspace root. Required outputs inherited; localOutputs adds supporting outputs or [].' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)
-const children = protocolJsonSchema(decomposeCommitSchema.shape.children, { reused: 'ref' })
+const children = protocolJsonSchema(decomposeCommitSchema.shape.children)
 delete children.$schema
-const childDefinitions = children.$defs
-delete children.$defs
 // DSH native ToolDefinition accepts JSON Schema; the DSL's json node omits these fields.
 export const decomposeInputSchema: ToolDefinition['parameters'] = {
   ...parameters,
-  $defs: childDefinitions,
   properties: {
     ...parameters.properties,
     children: { ...children, description: decomposeParameters.children.description },
@@ -111,7 +85,6 @@ export const decomposeOutputSchema = {
     example: { type: 'json' },
     interface: { type: 'json' },
     resolved: { type: 'json' },
-    acceptanceChecks: { type: 'json' },
     reminder: { type: 'string' },
     planningSketchRef: refValueSchema(false),
     contextEpoch: { type: 'string' },

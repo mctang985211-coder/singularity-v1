@@ -78,28 +78,24 @@ Singularity host 使用已验证的官方 Node 24.9.0 二进制。Buckyball Nix 
 | 范围 | 启动值/上限 |
 |---|---|
 | 模型 | `deepseek-flash`，reasoning `max`，700000 context，40000 output |
-| 整轮所有模型请求 | 最长 12 小时、1000000000 tokens、4000 次调用；source/child/Summary/proposer/评测/发布后验证共用累计计量 |
+| 整轮所有模型请求 | 最长 12 小时、1600000000 tokens、16000 次调用；source/child/Summary/proposer/评测/发布后验证共用累计计量 |
 | 单 Run | `maxStepsPerRun: 4096`；避免先于整轮调用上限截断 |
-| 每轮 source 子树（含 review/Summary） | 1000 次调用、200000000 reported tokens、2 小时 |
-| RSI proposer | `maxSteps: 100`、10000000 tokens、15 分钟，仍受整轮剩余 deadline 限制 |
-| 双臂评测 | `maxRuns: 4608`、600000000 tokens、最长 8 小时、`maxActiveRuns: 4`；六棵树顺序执行，每个 slot 子树至多 425 次调用、100000000 reported tokens、75 分钟 |
-| 发布后验证子树 | 300 次调用、90000000 reported tokens、60 分钟 |
+| RSI proposer | `maxSteps: 4096`、1600000000 tokens；时间仍受整轮剩余 deadline 限制，不沿用 inventory 的 96 步/2M token 默认值 |
+| 双臂评测 | `maxRuns: 4608`、1600000000 tokens、`maxActiveRuns: 4`；六棵 baseline/candidate 树顺序执行，此并发值用于单棵树内部；实际购买请求仍受整轮累计 16000 次限制 |
 | Task 树 | `maxDepth: 8`、`maxTasks: 256`、`maxBatchChildren: 8`、`maxRuns: 3`；不是必须达到的目标 |
-| root 子树 token 上限 | 按上述 source / slot / 发布后验证份额冻结；子树配额不能使整轮总额增加 |
+| 初始 root 子树 token 上限 | 1600000000；子树配额不能使整轮总额增加 |
 | 活跃 Task 上限 | 4；外部构建并发与模型上下文限制分别配置 |
 | 输出冻结上限 | 256 MiB；交付 patch、必要小向量和证据，不重复提交权重或整个 build 目录 |
 
-绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 12 小时。阶段配额取配置值与整轮剩余时间的较小者；source/slot/发布后验证的调用与 tokens 直接从同一 nativeAccounting 累计量取差，不建立 runtime 预留账本。阶段额度耗尽沿原生 AbortSignal 结算，该阶段结束后，后续阶段仍只能使用整轮余额；在途调用的尾部用量照实记入。proposer 使用既有 RoundPlan 的请求/tokens/时间限制。多轮不会重置整轮总额。先行真实模型小任务的调用和 tokens 从本轮总额扣除，启动函数接受剩余绝对 deadline、reported tokens 和调用数并记录在 launch.json。每次执行使用全新 execution root；秘密只经 launch environment 注入。
+绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 12 小时。给 proposer/evaluation 的相对时间取整轮剩余时间，所有阶段共用累计计量，不各自重新获得 12 小时或 16 亿 tokens。worker/reviewer 的原生 MCP toolCallTimeoutMs 共用这一配置，整轮取消仍沿既有 AbortSignal 传递。每次执行使用全新 execution root；不复用此前已过期的 inventory 窗口。秘密只经 launch environment 注入。
 
-上述上限按 2026-11-02 本轮修复授权更新为 12h / 10亿 reported tokens / 4000调用，覆盖此前 12h / 16亿 / 16000 配置；每半小时检查进度和修改点的实际效果。13:55 启动的既有执行根保持原 3h/400M/4000 与 16:55:05 截止，冻结配置不在运行中改写。
+上述上限于 2026-11-02 经用户确认用于下一轮。13:55 启动的既有执行根保持原 3h/400M/4000 与 16:55:05 截止，冻结配置不在运行中改写。
 
 后续轮的root PPA须对应交付workload实际使用的加速边界，说明活跃core/Ball实例及存储模型并独立复现；单个组件或未接入IP的报告只作支持证据，不替代frontend PPA，缺失则ppa-evidence失败且不提交ppa数值。该要求来自13:55轮首次root审查把未接入recipe的Conv1dBall报告判作PPA通过的实际缺口；该root仍因设计/实现不合格失败，未产生比较或赢家。
 
 默认 inventory profile 仍关闭自动 compaction。本实验以原生 profile patch 启用自动压缩：75% context 压力、16% 近期历史保留、40000 输出上限；不配置额外 compaction/overflow 重购。`native-accounting.ts` 在 DSH `llm/stream` 接缝计入所有请求（包括 Summary、review、proposer、compaction 与辅助调用），共用累计预算。session usage fold 同时消费带 `llmStreamCall:true` 的原生 `compaction/summary`，模型无关摘要不算模型请求。
 
 ## 验收与 RSI
-
-公开领域配方包含有界的 `host-reference`（原始软件向量比较）、`compiler`（recipe/MLIR/Chip.pb 映射）、`synthesis`（独立 RTL/netlist/原始综合报告）以及根集成所需检查。parent 必须选择直接覆盖局部目标的配方；仅有 `delivery` 文件身份检查不能独自承担 `task-goal`。不存在适配配方时，在本层继续研究或报告验证能力缺口。`synthesis` 只证明其独立边界，不产生可用于 frontend 比较的 PPA 结论。review 可以补充否决，不能以其临时检查替代准入前绑定的技术检查。
 
 根合同固定六项 required criteria：原始参考、设计合同、实现/elaboration/逻辑综合、组件验证、PPA 证据、可复现交付。缺失阶段保持失败或未完成；成功提交文件和模型自报的 PASS 不能使硬件验收通过。
 
@@ -120,11 +116,9 @@ RSI 只读取 root 验收结束后的 sealed trace，改进可复用 Method/skil
 
 ## 自主 campaign 启动入口
 
-`apps/singularity/examples/buckyball-campaign.ts` 通过现有 root/child/trace/proposer/evaluation/activation 接口执行：最多三个连续 RSI Round，共用同一最长 12 小时窗口；达到预算即停。初始 Method 为空，不预置设计答案或分解树。使用原生 bash-local、tool-bash 和 tool-jobs 代替最小 profile 的 persistent bash，后台构建由 DSH 管理，模型可用 job_output 等待结果；没有新增进程管理器。
+`apps/singularity/examples/buckyball-campaign.ts` 通过现有 root/child/trace/proposer/evaluation/activation 接口执行：最多三个连续 RSI Round，共用同一 3 小时窗口；达到预算即停。初始 Method 为空，不预置设计答案或分解树。使用原生 bash-local、tool-bash 和 tool-jobs 代替最小 profile 的 persistent bash，后台构建由 DSH 管理，模型可用 job_output 等待结果；没有新增进程管理器。
 
-用户授权本实验自主选择设计与 PPA 比例，覆盖旧 skill 中逐项请示设计的约定。worker 和独立 reviewer 使用同一批冻结的实验适配 skill，完整携带 references/scripts，原始来源与 digest 记录在 ADAPTATION.json。领域验收由独立 DSH reviewer 在独立目录读取冻结 CAS 输出、应用 patch 并重跑相关真实工具；宿主执行冻结的 buckyball-independent-evidence 配方，从实际重现的源码/config、参考与编译臂数组、recipe/compiler/RTL 路由、组件报告和原始综合报告计算逐项数据。失败检查不能被 review verdict 覆盖。review 不读取原 worker 的可写目录、不修复候选，不把 exit 0 或模型自报 PASS 当正确性；其请求和 tokens 同样入总账。有限证据检查和模型补充审查不等于形式化签核，实际覆盖与缺口保留在 PublicReceipt 的逐 check CAS 报告中。
-
-集成证据中的 recipe/graph 分别是映射前后、由独立复现产生的 generic MLIR；entrypoint 指明真实入口，原生 MLIR parser 只接受从该入口及 func.call 可达的操作。compiler 是实际生成的 Chip.pb；buildReport.compilerCommand 保留带 --target 的真实编译 argv。检查器复用现有 target registry 解析 profile/core/Ball/ISA，并沿未 flatten 的 Yosys write_json cells 查找真实实例，同时核对注册的 ball_class 与模块名或原生 hdlname。PPA activeInstances 使用这些层级实例路径。注释、不可达函数或仅注册但未实例化的 Ball 不算接线；这些结构核对仍须配合独立语义审查。正式执行的 checker 字节从已冻结 CAS dependency 物化，不重新读取可变的源码入口。
+用户授权本实验自主选择设计与 PPA 比例，覆盖旧 skill 中逐项请示设计的约定。领域验收按上述仓库 skill，由**独立 DSH review Agent**在独立目录读取冻结 CAS 输出、检查合同和源代码、应用 patch 并重跑相关真实工具。它不读取原 worker 的可写目录、不修复候选、不把 exit 0 或模型自报 PASS 当正确性。review 的请求和 tokens 同样入总账。这是独立模型审查与复跑证据，并非形式化签核；数值/组件覆盖和缺口留在原生 session 与 receipt。
 
 PPA 采用综合估计，权重 **功耗 0.30 / 关键路径延迟 0.40 / 映射面积 0.30**；比较 `pow(Pb/Pc,.30) * pow(Db/Dc,.40) * pow(Ab/Ac,.30) - 1`。面积、功耗、关键路径延迟分别保留 um²、mW、ns 及 library/corner/clock/activity/offload 身份；不能用时钟约束冒充达到的关键路径或猜测功耗。所有功能项通过、条件一致、均值改善至少 1% 且任一 case 无回退才允许激活。缺 PPA、缺实现或无法验证时保持失败/not-comparable，不强行选赢家。
 

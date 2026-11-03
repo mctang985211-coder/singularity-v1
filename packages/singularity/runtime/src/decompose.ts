@@ -1,5 +1,5 @@
 import type { Session } from '@deepseek-ai/dsh-session'
-import { canonicalize, seal, resolveTaskProposalSpec } from '@singularity/protocol'
+import { canonicalize, seal } from '@singularity/protocol'
 import type { JsonObject, JsonValue, Ref, TaskContract } from '@singularity/protocol'
 
 import type { DecomposePrepareResult, DecomposePreviewBody, DecomposePreviewDeliveryBody } from './decompose-preview.ts'
@@ -10,8 +10,6 @@ import { loadTaskExample, readTemplateResourceSummaries, resolveResourceTemplate
 import type { FrozenMethodResources } from './resources.ts'
 import { findCurrentToolCall, readSessionToolView } from './receipts.ts'
 import type { CasObjectReader, CasObjectWriter } from './workspace.ts'
-import type { DescribeCheck } from './checks.ts'
-import { prepareExecutableChecks } from './checks.ts'
 
 const textEncoder = new TextEncoder()
 const PREPARE_RESULT_MAX_BYTES = 32 * 1024
@@ -22,7 +20,6 @@ const DELIVERY_KIND = 'decompose-preview-delivery'
 export interface DecomposeToolContext {
   readonly methodResources: FrozenMethodResources
   readonly reader: CasObjectReader
-  readonly describeCheck: DescribeCheck
 }
 
 export interface PrepareDecomposeInput {
@@ -31,7 +28,6 @@ export interface PrepareDecomposeInput {
   readonly sessionId: string
   readonly resources: FrozenMethodResources
   readonly reader: CasObjectReader
-  readonly describeCheck: DescribeCheck
   readonly writer: CasObjectWriter
   readonly session: Session
   readonly callId: string
@@ -82,11 +78,6 @@ export async function prepareDecompose(
     throw new DecomposeError('PREVIEW_STALE', 'prepare context epoch is no longer current')
   }
   const example = await loadTaskExample(input.reader, childTemplate.example)
-  const checks = await prepareExecutableChecks({ reader: input.reader, acceptance: childTemplate.acceptancePolicy,
-    spec: resolveTaskProposalSpec(childTemplate, { ...example, inputs: [] }),
-    limits: input.contract.limits, describeCheck: request => input.describeCheck({ ...request,
-      spec: { ...request.spec, inputs: example.inputs.map(value => ({ path: `samples/${encodeURIComponent(value.id)}` })) },
-    }) })
   const resolved = await readTemplateResourceSummaries(input.reader, resourceAssetCatalog(input.resources), childTemplate)
 
   const previewBody = {
@@ -108,12 +99,8 @@ export async function prepareDecompose(
       instanceSchema: structuredClone(childTemplate.instanceSchema),
     },
     resolved,
-    acceptanceChecks: [...checks.previews],
     sourceContract: input.contract.digest,
   }
-  // The full check recipe is already available through self; copying its
-  // evidence/case schemas into every preview pushes the result over the
-  // 32 KiB prepare budget without giving the model any new selection data.
   const preview = seal('preview', previewBody as unknown as JsonObject) as unknown as DecomposePreviewBody
   const previewId = `decompose-preview:${input.runId}:${bindingId}`
   const previewRef: Ref = { id: previewId, digest: preview.digest }
@@ -154,8 +141,7 @@ export async function prepareDecompose(
     example,
     interface: preview.interface,
     resolved,
-    acceptanceChecks: [...checks.previews],
-    reminder: 'Read the complete example; keep this preview receipt for a later model step. Preview samples/<encoded input id> paths refer to the embedded example texts; bind real authorized InputRefs before commit.',
+    reminder: 'Read the complete example; keep this preview receipt for a later model step.',
     planningSketchRef: input.planningSketchRef,
     contextEpoch: view.epoch,
     asOf: input.asOf,

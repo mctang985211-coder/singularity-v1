@@ -34,7 +34,6 @@ import { budgetValueSchema,decomposeInputSchema,decomposeOutputSchema,decomposeP
 import { withToolExample } from './tool-example.ts'
 import type { CasObjectWriter,FrozenSubmission } from './workspace.ts'
 import { freezeSubmission,SubmissionError } from './workspace.ts'
-import type { PreparedExecutableChecks } from './checks.ts'
 
 class TaskToolRefusal extends Error {}
 
@@ -61,7 +60,6 @@ const SELF_PAGE_CHARS = 4096
 
 export interface RunToolControllerOptions {
   readonly contract: TaskContract
-  readonly acceptanceChecks: PreparedExecutableChecks
   readonly runId: string
   readonly sessionId: string
   readonly workspace: string
@@ -297,12 +295,12 @@ export class RunToolController {
   private readTool() {
     return defineTool({
       name: 'singularity_read',
-      description: 'Read authorized Task views/resources; follow nextCursor.',
+      description: 'Read Task views/resources. evidence + child ID or lastAttempt.runId returns public findings as JSON text; follow nextCursor.',
       parameters: {
-        kind: { type: 'string', enum: ['self', 'status', 'resource', 'children', 'evidence', 'ancestor', 'feedback'], required: true },
-        id: { type: 'string', description: 'Visible resource/child, lastAttempt.runId, feedback or ancestor digest.' },
-        cursor: { type: 'string', description: 'Same object nextCursor.' },
-        page: { type: 'integer' },
+        kind: { type: 'string', enum: ['self', 'status', 'resource', 'children', 'evidence', 'ancestor', 'feedback'], required: true, description: 'Authorized Task view.' },
+        id: { type: 'string', description: 'Visible resource, child, evidence, lastAttempt.runId, feedback, or ancestor digest.' },
+        cursor: { type: 'string', description: 'nextCursor from the same read object.' },
+        page: { type: 'integer', description: 'List page size.' },
       },
       output: {
         schema: {
@@ -386,23 +384,22 @@ export class RunToolController {
         }
 
         const contract = this.options.contract
-        const data: JsonValue = {
+        const data = {
           taskId: contract.taskId,
           runId: this.options.runId,
           contractDigest: contract.digest,
           goal: contract.spec.goal,
           criteria: contract.spec.criteria,
           localGuidance: contract.spec.localGuidance ?? [],
-          inputs: contract.spec.inputs,
+          inputs: contract.spec.inputs.map(input => ({
+            id: input.id,
+            path: input.path,
+            access: input.access,
+          })),
           outputs: contract.spec.outputs,
           acceptance: {
             provider: contract.acceptance,
-            checks: [...this.options.acceptanceChecks.previews],
-            recipes: this.options.acceptanceChecks.recipes.map(({ ref, recipe }) => ({
-              ref,
-              name: recipe.name,
-              paramsSchema: recipe.paramsSchema,
-            })) as unknown as JsonValue,
+            criteria: contract.spec.criteria.filter(criterion => criterion.required),
           },
           workspace: this.options.workspace,
           contextEpoch: this.state.epoch,
@@ -435,7 +432,7 @@ export class RunToolController {
   private planTool() {
     const definition = defineTool({
       name: 'singularity_plan',
-      description: "Describe this Task's completion path, dependencies, retained work and next-layer handoffs; levels index responsibility scopes.",
+      description: 'Store or refine this Run PlanningSketch after discovery; creates no Task and changes no contract.',
       parameters: planningParameters,
       output: {
         schema: {
@@ -491,7 +488,7 @@ export class RunToolController {
   private decomposeTool(context: DecomposeToolContext, agent: Agent) {
     const definition = defineTool({
       name: 'singularity_decompose',
-      description: 'Create next-layer work units with consumable outputs and direct verification; each unit owns its scope and integration.',
+      description: 'Prepare a visible child example, then commit its batch on a later model step.',
       parameters: decomposeParameters,
       output: {
         schema: decomposeOutputSchema,
@@ -539,7 +536,6 @@ export class RunToolController {
           sessionId: this.options.sessionId,
           resources: context.methodResources,
           reader: context.reader,
-          describeCheck: context.describeCheck,
           writer: this.options.writer,
           session: agent.session,
           callId: String(exec.callId),
@@ -562,12 +558,12 @@ export class RunToolController {
   private feedbackTool() {
     return defineTool({
       name: 'singularity_feedback',
-      description: 'Send feedback to the direct parent; continue this Run.',
+      description: 'Send structured feedback to your direct parent and continue this Run.',
       parameters: {
         kind: { type: 'string', enum: ['needs-replan', 'input-invalid', 'acceptance-concern', 'blocked'], required: true },
         summary: { type: 'string', required: true },
         proposedChanges: { type: 'array', items: { type: 'json' }, required: true, description: '[{field: goal|inputs|outputs|child-purpose|order, suggestion: string}]' },
-        refs: { type: 'array', items: { type: 'json' }, required: true, description: 'This Run public refs, or [].' },
+        refs: { type: 'array', items: { type: 'json' }, required: true, description: 'Frozen public refs from this Run, or [].' },
       },
       output: {
         schema: {
@@ -604,10 +600,10 @@ export class RunToolController {
     // DSH defaults to exclusive execution; this call is the output-freeze barrier.
     return defineTool({
       name: 'singularity_submit',
-      description: 'Freeze outputs for independent verification.',
+      description: 'Freeze declared outputs and submit this Run for independent verification.',
       parameters: {
-        outputIds: { type: 'array', items: { type: 'string' }, required: true, description: 'Declared non-draft IDs.' },
-        includeLearningDrafts: { type: 'boolean', required: true, description: 'Include learning-drafts/skills and learning-drafts/mcp-servers.' },
+        outputIds: { type: 'array', items: { type: 'string' }, required: true, description: 'Declared non-draft output IDs to freeze.' },
+        includeLearningDrafts: { type: 'boolean', required: true, description: 'Also freeze learning-drafts/skills and learning-drafts/mcp-servers.' },
       },
       output: {
         schema: {
@@ -651,10 +647,10 @@ export class RunToolController {
   private stopTool() {
     return defineTool({
       name: 'singularity_stop',
-      description: 'End this Run with its blocker.',
+      description: 'End this Run with its blocker for settlement.',
       parameters: {
-        reason: { type: 'string', enum: ['blocked', 'unsolved'], required: true },
-        message: { type: 'string', required: true, description: 'Concrete blocker.' },
+        reason: { type: 'string', enum: ['blocked', 'unsolved'], required: true, description: 'Stable stop category.' },
+        message: { type: 'string', required: true, description: 'Concrete blocker or reason.' },
       },
       output: {
         schema: {

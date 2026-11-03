@@ -374,14 +374,14 @@ export const S4B1_BINDING = 'binding:s4b1-probe'
 export const S4B1_EXAMPLE_MARKER = 'S4B1 complete frozen child example'
 
 export function s4b1Example(): TaskExample {
-  return { acceptanceChecks: [],
+  return {
     goal: {
       summary: `${S4B1_EXAMPLE_MARKER}: inspect the supplied sample and report one result.`,
       deliverable: 'A short result and a local note.',
       scope: ['single child sample'],
       constraints: ['Use the frozen example only; this prepare slice creates no child task.'],
     },
-    localCriteria: [{
+    acceptanceCriteria: [{
       id: 's4b1-local-criterion',
       statement: 'The local note records the observed sample.',
     }],
@@ -407,14 +407,14 @@ export const S4B2_BINDING = 'binding:s4b2-probe'
 export const S4B2_EXAMPLE_MARKER = 'S4B2 complete frozen child example'
 
 export function s4b2Example(): TaskExample {
-  return { acceptanceChecks: [],
+  return {
     goal: {
       summary: `${S4B2_EXAMPLE_MARKER}: inspect the supplied sample and report one result.`,
       deliverable: 'A short result and a local note.',
       scope: ['single committed child sample'],
       constraints: ['Commit only after this complete example was delivered on a later model step.'],
     },
-    localCriteria: [{
+    acceptanceCriteria: [{
       id: 's4b2-local-criterion',
       statement: 'The local note records the observed sample.',
     }],

@@ -32,8 +32,6 @@ import type { FrozenMethodResources } from './resources.ts'
 import { resolveResourceTemplate, resourceAssetCatalog, usesExploration } from './resources.ts'
 import { commitFact, usageCost } from './run-settlement.ts'
 import type { CommandService } from './service.ts'
-import type { DescribeCheck } from './checks.ts'
-import { prepareExecutableChecks } from './checks.ts'
 
 export interface DecomposeCommitChild {
   readonly taskId: string
@@ -64,7 +62,6 @@ export interface CommitDecomposeInput {
   /** Tokens already consumed by the live parent Run (closed Runs are read from state). */
   readonly liveTokens: number
   readonly args: DecomposeCommit
-  readonly describeCheck: DescribeCheck
   /** Initial inputs plus frozen direct outputs authorized by the current host cut. */
   readonly authorizedInputs?: readonly InputRef[]
 }
@@ -214,10 +211,6 @@ export async function commitDecomposeBatch(input: CommitDecomposeInput): Promise
       batchId,
       children: childRequests,
     })
-    for (const child of batch.children) {
-      await prepareExecutableChecks({ reader: input.service, acceptance: child.contract.acceptance,
-        spec: child.contract.spec, limits: child.contract.limits, describeCheck: input.describeCheck })
-    }
   } catch (error) {
     if (error instanceof AdmissionError) {
       throw new DecomposeError(error.code, error.message, { cause: error })

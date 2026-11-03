@@ -26,7 +26,7 @@ function makeContract(): TaskContract {
         scope: [],
         constraints: [],
       },
-      criteria: [{checks: [{checkId: 'criterion-a', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'criterion-a', statement: 'pass', required: true }],
+      criteria: [{ id: 'criterion-a', statement: 'pass', required: true }],
       inputs: [],
       outputs: [],
     },

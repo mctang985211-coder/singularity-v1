@@ -1,7 +1,6 @@
 export * from './acceptance.ts'
 export * from './admission.ts'
 export * from './command.ts'
-export * from './checks.ts'
 export * from './digest.ts'
 export * from './errors.ts'
 export * from './exploration.ts'

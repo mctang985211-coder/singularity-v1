@@ -81,7 +81,7 @@ const childContract = sealTaskContract({
       scope: [],
       constraints: [],
     },
-    criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:{id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}]}],
+    criteria: [],
     inputs: [],
     outputs: [],
   },

@@ -1,4 +1,3 @@
-import {checkPolicy,putCheckAssets,describeCheck,checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp,rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -175,19 +174,18 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
   try {
     const taskId = options.taskId ?? 'task-s4b2'
     const guidance = await putValue(service, { v: 1, text: 'Follow the frozen guidance.' }, 'guidance')
-    const example = await putValue(service, {acceptanceChecks: [],
+    const example = await putValue(service, {
       goal: {
         summary: 'Inspect the supplied sample and produce one result.',
         deliverable: 'One result and a local note.',
         scope: ['single child sample'],
         constraints: ['Use only authorized inputs.'],
       },
-      localCriteria: [{ id: 'local', statement: 'Record the observed sample.' }],
+      acceptanceCriteria: [{ id: 'local', statement: 'Record the observed sample.' }],
       inputs: [{ id: 'sample', exampleText: 'sample input' }],
       localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
     }, 'child-example')
-    await putCheckAssets(service)
-    const acceptancePolicy = await putValue(service, { v: 1, kind: 'fixture-policy', ...checkPolicy }, 'acceptance-policy')
+    const acceptancePolicy = await putValue(service, { v: 1, kind: 'fixture-policy' }, 'acceptance-policy')
     const skillBundle = await putTreeBundle(service, 'skill-bundle', [
       { path: 'SKILL.md', content: '# S4-B2 fixture skill\n\nUse the authorized sample.\n' },
     ])
@@ -200,16 +198,16 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
       example,
       instanceSchema: options.instanceSchema ?? {
         type: 'object',
-        required: ['goal', 'localCriteria', 'inputs', 'localOutputs'],
+        required: ['goal', 'acceptanceCriteria', 'inputs', 'localOutputs'],
         additionalProperties: false,
-        properties: {acceptanceChecks: {type:"array"},
+        properties: {
           goal: { type: 'object', required: ['summary', 'deliverable', 'scope', 'constraints'] },
-          localCriteria: { type: 'array' },
+          acceptanceCriteria: { type: 'array' },
           inputs: { type: 'array' },
           localOutputs: { type: 'array' },
         },
       },
-      requiredCriteria: [{checks: [{checkId: 'template-criterion', recipeRef: checkRecipeRef,params:{}}], id: 'template-criterion', statement: 'Use the authorized input.', required: true }],
+      requiredCriteria: [{ id: 'template-criterion', statement: 'Use the authorized input.', required: true }],
       requiredOutputs: [],
       acceptancePolicy,
       skills: ['skill:fixture'],
@@ -258,7 +256,7 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
           scope: ['s4b2'],
           constraints: [],
         },
-        criteria: childTemplate.requiredCriteria,
+        criteria: [],
         inputs: [{ id: 'source', object: parentInput, path: 'input.txt', access: 'read' }],
         outputs: [{ id: 'out', path: 'out.txt', kind: 'file', role: 'deliverable', required: true }],
       },
@@ -372,14 +370,14 @@ async function withScenario<T>(
 }
 
 function proposal(scenario: Scenario, overrides: Partial<TaskProposal> = {}): TaskProposal {
-  return {acceptanceChecks: [],
+  return {
     goal: {
       summary: 'Inspect the authorized sample and report one result.',
       deliverable: 'One result.',
       scope: ['child sample'],
       constraints: ['Use only the authorized input.'],
     },
-    localCriteria: [{ id: 'local-1', statement: 'The note records the sample.' }],
+    acceptanceCriteria: [{ id: 'local-1', statement: 'The note records the sample.' }],
     inputs: [{
       id: 'source',
       object: scenario.parentInput,
@@ -396,7 +394,7 @@ async function prepareBoth(scenario: Scenario): Promise<{
   readonly preparedSecond: PrepareDecomposeOutput
 }> {
   const epoch = initialContextEpoch(sessionId)
-  const base = {describeCheck,
+  const base = {
     contract: scenario.contract,
     runId: parentRunId,
     sessionId,
@@ -431,7 +429,7 @@ function commitInput(
     readonly planningSketchRef?: Ref
   } = {},
 ): CommitDecomposeInput {
-  return {describeCheck,
+  return {
     contract: scenario.contract,
     parentRunId,
     sessionId,
@@ -511,7 +509,7 @@ void test('S4-B2 commit admits one host-derived child and appends exactly one fa
       batchId: result.batchId,
       bindingId: 'b1',
     })
-    assert.deepEqual(child.contract.spec.localGuidance, task.localCriteria)
+    assert.deepEqual(child.contract.spec.localGuidance, task.acceptanceCriteria)
     assert.deepEqual(child.contract.spec.criteria.map(item => item.id), ['template-criterion'])
     assert.deepEqual(child.contract.spec.inputs, task.inputs)
     assert.deepEqual(child.contract.resources.baseTools, scenario.contract.resources.baseTools)
@@ -691,7 +689,7 @@ void test('S4-B2 commit derives per-child budget, join, and rejects exhausted or
     const { prepared, preparedSecond } = await prepareBoth(scenario)
     const firstTask = proposal(scenario)
     const secondTask = proposal(scenario, {
-      localCriteria: [{ id: 'local-second', statement: 'Second child note.' }],
+      acceptanceCriteria: [{ id: 'local-second', statement: 'Second child note.' }],
     })
     const args = {
       action: 'commit' as const,
@@ -763,7 +761,7 @@ void test('S4-B2 commit rejects an active batch, unauthorized inputs, and invali
     const secondArgs = {
       action: 'commit' as const,
       children: [{ bindingId: 'b1', ackPreview: prepared.previewRef.digest, task: proposal(scenario, {
-        localCriteria: [{ id: 'second', statement: 'A second batch cannot start.' }],
+        acceptanceCriteria: [{ id: 'second', statement: 'A second batch cannot start.' }],
       }) }],
     }
     const secondSession = fakeSession([
@@ -904,7 +902,7 @@ void test('S4-B2 one preview admits distinct same-probe instances and replays th
           bindingId: 'b1',
           ackPreview: prepared.previewRef.digest,
           task: proposal(scenario, {
-            localCriteria: [{ id: 'duplicate-binding', statement: 'Duplicate binding.' }],
+            acceptanceCriteria: [{ id: 'duplicate-binding', statement: 'Duplicate binding.' }],
           }),
         },
       ],

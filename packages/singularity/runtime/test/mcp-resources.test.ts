@@ -1,4 +1,3 @@
-import {checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -175,7 +174,7 @@ function contractFor(method: MethodRevision, bundles: readonly Ref[]): TaskContr
     taskId: 'task:mcp',
     spec: {
       goal: { summary: 'Use one frozen MCP server.', deliverable: 'out.txt', scope: [], constraints: [] },
-      criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:checkRecipeRef,params:{}}]}],
+      criteria: [],
       inputs: [],
       outputs: [],
     },

@@ -8,7 +8,7 @@ import { canonicalize,evidenceSchema,parseJsonText,parseProtocolValue,publicRece
 import { activeChildBatch } from './decompose-commit.ts'
 import { DecomposeError } from './errors.ts'
 import type { NodeView } from './prompt.ts'
-import { readTreeManifest } from './resource-bundle.ts'
+import { readTreeBundle } from './resource-bundle.ts'
 import type { CommandService } from './service.ts'
 import { publicVerificationOf } from './verification.ts'
 import { prepareWorkspace } from './workspace.ts'
@@ -20,7 +20,7 @@ interface RunResult {
   readonly runId?: string
   readonly evidenceRef?: Ref
   readonly executionRecordRef?: Ref
-  readonly outputs: readonly InputRef[]
+  readonly outputs: readonly (InputRef & { readonly kind: 'file' | 'tree' })[]
 }
 
 export interface DirectChildResult extends RunResult {
@@ -35,13 +35,8 @@ export async function loadRunResult(service: CommandService, run: RunState | und
       (await service.readObject(run.submitted.outputs, 'object')).bytes)))
     for (const output of [...manifest.outputs, ...manifest.learningDrafts]) {
       if (output.object === undefined) continue
-      const id = `${idPrefix ?? run.runId}:${encodeURIComponent(output.id)}`
-      const outputPath = `${path}/${encodeURIComponent(output.id)}`
-      if (output.kind === 'tree') {
-        const manifest = await readTreeManifest(service, output.object, Number.MAX_SAFE_INTEGER)
-        for (const file of manifest.files) outputs.push({ id: `${id}:${encodeURIComponent(file.path)}`,
-          object: file.object, path: `${outputPath}/${file.path}`, access: 'copy-to-work' })
-      } else outputs.push({ id, object: output.object, path: outputPath, access: 'copy-to-work' })
+      outputs.push({ id: `${idPrefix ?? run.runId}:${output.id}`, kind: output.kind, object: output.object,
+        path: `${path}/${encodeURIComponent(output.id)}`, access: 'read' })
     }
   }
   return { outputs,
@@ -127,8 +122,17 @@ export async function loadDirectChildren(
 export async function mountRunOutputs(service: CommandService, workspace: string, outputs: RunResult['outputs'], mounted: Set<string>): Promise<void> {
   for (const input of outputs) {
     if (mounted.has(input.id)) continue
-    await prepareWorkspace(workspace, [input], service)
-    await chmod(join(workspace, input.path), 0o444)
+    if (input.kind === 'tree') {
+      const bundle = await readTreeBundle(service, input.object, Number.MAX_SAFE_INTEGER)
+      for (const file of bundle.manifest.files) {
+        const path = `${input.path}/${file.path}`
+        await prepareWorkspace(workspace, [{ ...input, object: file.object, path, access: 'copy-to-work' }], service)
+        await chmod(join(workspace, path), 0o444)
+      }
+    } else {
+      await prepareWorkspace(workspace, [{ ...input, access: 'copy-to-work' }], service)
+      await chmod(join(workspace, input.path), 0o444)
+    }
     mounted.add(input.id)
   }
 }
@@ -177,23 +181,9 @@ export async function readChildData(
   }
   if (query.kind === 'resource') {
     const input = [...inputs, ...children.inputs, ...(previous?.outputs ?? [])].find(input => input.id === query.id || input.object.id === query.id)
-    if (input === undefined) {
-      for (const result of [...children.results, ...(previous === undefined ? [] : [previous])]) {
-        if (result.evidenceRef === undefined) continue
-        const evidence = parseProtocolValue(evidenceSchema, parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(
-          (await service.readObject(result.evidenceRef, 'evidence')).bytes)))
-        const receipt = parseProtocolValue(publicReceiptSchema, parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(
-          (await service.readObject(evidence.verification.publicReceipt, 'object')).bytes)))
-        const report = receipt.criteria.flatMap(criterion => criterion.checks).find(check => check.reportRef.id === query.id)
-        if (report !== undefined) {
-          return readPage(new TextDecoder('utf-8', { fatal: true }).decode(
-            (await service.readObject(report.reportRef, 'object')).bytes), report.reportRef, query.cursor)
-        }
-      }
-      throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'resource is not an authorized input, direct output or public check report')
-    }
+    if (input === undefined) throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'resource is not an authorized input or direct output')
     const { bytes } = await service.readObject(input.object, 'object')
-    if (!isUtf8(bytes)) throw new DecomposeError('INVALID_ARGUMENT', `Resource is binary. Read self for its complete authorized InputRef and use native file tools at ${input.path}; use copy-to-work to consume it. Copy that complete descriptor into child inputs when needed.`)
+    if (!isUtf8(bytes)) throw new DecomposeError('INVALID_ARGUMENT', `Resource is binary. Use native file tools at the declared path ${input.path}; binary inputs require copy-to-work. Pass its frozen Ref as a child input when needed.`)
     const text = new TextDecoder().decode(bytes)
     return readPage(text, input.object, query.cursor)
   }

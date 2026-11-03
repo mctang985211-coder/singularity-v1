@@ -5,7 +5,7 @@ import test from 'node:test'
 
 import {
   INVENTORY_CASES, INVENTORY_CHILD_BINDING, INVENTORY_CHILD_TEMPLATE, INVENTORY_ROOT_TEMPLATE,
-  INVENTORY_VERIFIER_ASSET, INVENTORY_RECIPE, INVENTORY_RECIPE_REF, describeInventoryCheck, inventoryCheck, inventoryGuidedBaseline, inventoryTaskSpec, reconcileInventory, verifyInventory,
+  INVENTORY_VERIFIER_ASSET, inventoryGuidedBaseline, inventoryTaskSpec, reconcileInventory, verifyInventory,
 } from '@singularity/domain-inventory'
 import { admitRootTask, canonicalize, parseJsonText } from '@singularity/protocol'
 import type { TaskContract } from '@singularity/protocol'
@@ -56,7 +56,7 @@ void test('guided inventory Method integrates a required independently accepted 
       assert.match(messageTexts(request).join('\n'), /BOLT,4/)
       return call('singularity_decompose', { action: 'commit', children: [{ bindingId: INVENTORY_CHILD_BINDING,
         ackPreview: previewDigestFrom(request), task: { goal: inventoryTaskSpec(scenario.contract.spec.inputs[0].object).goal,
-          localCriteria: [], inputs: scenario.contract.spec.inputs, localOutputs: [], acceptanceChecks: [] } }] })
+          acceptanceCriteria: [], inputs: scenario.contract.spec.inputs, localOutputs: [] } }] })
     }
     if (index === 7) {
       assert.match(messageTexts(request).join('\n'), /explore-child/)
@@ -80,15 +80,13 @@ void test('guided inventory Method integrates a required independently accepted 
     const writer = await CommandService.open({ root: storeRoot, actor: { kind: 'runtime', id: 'singularity-runtime' }, clock: Date.now })
     const bytes = (value: unknown) => new TextEncoder().encode(canonicalize(value))
     try {
-      await writer.putObject(INVENTORY_RECIPE_REF.id, bytes(INVENTORY_RECIPE))
-      const fallbackExample = await writer.putObject('inventory:example:fallback', bytes({ goal: inventoryTaskSpec(original.contract.spec.inputs[0].object).goal, inputs: [{ id: 'transactions', exampleText: csv }], localCriteria: [], localOutputs: [{ id: 'report', path: 'report.json', kind: 'file', description: 'Exact inventory report for independent checking.' }], acceptanceChecks: [{ criterionId: 'task-goal', checks: [inventoryCheck()] }] }))
       const provider = await writer.putObject('inventory:verifier', bytes(INVENTORY_VERIFIER_ASSET))
       const baseline = inventoryGuidedBaseline(provider)
       for (const asset of baseline.assets) assert.deepEqual(await writer.putObject(asset.ref.id, bytes(asset.value)), asset.ref)
       const method = await writer.putObject(baseline.method.id, bytes(baseline.method), 'method')
       const input = await writer.putObject('inventory:transactions', new TextEncoder().encode(csv))
       const exploration = await freezeGlobalResources(writer, 'inventory:global-resources', { documents: [], skills: [], tools: [],
-        baseTools: original.contract.resources.baseTools, fallbackExample, fallbackAcceptance: provider, fallbackJoin: 'probe' })
+        baseTools: original.contract.resources.baseTools, fallbackAcceptance: provider, fallbackJoin: 'probe' })
       assert.equal(original.contract.origin.kind, 'root')
       const contract = admitRootTask({ taskId, spec: inventoryTaskSpec(input), origin: original.contract.origin, method,
         template: { id: INVENTORY_ROOT_TEMPLATE, digest: method.digest },
@@ -99,11 +97,11 @@ void test('guided inventory Method integrates a required independently accepted 
       scenario = { ...original, contract, composition, method: baseline.method, provider,
         runAdmission: { ...original.runAdmission, contract, acceptanceBytes: bytes(INVENTORY_VERIFIER_ASSET),
           budgetReservation: { ...original.runAdmission.budgetReservation, steps: contract.limits.maxStepsPerRun } } }
-      const verifier = (current: TaskContract): RunVerifier => ({ provider: current.acceptance, describeCheck: describeInventoryCheck,
+      const verifier = (current: TaskContract): RunVerifier => ({ provider: current.acceptance,
         async verify(request) {
           assert.equal(request.inputs[0].digest, input.digest)
           verified.push(current.taskId)
-          return verifyInventory(request, writer)
+          return verifyInventory(request)
         },
       })
       const result = await executeTaskTree({ ctx: spike.ctx, journalRoot: storeRoot, workspace, runId, sessionId: `${runId}:session`,

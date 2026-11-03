@@ -1,4 +1,3 @@
-import {checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -15,7 +14,7 @@ const contract = {
   method: { id: 'method', digest: `sha256:${'b'.repeat(64)}` },
   spec: {
     goal: { summary: 'preflight', deliverable: 'out', scope: [], constraints: [] },
-    criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:checkRecipeRef,params:{}}]}],
+    criteria: [],
     inputs: [],
     outputs: [],
   },

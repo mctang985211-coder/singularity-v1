@@ -1,11 +1,9 @@
-import { seedFixtureExample } from './check-fixture.ts'
-import { describeFixtureCheck, fixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { EXPLORE_BINDING_ID, EXPLORE_TEMPLATE_ID, sealMethodRevision, sealPublicReceipt, sealTaskContract, validateInstanceSchema } from '@singularity/protocol'
-import type { JsonObject, TaskContract } from '@singularity/protocol'
+import { EXPLORE_BINDING_ID, EXPLORE_TEMPLATE_ID, sealMethodRevision, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
+import type { TaskContract } from '@singularity/protocol'
 import { CommandService, DomainStore, executeTaskTree, freezeGlobalResources, readTreeBundle } from '@singularity/runtime'
 import type { RunVerifier } from '@singularity/runtime'
 
@@ -32,15 +30,12 @@ void test('empty Method plans three levels, commits direct children only, and in
       if (index === 0) {
         const plan = request.tools?.find(tool => tool.function?.name === 'singularity_plan')
         assert.ok(plan)
-        const schema = plan.function?.parameters as JsonObject
-        for (const levels of [[0, 1], [0, 1, 2], [0], [0, 2], [0, 1, 3]]) {
-          const sketch: JsonObject = { v: 1, taskId, runId, contextEpoch: 'epoch', sourceContract: scenario.contract.digest,
-            objective: 'Integrate a local finding.', directPlan: [], assumptions: [],
-            levels: levels.map(level => ({ level, purpose: 'Own this scope.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
-          }
-          assert.equal(validateInstanceSchema(schema, { sketch }).valid,
-            JSON.stringify(levels) === '[0,1]' || JSON.stringify(levels) === '[0,1,2]', JSON.stringify(levels))
-        }
+        const schema = plan.function?.parameters as { properties: { sketch: { properties: { levels: {
+          anyOf: readonly { minItems: number; maxItems: number; prefixItems: readonly { properties: { level: { const: number } } }[] }[]
+        } } } } }
+        const choices = schema.properties.sketch.properties.levels.anyOf
+        assert.deepEqual(choices.map(choice => [choice.minItems, choice.maxItems]), [[2, 2], [3, 3]], JSON.stringify(schema.properties.sketch.properties.levels))
+        assert.deepEqual(choices.map(choice => choice.prefixItems.map(level => level.properties.level.const)), [[0, 1], [0, 1, 2]])
       }
       assert.match(messageTexts(request).join('\n'), /"mode":"exploration"/)
       assert.match(messageTexts(request).join('\n'), /public-handbook/)
@@ -74,9 +69,9 @@ void test('empty Method plans three levels, commits direct children only, and in
       if (index === 4) assert.match(messageTexts(request).join('\n'), /A public exploration document/)
       return call('singularity_decompose', { action: 'prepare', bindingId: EXPLORE_BINDING_ID })
     }
-    if (index === 5 || index === 9) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: EXPLORE_BINDING_ID, ackPreview: previewDigestFrom(request), task: { acceptanceChecks: [{ criterionId: 'task-goal', checks: [fixtureCheck('task-goal')] }],
+    if (index === 5 || index === 9) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: EXPLORE_BINDING_ID, ackPreview: previewDigestFrom(request), task: {
       goal: { summary: 'Write a local finding.', deliverable: 'result/finding.txt', scope: [], constraints: [] },
-      localCriteria: [], inputs: [], localOutputs: [],
+      acceptanceCriteria: [], inputs: [], localOutputs: [],
     } }] })
     if (index === 12) return call('bash', { command: 'mkdir -p result\nprintf child-result > result/finding.txt' })
     if (index === 13 || index === 19) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
@@ -104,7 +99,7 @@ void test('empty Method plans three levels, commits direct children only, and in
       const handbook = await store.putObject('public-handbook', new TextEncoder().encode('A public exploration document.'))
       const exploration = await freezeGlobalResources(store, 'public-resources', {
         documents: [{ id: 'public-handbook', description: 'Public local workflow guidance.', object: handbook }],
-        skills: original.method.skills, tools: [], baseTools: original.contract.resources.baseTools, fallbackAcceptance: original.contract.acceptance, fallbackExample: await seedFixtureExample(store),
+        skills: original.method.skills, tools: [], baseTools: original.contract.resources.baseTools, fallbackAcceptance: original.contract.acceptance,
       })
       const contract = sealTaskContract({ ...contractPayload(original.contract), method: { id: method.id, digest: method.digest },
         template: { id: EXPLORE_TEMPLATE_ID, digest: method.digest }, resources: { ...original.contract.resources, exploration } })
@@ -113,7 +108,7 @@ void test('empty Method plans three levels, commits direct children only, and in
     } finally {
       await store.close()
     }
-    const verifier = (contract: TaskContract): RunVerifier => ({ describeCheck: describeFixtureCheck, provider: contract.acceptance,
+    const verifier = (contract: TaskContract): RunVerifier => ({ provider: contract.acceptance,
       async verify(request) {
         const content = contract.origin.kind === 'child'
           ? (await readTreeBundle({ readObject: request.readObject }, request.outputs[0], 4096)).contents.get('finding.txt')
@@ -122,7 +117,7 @@ void test('empty Method plans three levels, commits direct children only, and in
         verified.push(contract.taskId)
         return sealPublicReceipt({ v: 1, provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,
           inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-          criteria: await fixtureCriterionResults(request, storeRoot, contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Observed frozen result bytes.' }))), exit: { code: 0, signal: null }, timedOut: false })
+          criteria: contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Observed frozen result bytes.' })), exit: { code: 0, signal: null }, timedOut: false })
       },
     })
     const active = scenario

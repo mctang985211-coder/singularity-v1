@@ -11,7 +11,7 @@ export const bbdevInstructions = 'First use checkout to create your independent 
 export const checkoutDescription = 'Copy prepared baseline and install configs into a new absolute project path.'
 export const checkoutParameters = { type: 'object' as const, additionalProperties: false,
   properties: { project: { type: 'string' as const } }, required: ['project'] }
-export const bbdevDescription = 'Run bbdev in project-local Nix. Keep operation sub-arguments in one argv string.'
+export const bbdevDescription = 'Run bbdev in project-local Nix. Pass separate CLI argv.'
 export const bbdevParameters = { type: 'object' as const, additionalProperties: false,
   properties: { project: { type: 'string' as const },
     args: { type: 'array' as const, items: { type: 'string' as const } } }, required: ['project', 'args'] }

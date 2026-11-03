@@ -1,4 +1,3 @@
-import {checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp,rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -36,14 +35,14 @@ async function withRound(run: (service: CommandService, base: Ref) => Promise<vo
     const source = await service.putObject('source', bytes({ v: 1 }))
     const caseRef = await freezeEvaluationCase(service, 'case:fixture', {
       v: 1, spec: { goal: { summary: 'Produce the declared output.', deliverable: 'result.txt', scope: [], constraints: [] },
-        criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:checkRecipeRef,params:{}}]}], inputs: [], outputs: [] },
+        criteria: [], inputs: [], outputs: [] },
       acceptance: source, environment: { seed: source, profile: source }, baseTools: [],
       limits: { maxRuns: 1, maxStepsPerRun: 2, maxTokens: 100, deadlineAt: 2000, maxDepth: 1, maxTasks: 1, maxBatchChildren: 1 },
     })
     await commit('method/activated', { next: baseRef, approval: source }, 'activate')
     const trace = await service.putObject('trace:fixture', bytes(seal('object', {
       v: 1, kind: 'public-task-trace', traceId: 'trace:fixture', rootTask: { id: 'task:fixture', method: baseRef, outcome: 'verified' },
-      sourceResourceSnapshot: source, chapters: [], authorizedObjects: [{ ref: source, domain: 'object' }], usage, sessionCuts: [],
+      sourceResourceSnapshot: source, chapters: [], authorizedObjects: [], usage, sessionCuts: [],
     })))
     await commit('rsi/trace-sealed', { rootTaskId: 'task:fixture', trace, usage, sessionCuts: [] }, 'seal')
     const plan = await service.putObject('round:plan', bytes({
@@ -104,23 +103,6 @@ void test('rewriting identical skill files with new host-generated refs remains 
     assert.equal(result.accepted, false)
     assert.match(result.reason, /no-op/)
   }, text)
-})
-
-void test('an authorized public resource cannot become a trusted acceptance policy through a Method patch', async () => {
-  await withRound(async (service, base) => {
-    const resource = await service.putObject('source', bytes({ v: 1 }))
-    await submitMethodPatch({ service, actor, roundId: 'round:fixture', value: patch(base, [{ op: 'put-template', template: {
-      id: 'template:new', brief: 'Try to reuse a public resource as policy.', guidance: 'Work on the declared result.',
-      example: { goal: { summary: 'Produce a result.', deliverable: 'result.txt', scope: [], constraints: [] }, inputs: [], acceptanceChecks: [] },
-      instanceSchema: {}, requiredCriteria: [{ id: 'behavior', statement: 'The result passes.', required: true,
-        checks: [{ checkId: 'behavior', recipeRef: checkRecipeRef, params: {} }] }],
-      requiredOutputs: [], acceptancePolicy: resource, skills: [], tools: [], children: [],
-    } }]) })
-    const result = await precheckMethodPatch({ service, actor, roundId: 'round:fixture' })
-    assert.equal(result.accepted, false)
-    assert.match(result.reason, /outside the authorized source\/base policies/)
-    assert.equal(service.facts().filter(fact => fact.type === 'rsi/candidate-ready').length, 0)
-  })
 })
 
 for (const scenario of [

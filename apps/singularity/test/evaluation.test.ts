@@ -1,4 +1,3 @@
-import { describeFixtureCheck, fixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -35,7 +34,7 @@ void test('S6 ordinary DSH Task trees execute every multi-case arm, independentl
     let comparisonRef: Ref | undefined
     const roundId = `${taskId}:round`
     const verified: string[] = []
-    const verifier = (contract: TaskContract): RunVerifier => ({ describeCheck: describeFixtureCheck,
+    const verifier = (contract: TaskContract): RunVerifier => ({
       provider: contract.acceptance,
       async verify(request) {
         const output = request.outputs[0]
@@ -46,7 +45,7 @@ void test('S6 ordinary DSH Task trees execute every multi-case arm, independentl
         return sealPublicReceipt({
           v: 1, provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,
           inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-          criteria: await fixtureCriterionResults(request, storeRoot, contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Fixture exact byte check.', metric: { name: 'output-bytes', unit: 'bytes', value: bytes.length } }))),
+          criteria: contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Fixture exact byte check.', metric: { name: 'output-bytes', unit: 'bytes', value: bytes.length } })),
           exit: { code: 0, signal: null }, timedOut: false,
         })
       },
@@ -182,7 +181,7 @@ void test('S7 synthetic numeric fixtures activate an improved domain Round, star
       spec: {
         ...source.contract.spec,
         goal: { summary: 'Return one integer from 1 to 3; the synthetic metric prefers larger valid integers.', deliverable: OUTPUT_PATH, scope: ['synthetic numeric fixture'], constraints: ['Write exactly one digit with no trailing newline.'] },
-        criteria: [{ checks: [fixtureCheck()], id: 'numeric-result', statement: 'The result is an integer from 1 to 3.', required: true }],
+        criteria: [{ id: 'numeric-result', statement: 'The result is an integer from 1 to 3.', required: true }],
         localGuidance: [{ id: 'numeric-output', statement: 'Use the Method guidance to choose a valid integer.' }],
       },
     })
@@ -207,7 +206,7 @@ void test('S7 synthetic numeric fixtures activate an improved domain Round, star
         composition, agentOptions: agentOptions(), maxOutputBytes: 1024, maxActive: 1, workspaceRoot: join(runWorkspace, 'runs'),
         ...(checkReportedBudget === undefined ? {} : { checkReportedBudget }),
         ...(canOpenRun === undefined ? {} : { canOpenRun }),
-        verifier: { describeCheck: describeFixtureCheck,
+        verifier: {
           provider: contract.acceptance,
           async verify(request) {
             const output = request.outputs[0]
@@ -218,7 +217,7 @@ void test('S7 synthetic numeric fixtures activate an improved domain Round, star
             return sealPublicReceipt({
               v: 1, provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,
               inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-              criteria: await fixtureCriterionResults(request, storeRoot, [{ id: 'numeric-result', verdict: 'pass', reason: 'Independent digit-range check.', metric: { name: 'synthetic-quality', unit: 'points', value: Number(text) } }]),
+              criteria: [{ id: 'numeric-result', verdict: 'pass', reason: 'Independent digit-range check.', metric: { name: 'synthetic-quality', unit: 'points', value: Number(text) } }],
               exit: { code: 0, signal: null }, timedOut: false,
             })
           },

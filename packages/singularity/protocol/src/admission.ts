@@ -32,10 +32,7 @@ import type {
   TaskContract,
   TaskLimits,
   TaskProposal,
-  TaskCriterion,
-  TaskSpec,
 } from './task.ts'
-import type { ProposedCriterionChecks } from './checks.ts'
 
 /** Fixed learning-draft output from docs/framework.md §6.2. */
 export const SKILL_DRAFTS_OUTPUT: OutputSpec = {
@@ -238,40 +235,6 @@ export function assertTaskTemplateInterface(template: TaskTemplate): void {
   assertUniqueIds(template.requiredCriteria, `Template ${JSON.stringify(template.id)} requiredCriteria`)
   validateBaseOutputs(template.requiredOutputs, `Template ${JSON.stringify(template.id)} requiredOutputs`)
   assertUniqueOutputs(template.requiredOutputs)
-  mergeAcceptanceChecks(template.requiredCriteria, [], false)
-}
-
-/** Preserve template obligations and append each authorized criterion group in order. */
-export function mergeAcceptanceChecks(
-  base: readonly TaskCriterion[],
-  additions: readonly ProposedCriterionChecks[],
-  complete = true,
-): TaskCriterion[] {
-  const groups = new Map<string, ProposedCriterionChecks>()
-  for (const group of additions) {
-    if (groups.has(group.criterionId)) invalidArgument(`Duplicate acceptance criterion ${group.criterionId}`)
-    if (!base.some(criterion => criterion.id === group.criterionId && criterion.required)) {
-      invalidArgument(`Acceptance checks must name an existing required criterion: ${group.criterionId}`)
-    }
-    groups.set(group.criterionId, group)
-  }
-  const criteria = base.map(criterion => ({ ...criterion,
-    checks: [...criterion.checks, ...(groups.get(criterion.id)?.checks ?? [])],
-  }))
-  const ids = new Set<string>()
-  for (const criterion of criteria) {
-    if (complete && criterion.required && criterion.checks.length === 0) {
-      invalidArgument(`Required criterion ${criterion.id} must have executable checks`)
-    }
-    for (const check of criterion.checks) {
-      if (ids.has(check.checkId)) invalidArgument(`Duplicate checkId ${check.checkId}`)
-      ids.add(check.checkId)
-    }
-  }
-  if (complete && !criteria.some(criterion => criterion.required)) {
-    invalidArgument('A Task must have at least one required criterion')
-  }
-  return criteria
 }
 
 function validateLocalOutputs(outputs: readonly LocalOutput[]): void {
@@ -293,21 +256,6 @@ function mergeOutputs(
   ]
   assertUniqueOutputs(merged)
   return merged
-}
-
-/** The same resolved proposal view supplies admission and the complete example preview. */
-export function resolveTaskProposalSpec(template: TaskTemplate, proposal: TaskProposal): TaskSpec {
-  assertTaskTemplateInterface(template)
-  assertUniqueIds(proposal.inputs, 'Child spec.inputs')
-  const localOutputs = proposal.localOutputs ?? []
-  validateLocalOutputs(localOutputs)
-  return {
-    goal: proposal.goal,
-    criteria: mergeAcceptanceChecks(template.requiredCriteria, proposal.acceptanceChecks),
-    ...(proposal.localCriteria === undefined ? {} : { localGuidance: proposal.localCriteria }),
-    inputs: proposal.inputs,
-    outputs: [...mergeOutputs(template.requiredOutputs, localOutputs)],
-  }
 }
 
 function assertRootTemplateRef(method: { readonly digest: string }, template: { readonly id: string; readonly digest: string }): void {
@@ -499,14 +447,30 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
         `Child proposal does not satisfy template ${JSON.stringify(template.id)} instanceSchema: ${schemaValidation.reason}`,
       )
     }
-    const spec = resolveTaskProposalSpec(template, request.proposal)
+    assertTaskTemplateInterface(template)
+    assertUniqueIds(request.proposal.inputs, 'Child spec.inputs')
+    const localOutputs = request.proposal.localOutputs ?? []
+    validateLocalOutputs(localOutputs)
+    const outputs = mergeOutputs(template.requiredOutputs, localOutputs)
 
     let contract: TaskContract
     try {
       contract = sealTaskContract({
         v: 1,
         taskId: request.taskId,
-        spec,
+        spec: {
+          goal: request.proposal.goal,
+          criteria: template.requiredCriteria.map(criterion => ({ ...criterion })),
+          ...(request.proposal.localCriteria === undefined
+            ? {}
+            : {
+                localGuidance: request.proposal.localCriteria.map(criterion => ({
+                  ...criterion,
+                })),
+              }),
+          inputs: request.proposal.inputs,
+          outputs: outputs,
+        },
         origin: {
           kind: 'child',
           parentId: parent.taskId,

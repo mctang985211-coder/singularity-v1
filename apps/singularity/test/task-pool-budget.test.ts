@@ -1,4 +1,3 @@
-import { describeFixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -31,7 +30,7 @@ void test('operator cancellation during verification stops the verifier before s
         admission: scenario.runAdmission, composition: scenario.composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
         actor, signal: cancellation.signal, maxActive: 1, workspaceRoot: join(workspace, 'runs'),
         resolveRun: () => Promise.reject(new Error('This Task has no children')),
-        verifier: { describeCheck: describeFixtureCheck, provider: scenario.contract.acceptance, async verify(request) {
+        verifier: { provider: scenario.contract.acceptance, async verify(request) {
           cancellation.abort('operator-stop-during-verification')
           try { await delay(10_000, undefined, { signal: request.signal }) }
           finally { stopped = true }
@@ -64,7 +63,7 @@ void test('reported budget exhaustion drains native child/parent sessions and cl
         contextEpochFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) ?? '')
     }
     if (index === 2) return call('singularity_decompose', { action: 'prepare', bindingId: 'required-work' })
-    if (index === 3) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: 'required-work', ackPreview: previewDigestFrom(request), task: { acceptanceChecks: [],
+    if (index === 3) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: 'required-work', ackPreview: previewDigestFrom(request), task: {
       goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, inputs: [],
       localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Public child output.' }],
     } }] })
@@ -74,10 +73,10 @@ void test('reported budget exhaustion drains native child/parent sessions and cl
   }, async ({ spike, workspace, storeRoot, fixture }) => {
     scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1, maxStepsPerRun: 20, maxDepth: 2, maxTasks: 2,
       childBinding: { bindingId: 'required-work', templateId: 'budget-child', brief: 'Produce a public result.', join: 'required', example: s4b2Example() } })
-    const verifier = (contract: TaskContract): RunVerifier => ({ describeCheck: describeFixtureCheck, provider: contract.acceptance, async verify(request) {
+    const verifier = (contract: TaskContract): RunVerifier => ({ provider: contract.acceptance, verify(request) {
       return Promise.resolve(sealPublicReceipt({ v: 1, provider: contract.acceptance, operationId: request.operationId,
         contractDigest: contract.digest, inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-        criteria: await fixtureCriterionResults(request, storeRoot, contract.spec.criteria.filter(value => value.required).map(value => ({ id: value.id, verdict: 'pass', reason: 'Fixture output.' }))), exit: { code: 0, signal: null }, timedOut: false }))
+        criteria: contract.spec.criteria.filter(value => value.required).map(value => ({ id: value.id, verdict: 'pass', reason: 'Fixture output.' })), exit: { code: 0, signal: null }, timedOut: false }))
     } })
     const service = await CommandService.open({ root: storeRoot, actor, clock: Date.now })
     try {

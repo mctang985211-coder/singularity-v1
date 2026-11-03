@@ -1,4 +1,3 @@
-import { describeFixtureCheck } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { readFacts } from './run-fixture.ts'
 
@@ -293,7 +292,7 @@ void test('S4-A4 rejects a closed HTTP port before Agent or model', { timeout: 2
         composition: scenario.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: { describeCheck: describeFixtureCheck,
+        verifier: {
           provider: scenario.provider,
           verify() { throw new Error('closed HTTP port must not verify') },
         },
@@ -364,7 +363,7 @@ void test('S4-A4 times out a hanging HTTP tool and keeps the client usable for s
         composition: active.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: { describeCheck: describeFixtureCheck,
+        verifier: {
           provider: active.provider,
           verify() { throw new Error('timed-out HTTP tool must not verify') },
         },
@@ -501,7 +500,7 @@ void test('S4-A4 denies an unbound HTTP resource server before dispatch without 
         composition: active.composition,
         agentOptions: agentOptions(),
         maxOutputBytes: 1024 * 1024,
-        verifier: { describeCheck: describeFixtureCheck,
+        verifier: {
           provider: active.provider,
           verify() { throw new Error('unbound resource guard must not verify') },
         },
@@ -570,7 +569,7 @@ for (const variant of [
             composition: scenario.composition,
             agentOptions: agentOptions(),
             maxOutputBytes: 1024 * 1024,
-            verifier: { describeCheck: describeFixtureCheck,
+            verifier: {
               provider: scenario.provider,
               verify() { throw new Error('HTTP surface mismatch must not verify') },
             },

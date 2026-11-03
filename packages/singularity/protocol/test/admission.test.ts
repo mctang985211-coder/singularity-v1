@@ -110,8 +110,8 @@ const childTemplate: TaskTemplate = {
   example: ref('example-child', digestB),
   instanceSchema: {},
   requiredCriteria: [
-    {checks: [{checkId: 'required-a', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'required-a', statement: 'The required result is complete', required: true },
-    {checks: [{checkId: 'required-b', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'required-b', statement: 'The log is traceable', required: false },
+    { id: 'required-a', statement: 'The required result is complete', required: true },
+    { id: 'required-b', statement: 'The log is traceable', required: false },
   ],
   requiredOutputs: [
     { id: 'result', path: 'outputs/result.json', kind: 'file', role: 'deliverable', required: true },
@@ -159,7 +159,7 @@ const rootInput: RootAdmissionInput = {
   spec: {
     goal,
     criteria: [
-      {checks: [{checkId: 'root-required', recipeRef: {id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}], id: 'root-required', statement: 'The root result is verified', required: true },
+      { id: 'root-required', statement: 'The root result is verified', required: true },
     ],
     localGuidance: [{ id: 'root-local', statement: 'Keep root notes with the result' }],
     inputs: [inputA, inputB],
@@ -174,9 +174,9 @@ const rootInput: RootAdmissionInput = {
   limits: parentLimits,
 }
 
-const childProposal: TaskProposal = {acceptanceChecks: [],
+const childProposal: TaskProposal = {
   goal,
-  localCriteria: [
+  acceptanceCriteria: [
     { id: 'local-first', statement: 'Keep local notes in proposal order' },
     { id: 'local-second', statement: 'Keep local notes separate from acceptance' },
   ],
@@ -293,7 +293,7 @@ void test('root admission preserves optional absence instead of adding defaults'
     resources: { baseTools: [], skills: [], mcpServers: [] },
     spec: {
       goal,
-      criteria: rootInput.spec.criteria,
+      criteria: [],
       inputs: [],
       outputs: rootBaseOutputs,
     },
@@ -441,7 +441,7 @@ void test('child admission merges template obligations, proposal guidance, and s
   assert.deepEqual(child.contract.limits, childLimits)
 
   assert.deepEqual(child.contract.spec.criteria, childTemplate.requiredCriteria)
-  assert.deepEqual(child.contract.spec.localGuidance, childProposal.localCriteria)
+  assert.deepEqual(child.contract.spec.localGuidance, childProposal.acceptanceCriteria)
   assert.deepEqual(child.contract.spec.inputs, [inputA, inputB])
   assert.deepEqual(child.contract.spec.outputs, [
     ...childTemplate.requiredOutputs,
@@ -553,7 +553,7 @@ void test('child admission derives probe join from the fixed binding', () => {
 void test('empty Method children inherit a fixed goal criterion and cannot verify with an empty receipt', () => {
   const emptyMethod = sealMethodRevision({ v: 1, id: 'empty', templates: [], skills: [], tools: [] })
   const pinned = { id: emptyMethod.id, digest: emptyMethod.digest }
-  const exploration: protocol.GlobalResourceSnapshot = {fallbackExample:{id:'fallback-example',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'}, v: 1, documents: [], skills: [], tools: [],
+  const exploration: protocol.GlobalResourceSnapshot = { v: 1, documents: [], skills: [], tools: [],
     baseTools: [], fallbackAcceptance: childTemplate.acceptancePolicy, fallbackJoin: 'probe' }
   const parent = admitRootTask({ ...rootInput, method: pinned,
     template: { id: protocol.EXPLORE_TEMPLATE_ID, digest: pinned.digest },
@@ -561,11 +561,11 @@ void test('empty Method children inherit a fixed goal criterion and cannot verif
   const request = childRequest(childBatchInput())
   const child = firstChild(admitChildBatch({ parent, method: emptyMethod, exploration,
     parentRunId: 'run-root-1', batchId: 'batch-1', children: [{ ...request,
-      bindingId: protocol.EXPLORE_BINDING_ID, proposal: { ...request.proposal, localCriteria: [], acceptanceChecks:[{criterionId:'task-goal',checks:childTemplate.requiredCriteria[0].checks}] } }] })).contract
+      bindingId: protocol.EXPLORE_BINDING_ID, proposal: { ...request.proposal, acceptanceCriteria: [] } }] })).contract
   assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['task-goal', true]])
   const resultOutput: OutputSpec = { id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }
   for (const localOutputs of [undefined, []]) {
-    const proposal: TaskProposal = {acceptanceChecks: [{criterionId:'task-goal',checks:childTemplate.requiredCriteria[0].checks}], goal, inputs: [], ...(localOutputs === undefined ? {} : { localOutputs }) }
+    const proposal: TaskProposal = { goal, inputs: [], ...(localOutputs === undefined ? {} : { localOutputs }) }
     const input = { parent, method: emptyMethod, exploration, parentRunId: 'run-root-1', batchId: 'batch-result',
       children: [{ ...request, bindingId: protocol.EXPLORE_BINDING_ID, authorizedInputs: [], proposal }] }
     assert.deepEqual(firstChild(admitChildBatch(input)).contract.spec.outputs.filter(output => output.required), [resultOutput])
@@ -575,12 +575,12 @@ void test('empty Method children inherit a fixed goal criterion and cannot verif
   }
   assert.deepEqual(parent.spec.outputs.filter(output => output.required), rootBaseOutputs.filter(output => output.required))
   const expected: protocol.PublicReceiptExpectation = { provider: child.acceptance, operationId: 'verify-child',
-    contractDigest: child.digest, inputDigests: [], outputDigests: [], requiredCriteria: child.spec.criteria }
+    contractDigest: child.digest, inputDigests: [], outputDigests: [], requiredCriteria: child.spec.criteria.map(value => value.id) }
   const payload = { v: 1, provider: expected.provider, operationId: expected.operationId,
     contractDigest: expected.contractDigest, inputDigests: [], outputDigests: [], exit: { code: 0, signal: null }, timedOut: false }
   assert.equal(protocol.validatePublicReceipt(protocol.sealPublicReceipt({ ...payload, criteria: [] }), expected).verdict, 'invalid')
   for (const verdict of ['pass', 'fail'] as const) {
-    const receipt = protocol.sealPublicReceipt({ ...payload, criteria: [{checks:child.spec.criteria[0].checks.map(check=>({checkId:check.checkId,verdict,reportRef:{id:'report',digest:digestA}})),id:'task-goal',verdict,reason:'Independent local goal finding.'}] })
+    const receipt = protocol.sealPublicReceipt({ ...payload, criteria: [{ id: 'task-goal', verdict, reason: 'Independent local goal finding.' }] })
     assert.equal(protocol.validatePublicReceipt(receipt, expected).verdict, verdict === 'pass' ? 'verified' : 'failed')
   }
 })
@@ -1039,9 +1039,9 @@ void test('child admission validates the template instanceSchema over the propos
   const accepted = admissionWithChildTemplate({
     instanceSchema: {
       type: 'object',
-      required: ['goal', 'localCriteria', 'inputs', 'localOutputs'],
+      required: ['goal', 'acceptanceCriteria', 'inputs', 'localOutputs'],
       additionalProperties: false,
-      properties: {acceptanceChecks: {type:"array"},
+      properties: {
         goal: {
           type: 'object',
           required: ['summary', 'deliverable', 'scope', 'constraints'],
@@ -1053,7 +1053,7 @@ void test('child admission validates the template instanceSchema over the propos
             constraints: { type: 'array', items: { type: 'string' } },
           },
         },
-        localCriteria: { type: 'array', items: { type: 'object' } },
+        acceptanceCriteria: { type: 'array', items: { type: 'object' } },
         inputs: { type: 'array' },
         localOutputs: { type: 'array' },
       },

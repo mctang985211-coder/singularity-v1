@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict'
-import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 
 import { admitRootTask, computeDigestBytes, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type { PublicReceipt, Ref, RoundPlan, TaskContract } from '@singularity/protocol'
 
-import { compareInventory, inventoryMetric, inventoryTaskSpec, inventoryWarehouseTaskSpec, verifyInventory, inventoryCheck } from '../src/index.ts'
+import { compareInventory, inventoryMetric, inventoryTaskSpec, inventoryWarehouseTaskSpec, verifyInventory } from '../src/index.ts'
 import type { InventoryTrialEvidence } from '../src/index.ts'
 
 const encoder = new TextEncoder()
@@ -15,7 +14,6 @@ const ref = (id: string, text = id): Ref => ({ id, digest: computeDigestBytes('o
 const input = ref('case:input', csv)
 const output = ref('inventory-task:output:report', JSON.stringify(report))
 const provider = ref('inventory-verifier')
-const writer = { putObject: (id: string, bytes: Uint8Array) => Promise.resolve({ id, digest: computeDigestBytes('object', bytes) }) }
 
 function contract(): TaskContract {
   return admitRootTask({
@@ -31,14 +29,14 @@ function contract(): TaskContract {
 
 async function verify(text: string, task = contract(), outputs: readonly Ref[] = [output]) {
   const reads: Ref[] = []
-  const receipt = await verifyInventory({ operationId: 'inventory-run:verify', task, signal: new AbortController().signal,
+  const receipt = await verifyInventory({ operationId: 'inventory-run:verify', task,
     inputs: [input, ref('supporting-child-output')], outputs,
     readObject(value) {
       reads.push(value)
       assert.ok(value.id === input.id || value.id === output.id, 'verifier reads only its frozen CSV and declared report')
       return Promise.resolve({ bytes: encoder.encode(value.id === input.id ? csv : text) })
     },
-  }, writer)
+  })
   return { receipt, reads }
 }
 
@@ -63,13 +61,13 @@ void test('warehouse and regional acceptance use exactly each Task declared CSVs
   void digest
   const task = sealTaskContract({ ...payload, spec: inventoryWarehouseTaskSpec([input, west]) })
   const reads: string[] = []
-  const receipt = await verifyInventory({ task, operationId: 'network:verify', signal: new AbortController().signal, inputs: [input, west, ref('child-report')], outputs: [output],
+  const receipt = await verifyInventory({ task, operationId: 'network:verify', inputs: [input, west, ref('child-report')], outputs: [output],
     readObject(value) {
       reads.push(value.id)
       const content = value.id === input.id ? csv : value.id === west.id ? westCsv : JSON.stringify(combined)
       return Promise.resolve({ bytes: encoder.encode(content) })
     },
-  }, writer)
+  })
   assert.equal(receipt.criteria[0]?.verdict, 'pass')
   assert.deepEqual(reads, [input.id, west.id, output.id])
   const leaf = sealTaskContract({ ...payload, spec: { ...task.spec, inputs: [task.spec.inputs[0]] } })
@@ -100,66 +98,20 @@ void test('inventory verifier reports malformed or missing report as a failed cr
 
 void test('inventory CAS failures propagate to host invalid instead of becoming scored domain failures', async () => {
   for (const failed of [input, output]) {
-    await assert.rejects(verifyInventory({ operationId: 'inventory-run:verify', task: contract(), signal: new AbortController().signal, inputs: [input], outputs: [output],
+    await assert.rejects(verifyInventory({ operationId: 'inventory-run:verify', task: contract(), inputs: [input], outputs: [output],
       readObject(value) {
         if (value.id === failed.id) throw new Error('CAS read unavailable')
         return Promise.resolve({ bytes: encoder.encode(csv) })
       },
-    }, writer), /CAS read unavailable/)
+    }), /CAS read unavailable/)
   }
-})
-
-void test('inventory own execution deadline waits for the pending read and returns invalid without a score', async () => {
-  const { digest, ...payload } = contract()
-  void digest
-  const task = sealTaskContract({ ...payload, limits: { ...payload.limits, deadlineAt: Date.now() + 20 } })
-  let readFinished = false
-  const reports: Record<string, unknown>[] = []
-  const receipt = await verifyInventory({ operationId: 'inventory-timeout:verify', task, signal: new AbortController().signal,
-    inputs: [input], outputs: [output],
-    async readObject() {
-      await delay(50)
-      readFinished = true
-      return { bytes: encoder.encode(csv) }
-    },
-  }, { putObject(id, bytes) {
-    reports.push(JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>)
-    return writer.putObject(id, bytes)
-  } })
-  assert.equal(readFinished, true)
-  assert.equal(receipt.criteria[0].verdict, 'invalid')
-  assert.equal(receipt.criteria[0].metric, undefined)
-  assert.equal(receipt.criteria[0].score, undefined)
-  assert.equal(reports.length, 1)
-  assert.equal(reports[0].timedOut, true)
-  assert.equal(reports[0].verdict, 'invalid')
-  assert.deepEqual(reports[0].exit, { code: null, signal: null })
-})
-
-void test('inventory external cancellation and an unrelated TimeoutError preserve their exact causes', async () => {
-  const cancellation = new AbortController(), reason = new Error('operator cancellation')
-  let finishRead!: () => void
-  let readFinished = false
-  const pending = verifyInventory({ operationId: 'inventory-cancel:verify', task: contract(), signal: cancellation.signal,
-    inputs: [input], outputs: [output], readObject: () => new Promise(resolve => {
-      finishRead = () => { readFinished = true; resolve({ bytes: encoder.encode(csv) }) }
-    }) }, writer)
-  const rejected = assert.rejects(pending, error => error === reason)
-  cancellation.abort(reason)
-  assert.equal(readFinished, false)
-  finishRead()
-  await rejected
-  assert.equal(readFinished, true)
-  const cause = new DOMException('upstream storage timeout', 'TimeoutError')
-  await assert.rejects(verifyInventory({ operationId: 'inventory-host-error:verify', task: contract(), signal: new AbortController().signal,
-    inputs: [input], outputs: [output], readObject: () => Promise.reject(cause) }, writer), error => error === cause)
 })
 
 void test('inventory verifier cannot declare an unimplemented required criterion passed', async () => {
   const { digest, ...payload } = contract()
   void digest
   const task = sealTaskContract({ ...payload, spec: { ...payload.spec,
-    criteria: [...payload.spec.criteria, { id: 'unimplemented-check', statement: 'A domain check this provider does not implement.', required: true, checks: [{ ...inventoryCheck(), checkId: 'unknown' }] }],
+    criteria: [...payload.spec.criteria, { id: 'unimplemented-check', statement: 'A domain check this provider does not implement.', required: true }],
   } })
   const { receipt } = await verify(JSON.stringify(report), task)
   assert.equal(receipt.criteria.find(criterion => criterion.id === 'inventory-exact')?.verdict, 'pass')
@@ -181,7 +133,7 @@ const plan: RoundPlan = {
 function receipt(passed: boolean): PublicReceipt {
   return sealPublicReceipt({ v: 1, provider, operationId: 'trial:verify', contractDigest: contract().digest,
     inputDigests: [input.digest], outputDigests: [output.digest],
-    criteria: [{ id: 'inventory-exact', verdict: passed ? 'pass' : 'fail', reason: 'Public exact-report comparison.', checks: [{ checkId: 'inventory-exact', verdict: passed ? 'pass' : 'fail', reportRef: ref('report') }] }],
+    criteria: [{ id: 'inventory-exact', verdict: passed ? 'pass' : 'fail', reason: 'Public exact-report comparison.' }],
     exit: { code: 0, signal: null }, timedOut: false,
   })
 }

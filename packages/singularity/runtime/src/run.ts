@@ -60,8 +60,6 @@ import type { RunVerifier } from './verification.ts'
 import { buildExecutionRecord } from './verification.ts'
 import type { CasObjectReader } from './workspace.ts'
 import { prepareWorkspace } from './workspace.ts'
-import { prepareExecutableChecks } from './checks.ts'
-import type { PreparedExecutableChecks } from './checks.ts'
 
 export { SingleRunError } from './errors.ts'
 export type { SingleRunErrorCode } from './errors.ts'
@@ -177,7 +175,6 @@ export interface PreparedRun {
   readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
   readonly workspace: string
   readonly methodResources: FrozenMethodResources
-  readonly checks: PreparedExecutableChecks
   readonly mountedChildOutputs: Set<string>
   readonly runtime: RuntimeContext
 }
@@ -219,9 +216,6 @@ async function openSingleRun(
     throw new SingleRunError('COMPOSITION_MISMATCH', 'verifier provider does not match the frozen acceptance')
   }
   const compositionPayload = parseProtocolValue(compositionPayloadSchema, request.composition)
-  await ensureObject(service, contract.acceptance, request.admission.acceptanceBytes)
-  const checks = await prepareExecutableChecks({ reader: service, acceptance: contract.acceptance,
-    spec: contract.spec, limits: contract.limits, describeCheck: request.verifier.describeCheck })
   const methodResources = await loadMethodResources(service, contract)
   await assertCompositionResources(service, methodResources, compositionPayload)
   validateComposition(compositionPayload, contract)
@@ -243,6 +237,7 @@ async function openSingleRun(
   const workspace = resolve(request.workspace)
 
   const contractRef = await putSealed(service, contract.taskId, contract, 'contract')
+  await ensureObject(service, contract.acceptance, request.admission.acceptanceBytes)
   await ensureObject(service, contract.environment.seed, request.admission.workspaceSeedBytes)
 
   const admitted = state.tasks.get(contract.taskId)
@@ -304,7 +299,6 @@ async function openSingleRun(
     runOpened,
     workspace,
     methodResources,
-    checks,
     baseToolNames,
     lastAttempt,
     request,
@@ -375,7 +369,6 @@ function buildPreparedRun(options: {
   readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
   readonly workspace: string
   readonly methodResources: FrozenMethodResources
-  readonly checks: PreparedExecutableChecks
   readonly baseToolNames: readonly string[]
   readonly lastAttempt: NodeView['lastAttempt']
   readonly request: ExecuteSingleRunRequest
@@ -385,7 +378,6 @@ function buildPreparedRun(options: {
     runOpened: options.runOpened,
     workspace: options.workspace,
     methodResources: options.methodResources,
-    checks: options.checks,
     mountedChildOutputs: new Set(),
     runtime: buildRuntimeContext(
       options.request,

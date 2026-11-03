@@ -1,4 +1,3 @@
-import { describeFixtureCheck } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -77,7 +76,7 @@ void test('all Task tools return failed with a format example; corrected decompo
       return call(name, args)
     }
     return call('singularity_decompose', JSON.stringify({ action: 'commit', children: [{ bindingId, ackPreview: previewDigestFrom(request),
-      task: { goal: { summary: 'Inspect a component.', deliverable: 'A note.', scope: [], constraints: [] }, inputs: [], localCriteria: [], localOutputs: [{ id: 'note', path: 'notes.txt', kind: 'file', description: 'The inspected component note.' }], acceptanceChecks: [] } }] }))
+      task: { goal: { summary: 'Inspect a component.', deliverable: 'A note.', scope: [], constraints: [] }, inputs: [], acceptanceCriteria: [], localOutputs: [] } }] }))
   }, async ({ spike, fixture, workspace, storeRoot }) => {
     scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1, maxDepth: 2, maxTasks: 2, maxStepsPerRun: 20,
       childBinding: { bindingId, templateId: 'component', brief: 'Inspect one component.', join: 'probe', example: s4b2Example() } })
@@ -86,7 +85,7 @@ void test('all Task tools return failed with a format example; corrected decompo
       const result = await executeSingleRun({ ctx: spike.ctx, journalRoot: storeRoot, workspace, runId, sessionId,
         admission: { ...scenario.runAdmission, budgetReservation: { ...scenario.runAdmission.budgetReservation, steps: 20 } },
         composition: scenario.composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
-        verifier: { describeCheck: describeFixtureCheck, provider: scenario.provider, verify() { throw new Error('parent must yield before verification') } } })
+        verifier: { provider: scenario.provider, verify() { throw new Error('parent must yield before verification') } } })
       assert.equal(result.kind, 'yielded')
       assert.equal(result.usage.unknownRequests, 0)
       assert.equal(fixture.requests.length, 4 + invalid.length)

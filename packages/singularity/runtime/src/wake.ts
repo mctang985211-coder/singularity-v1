@@ -56,6 +56,6 @@ export function batchWakeRequest(state: TaskRunState, runId: string, budget?: Re
   if (batch === undefined || batch.childIds.some(id => state.tasks.get(id)?.phase !== 'closed')) return undefined
   return {
     wakeId: `${runId}:${batch.batchId}:terminal`,
-    text: `Task ${batch.parentTaskId}; Run ${runId}; reason=children-terminal; batch=${batch.batchId}; remainingBudgetPct=${JSON.stringify(budget ?? null)}. Read direct results, failed criteria/check reports and feedback. Update the completion path and disproved assumptions; correct locally, create a new bounded batch or report a blocker. Integrate outputs and check the real consumer before submit.`,
+    text: `Task ${batch.parentTaskId}; Run ${runId}; reason=children-terminal; batch=${batch.batchId}; remainingBudgetPct=${JSON.stringify(budget ?? null)}. Read direct children and feedback, then continue this level's work, integrate outputs, replan or submit.`,
   }
 }

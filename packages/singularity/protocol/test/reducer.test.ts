@@ -231,7 +231,7 @@ function makeRootContract(
     sealTaskContract({
       v: 1,
       taskId: 'task-root',
-      spec: { goal: goalFor('task-root'), criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:{id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}]}], inputs: [], outputs: [] },
+      spec: { goal: goalFor('task-root'), criteria: [], inputs: [], outputs: [] },
       origin: options.origin ?? rootOrigin(),
       method,
       template: {
@@ -277,7 +277,7 @@ function makeChildContract(options: {
     sealTaskContract({
       v: 1,
       taskId: options.taskId,
-      spec: { goal: goalFor(options.taskId), criteria: [{id:'task-goal',statement:'The local result is checked.',required:true,checks:[{checkId:'task-goal',recipeRef:{id:'fixture:check',digest:'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},params:{}}]}], inputs: [], outputs: [] },
+      spec: { goal: goalFor(options.taskId), criteria: [], inputs: [], outputs: [] },
       origin: childOrigin(
         parentId,
         options.parentRunId ?? 'run-root-1',

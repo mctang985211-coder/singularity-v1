@@ -1,4 +1,3 @@
-import {checkPolicy,putCheckAssets,describeCheck,checkRecipeRef} from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp,realpath,rm,symlink,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -127,11 +126,10 @@ async function buildScenario(
   service: CommandService,
   options: BuildScenarioOptions,
 ): Promise<Scenario> {
-  await putCheckAssets(service)
   const guidance = await putValue(service, { v: 1, text: 'Write the declared output.' }, nextId('guidance'))
   const example = await putValue(service, { v: 1, goal: 'fixture example' }, nextId('example'))
-  const acceptancePolicy = await putValue(service, { v: 1, kind: 'fixture-policy', ...checkPolicy }, nextId('acceptance-policy'))
-  const verifierObject = seal('object', { v: 1, kind: 'verifier-identity', name: 's3c-fixture', ...checkPolicy })
+  const acceptancePolicy = await putValue(service, { v: 1, kind: 'fixture-policy' }, nextId('acceptance-policy'))
+  const verifierObject = seal('object', { v: 1, kind: 'verifier-identity', name: 's3c-fixture' })
   const provider = await putValue(service, verifierObject, 'provider:s3c', 'object')
 
   const method = sealMethodRevision({
@@ -174,7 +172,7 @@ async function buildScenario(
         scope: ['s3c'],
         constraints: [],
       },
-      criteria: [{checks: [{checkId: CRITERION_ID, recipeRef: checkRecipeRef,params:{}}],
+      criteria: [{
         id: CRITERION_ID,
         statement: 'The declared output exists with the frozen bytes.',
         required: true,
@@ -326,7 +324,7 @@ async function closeRunVerified(
     contractDigest: scenario.contract.digest,
     inputDigests: scenario.contract.spec.inputs.map(input => input.object.digest),
     outputDigests: [scenario.output.digest],
-    criteria: [{checks: [], id: CRITERION_ID, verdict: 'pass', reason: 'fixture pass' }],
+    criteria: [{ id: CRITERION_ID, verdict: 'pass', reason: 'fixture pass' }],
     exit: { code: 0, signal: null },
     timedOut: false,
   })
@@ -512,7 +510,6 @@ function makeFakeContext(options: FakeContextOptions): {
     get: () => undefined,
     on() {},
     systemPrompt: {
-      getSectionOrder: () => 0,
       section(section: { name: string; order: number; text: string; interpolate?: boolean }) {
         options.sections?.push(section)
       },
@@ -618,7 +615,7 @@ void test('an upstream Agent TimeoutError propagates without a budget closure', 
         tokens: 100_000, steps: 4, deadlineAt: scenario.contract.limits.deadlineAt,
       } },
       composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
-      verifier: {describeCheck, provider: scenario.provider, verify() { throw new Error('must not verify') } },
+      verifier: { provider: scenario.provider, verify() { throw new Error('must not verify') } },
       clock: () => FIXED_NOW + 1000,
     }, service), error => error === failure)
     assert.equal(state.disposed, 1)
@@ -669,14 +666,14 @@ void test('Agent cleanup failure after submission cannot produce Evidence', asyn
         tokens: 100_000, steps: 4, deadlineAt: scenario.contract.limits.deadlineAt,
       } },
       composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
-      verifier: {describeCheck, provider: scenario.provider, verify(request) {
+      verifier: { provider: scenario.provider, verify(request) {
         verifierCalls += 1
         return Promise.resolve(sealPublicReceipt({
           v: 1, provider: scenario.provider, operationId: request.operationId,
           contractDigest: scenario.contract.digest,
           inputDigests: request.inputs.map(ref => ref.digest),
           outputDigests: request.outputs.map(ref => ref.digest),
-          criteria: [{checks: [], id: CRITERION_ID, verdict: 'pass', reason: 'pass' }],
+          criteria: [{ id: CRITERION_ID, verdict: 'pass', reason: 'pass' }],
           exit: { code: 0, signal: null }, timedOut: false,
         }))
       } },
@@ -741,7 +738,7 @@ for (const mode of ['closed', 'active', 'exhausted', 'reservation', 'same-run'] 
           },
         },
         composition: scenario.composition, agentOptions, maxOutputBytes: 1024,
-        verifier: {describeCheck, provider: scenario.provider, verify() { throw new Error('must not verify') } },
+        verifier: { provider: scenario.provider, verify() { throw new Error('must not verify') } },
         clock: () => FIXED_NOW + 1000,
       }
       await assert.rejects(executeSingleRun(request),
@@ -796,7 +793,7 @@ void test('retrySingleRun allows a failed latest Run and starts a fresh attempt/
     const { ctx, state } = makeFakeContext({
       resume: 'ok',
     })
-    const verifier: RunVerifier = {describeCheck,
+    const verifier: RunVerifier = {
       provider: scenario.provider,
       verify() {
         throw new Error('verifier must not run for a no-submission fresh retry')
@@ -903,7 +900,7 @@ void test('retrySingleRun exclusively creates a new workspace without reading hi
       resume: 'ok',
 
     })
-    const verifier: RunVerifier = {describeCheck,
+    const verifier: RunVerifier = {
       provider: scenario.provider,
       verify() { throw new Error('verifier must not run for a no-submission fresh retry') },
     }
@@ -980,7 +977,7 @@ void test('retrySingleRun rejects closed policies and non-fresh identities witho
 
     const before = await unchangedFacts(root)
     const { ctx, state } = makeFakeContext({ resume: 'ok' })
-    const verifier: RunVerifier = {describeCheck,
+    const verifier: RunVerifier = {
       provider: scenario.provider,
       verify() { throw new Error('verifier must not run') },
     }
@@ -1037,7 +1034,7 @@ void test('retrySingleRun rejects closed policies and non-fresh identities witho
         sessionId: 'task-s3c-retry-fresh-session-1',
         agentOptions,
         maxOutputBytes: 1024,
-        verifier: {describeCheck,
+        verifier: {
           provider: freshScenario.provider,
           verify() { throw new Error('verifier must not run') },
         },
@@ -1092,7 +1089,7 @@ void test('retrySingleRun rejects a verified previous Run without opening anothe
         sessionId: 'task-s3c-retry-verified-session-2',
         agentOptions,
         maxOutputBytes: 1024,
-        verifier: {describeCheck,
+        verifier: {
           provider: scenario.provider,
           verify() { throw new Error('verified Run must not be retried') },
         },
@@ -1152,7 +1149,7 @@ void test('retrySingleRun retains previous failed Evidence without reusing it', 
       sessionId: 'task-s3c-retry-evidence-session-2',
       agentOptions,
       maxOutputBytes: 1024,
-      verifier: {describeCheck,
+      verifier: {
         provider: scenario.provider,
         verify() { throw new Error('verifier must not run for a no-submission retry') },
       },
@@ -1824,7 +1821,7 @@ for (const invalid of s4a1InvalidCases) {
           composition: variant.composition,
           agentOptions,
           maxOutputBytes: 1024,
-          verifier: {describeCheck,
+          verifier: {
             provider: variant.scenario.provider,
             verify() { throw new Error('invalid Method resources must not verify') },
           },
@@ -1887,7 +1884,7 @@ void test('S4-A1 8192-byte guidance is mounted at the fixed section name and ord
       composition: variant.composition,
       agentOptions,
       maxOutputBytes: 1024,
-      verifier: {describeCheck,
+      verifier: {
         provider: variant.scenario.provider,
         verify() { throw new Error('no submission') },
       },
@@ -1941,7 +1938,7 @@ void test('S4-A1 create aborts when the actual scoped platformPrompt differs', a
       composition: scenario.composition,
       agentOptions,
       maxOutputBytes: 1024,
-      verifier: {describeCheck,
+      verifier: {
         provider: scenario.provider,
         verify() { throw new Error('platform prompt mismatch must not verify') },
       },

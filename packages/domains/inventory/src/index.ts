@@ -1,5 +1,4 @@
-import { fileURLToPath } from 'node:url'
-import { canonicalize, computeDigest, parseJsonText, sealPublicCheckReport, sealPublicReceipt } from '@singularity/protocol'
+import { canonicalize, parseJsonText, sealPublicReceipt } from '@singularity/protocol'
 import type { JsonValue, PublicReceipt, Ref, RoundPlan, TaskSpec, VerifyRequest } from '@singularity/protocol'
 
 export * from './method.ts'
@@ -47,7 +46,7 @@ export function inventoryTaskSpec(input: Ref): TaskSpec {
       deliverable: 'report.json', scope: ['Public CSV inventory reconciliation'],
       constraints: ['Use integer arithmetic.', 'Include every row and every SKU, including zero and negative totals.', 'Do not change the input CSV.'],
     },
-    criteria: [{ id: 'inventory-exact', statement: 'The frozen report contains the exact row count and sorted per-SKU integer totals for the frozen input CSV.', required: true, checks: [inventoryCheck()] }],
+    criteria: [{ id: 'inventory-exact', statement: 'The frozen report contains the exact row count and sorted per-SKU integer totals for the frozen input CSV.', required: true }],
     inputs: [{ id: 'transactions', object: input, path: 'transactions.csv', access: 'copy-to-work' }],
     outputs: [{ id: 'report', path: 'report.json', kind: 'file', role: 'deliverable', required: true }],
   }
@@ -65,105 +64,55 @@ export function inventoryWarehouseTaskSpec(inputs: readonly Ref[]): TaskSpec {
 }
 
 type PublicInventoryVerifyRequest = VerifyRequest & {
-  readonly signal: AbortSignal
   readonly readObject: (ref: Ref, domain: 'object') => Promise<{ readonly bytes: Uint8Array }>
 }
 
 /** Independent acceptance sees frozen objects only, and produces no total verdict. */
-export async function verifyInventory(request: PublicInventoryVerifyRequest, writer: { putObject(id: string, bytes: Uint8Array): Promise<Ref> }): Promise<PublicReceipt> {
-  const deadlineAt = Math.min(request.task.limits.deadlineAt, Date.now() + INVENTORY_RECIPE.maxWallClockMs)
-  const timeout = new DOMException('Inventory check execution deadline elapsed', 'TimeoutError')
-  const checkDeadline = () => {
-    request.signal.throwIfAborted()
-    if (Date.now() >= deadlineAt) throw timeout
-  }
+export async function verifyInventory(request: PublicInventoryVerifyRequest): Promise<PublicReceipt> {
   let passed = false
-  let timedOut = false
-  let comparedReports = 0
   let reason = 'The required inventory report is absent.'
   const required = request.task.spec.criteria.filter(criterion => criterion.required)
-  try {
-    checkDeadline()
-    if (required.length > 0) {
-      const inputs = request.task.spec.inputs
-      const output = request.outputs.find(ref => ref.id.endsWith(':output:report'))
-      if (inputs.length === 0) throw new Error('Inventory verifier requires the frozen input CSV.')
-      const rows: string[] = []
-      for (const input of inputs) {
-        const csv = new TextDecoder('utf-8', { fatal: true }).decode((await request.readObject(input.object, 'object')).bytes)
-        checkDeadline()
-        // Each declared source has its own header; direct child artifacts remain supporting inputs.
-        reconcileInventory(csv)
-        rows.push(...csv.trimEnd().split(/\r?\n/).slice(1))
-      }
-      const expected = reconcileInventory(`sku,delta\n${rows.join('\n')}\n`)
-      if (output !== undefined) {
-        comparedReports = 1
-        // A failed CAS read is infrastructure invalid, not a zero domain score.
-        const bytes = (await request.readObject(output, 'object')).bytes
-        checkDeadline()
-        try {
-          const actual = parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-          passed = canonicalize(actual) === canonicalize(expected)
-          reason = passed ? 'Exact row count and sorted inventory totals match the frozen CSV.' : 'Inventory totals, order, row count or output structure differ from the frozen CSV.'
-        } catch (error) {
-          reason = error instanceof Error ? error.message : String(error)
-        }
+  if (required.length > 0) {
+    const inputs = request.task.spec.inputs
+    const output = request.outputs.find(ref => ref.id.endsWith(':output:report'))
+    if (inputs.length === 0) throw new Error('Inventory verifier requires the frozen input CSV.')
+    const rows: string[] = []
+    for (const input of inputs) {
+      const csv = new TextDecoder('utf-8', { fatal: true }).decode((await request.readObject(input.object, 'object')).bytes)
+      // Each declared source has its own header; direct child artifacts remain supporting inputs.
+      reconcileInventory(csv)
+      rows.push(...csv.trimEnd().split(/\r?\n/).slice(1))
+    }
+    const expected = reconcileInventory(`sku,delta\n${rows.join('\n')}\n`)
+    if (output !== undefined) {
+      // A failed CAS read is infrastructure invalid, not a zero domain score.
+      const bytes = (await request.readObject(output, 'object')).bytes
+      try {
+        const actual = parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+        passed = canonicalize(actual) === canonicalize(expected)
+        reason = passed ? 'Exact row count and sorted inventory totals match the frozen CSV.' : 'Inventory totals, order, row count or output structure differ from the frozen CSV.'
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error)
       }
     }
-    checkDeadline()
-  } catch (error) {
-    request.signal.throwIfAborted()
-    if (error !== timeout) throw error
-    timedOut = true
-    reason = timeout.message
   }
-  const criteria = await Promise.all(required.map(async criterion => {
-    request.signal.throwIfAborted()
-    const supported = criterion.id === 'inventory-exact' || criterion.id === 'task-goal'
-    const verdict = timedOut || !supported ? 'invalid' as const : passed ? 'pass' as const : 'fail' as const
-    const checks = await Promise.all(criterion.checks.map(async check => {
-      if (check.recipeRef.id !== INVENTORY_RECIPE_REF.id || check.recipeRef.digest !== INVENTORY_RECIPE_REF.digest) throw new Error('Unsupported inventory recipe')
-      const report = sealPublicCheckReport({ v: 1, operationId: request.operationId, contractDigest: request.task.digest,
-        criterionId: criterion.id, checkId: check.checkId, recipeRef: check.recipeRef,
-        inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-        exit: { code: timedOut ? null : 0, signal: null }, timedOut, verdict, data: { comparedReports, matched: passed, reason } })
-      return { checkId: check.checkId, verdict, reportRef: await writer.putObject(`${request.operationId}:${criterion.id}:${check.checkId}`, new TextEncoder().encode(canonicalize(report))) }
-    }))
-    return { id: criterion.id, verdict, reason: supported ? reason : `Inventory verifier does not implement criterion ${criterion.id}.`, checks,
-      ...(supported && !timedOut ? { metric: { name: 'inventory-correct', unit: 'fraction', value: passed ? 1 : 0 } } : {}) }
-  }))
-  request.signal.throwIfAborted()
   return sealPublicReceipt({
     v: 1, provider: request.task.acceptance, operationId: request.operationId, contractDigest: request.task.digest,
     inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-    criteria,
+    criteria: required.map(criterion => {
+      if (criterion.id !== 'inventory-exact') return { id: criterion.id, verdict: 'invalid',
+        reason: `Inventory verifier does not implement criterion ${criterion.id}.` }
+      return { id: criterion.id, verdict: passed ? 'pass' : 'fail', reason,
+        metric: { name: 'inventory-correct', unit: 'fraction', value: passed ? 1 : 0 } }
+    }),
     exit: { code: 0, signal: null }, timedOut: false,
   })
-}
-
-/** Public exact comparison recipe; the same rules back local feedback and frozen verification. */
-export const INVENTORY_RECIPE = {
-  v: 1, name: 'inventory-exact', entrypoint: [process.execPath, fileURLToPath(new URL('./check-cli.js', import.meta.url))], dependencies: [],
-  paramsSchema: { type: 'object', additionalProperties: false, properties: {} },
-  resultSchema: { type: 'object', required: ['comparedReports', 'matched', 'reason'],
-    properties: { comparedReports: { type: 'integer', minimum: 0 }, matched: { type: 'boolean' }, reason: { type: 'string' } } },
-  publicDataPolicy: 'Every declared CSV row and SKU, retaining zero/negative totals; exact JSON shape and ascending SKU order.',
-  passRule: 'The independently computed report equals the frozen candidate report exactly.', maxWallClockMs: 30_000,
-}
-export const INVENTORY_RECIPE_REF: Ref = { id: 'inventory:recipe:exact', digest: computeDigest('object', INVENTORY_RECIPE) }
-export const inventoryCheck = () => ({ checkId: 'inventory-exact', recipeRef: INVENTORY_RECIPE_REF, params: {} })
-export function describeInventoryCheck({ spec }: { spec: Pick<TaskSpec, 'outputs'> & { readonly inputs: readonly { readonly path: string }[] } }) {
-  if (!spec.outputs.some(output => output.id === 'report' && output.path === 'report.json' && output.kind === 'file')) throw new Error('Inventory checks require declared CSV inputs and report.json file output')
-  return { displayCommand: [...INVENTORY_RECIPE.entrypoint, ...spec.inputs.flatMap(input => ['--input', input.path]), '--candidate', 'report.json', '--report', 'checks/inventory.json'],
-    expectedReport: { comparedReports: 1, matched: true, reason: 'Exact report equality.' } }
 }
 
 /** Public domain assets have explicit identities that can be frozen into CAS. */
 export const INVENTORY_VERIFIER_ASSET: JsonValue = {
   v: 1, domain: 'public-inventory', provider: 'inventory-verifier/v1',
   publicBoundary: 'All case inputs and report criteria are public; verifier reads frozen CAS only.',
-  checkRecipes: [INVENTORY_RECIPE_REF], checkResources: [],
 }
 
 export const INVENTORY_COMPARATOR_ASSET: JsonValue = {

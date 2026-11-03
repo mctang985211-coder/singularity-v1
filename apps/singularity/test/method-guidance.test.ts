@@ -1,4 +1,3 @@
-import { describeFixtureCheck } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 
 import test from 'node:test'
@@ -10,7 +9,7 @@ parseJsonText,
 parseProtocolValue,
 taskTemplateSchema
 } from '@singularity/protocol'
-import { DomainStore,executeSingleRun,WORKER_PERSONA } from '@singularity/runtime'
+import { DomainStore,executeSingleRun } from '@singularity/runtime'
 
 import { messageTexts,wireText } from './fixtures/chat-completions.ts'
 
@@ -61,7 +60,7 @@ void test('S4-A1 host derives template/guidance from the pinned Method and the f
           composition: scenario.composition,
           agentOptions: agentOptions(),
           maxOutputBytes: 1024 * 1024,
-          verifier: { describeCheck: describeFixtureCheck,
+          verifier: {
             provider: scenario.provider,
             verify() { throw new Error('no submission') },
           },
@@ -88,8 +87,6 @@ void test('S4-A1 host derives template/guidance from the pinned Method and the f
       assert.equal(prompts.length, 1)
       const prompt = prompts[0]
       assert.ok(prompt)
-      assert.ok(prompt.startsWith(WORKER_PERSONA))
-      assert.equal(prompt.includes('helpful software engineer assistant'), false)
       assert.equal(
         scenario.composition.platformPrompt,
         computeDigest('object', { v: 1, text: prompt }),
@@ -152,7 +149,7 @@ void test('S4-A1 create rejects an actual scoped platformPrompt mismatch before 
           composition: wrongComposition,
           agentOptions: agentOptions(),
           maxOutputBytes: 1024 * 1024,
-          verifier: { describeCheck: describeFixtureCheck,
+          verifier: {
             provider: scenario.provider,
             verify() { throw new Error('platform mismatch must not verify') },
           },

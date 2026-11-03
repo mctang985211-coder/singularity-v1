@@ -1,4 +1,3 @@
-import { describeFixtureCheck, fixtureCriterionResults } from './check-fixture.ts'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -77,7 +76,7 @@ void test('local child cap settles failed while its sibling continues; parent re
       { bindingId: 'exhausted', ackPreview: firstPreview },
       { bindingId: 'sibling', ackPreview: previewDigestFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) },
     ] : [{ bindingId: 'exhausted', ackPreview: previewDigestFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) }])
-      .map(item => ({ ...item, task: { acceptanceChecks: [],
+      .map(item => ({ ...item, task: {
         goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, inputs: [],
         localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Direct public output.' }],
       } })) }, step === 4 ? 100 : 50)
@@ -108,7 +107,7 @@ void test('local child cap settles failed while its sibling continues; parent re
       const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract,
         agentOptions: agentOptions(), base: { v: 1, seed: contract.environment.seed } })
       scenario = { ...original, method, contract, composition }
-      const verifier = (task: TaskContract): RunVerifier => ({ describeCheck: describeFixtureCheck, provider: task.acceptance,
+      const verifier = (task: TaskContract): RunVerifier => ({ provider: task.acceptance,
         async verify(request) {
           const output = request.outputs[0]
           assert.ok(output)
@@ -116,7 +115,7 @@ void test('local child cap settles failed while its sibling continues; parent re
           if (task.taskId === taskId) assert.equal(request.inputs.length, 3, 'root verifier receives its source and both verified required winners')
           return sealPublicReceipt({ v: 1, provider: task.acceptance, operationId: request.operationId, contractDigest: task.digest,
             inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-            criteria: await fixtureCriterionResults(request, storeRoot, task.spec.criteria.filter(value => value.required).map(value => ({ id: value.id, verdict: 'pass', reason: 'Exact declared bytes.' }))),
+            criteria: task.spec.criteria.filter(value => value.required).map(value => ({ id: value.id, verdict: 'pass', reason: 'Exact declared bytes.' })),
             exit: { code: 0, signal: null }, timedOut: false })
         } })
       spike.ctx.on('agent/pre-step', async ({ agent }, next) => {
