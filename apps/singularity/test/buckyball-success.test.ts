@@ -13,7 +13,7 @@ import { runBuckyballCampaign } from '../examples/buckyball-campaign.ts'
 import { writeSyntheticBuckyballToolchain } from './fixtures/buckyball-evidence.ts'
 import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
 
-void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, activates and consumes the new head without paid calls', { timeout: 180_000 }, async t => {
+void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, activates and consumes the new head without paid calls', { timeout: 360_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'bb-success-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const baseline = join(directory, 'baseline'), prepared = join(directory, 'prepared'), root = join(directory, 'execution')
@@ -26,8 +26,10 @@ void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, ac
   await copyFile(project, join(prepared, 'project.json'))
   const bin = join(directory, 'bin')
   await mkdir(bin); await writeFile(join(bin, 'nix'), '#!/bin/sh\nexit 0\n'); await chmod(join(bin, 'nix'), 0o755)
+  const produce = join(directory, 'produce.ts')
+  await writeFile(produce, `import {writeBuckyballEvidence} from ${JSON.stringify(fileURLToPath(new URL('./fixtures/buckyball-evidence.ts', import.meta.url)))};\nawait writeBuckyballEvidence('frontend',{factor:Number(process.argv[2]),pathPrefix:'frontend/'});\n`)
   const reproduce = join(directory, 'reproduce.ts')
-  await writeFile(reproduce, `import {readFile,mkdir} from 'node:fs/promises';\nimport {execFile} from 'node:child_process';\nimport {promisify} from 'node:util';\nimport {writeBuckyballEvidence} from ${JSON.stringify(fileURLToPath(new URL('./fixtures/buckyball-evidence.ts', import.meta.url)))};\nconst sourceText=await readFile('outputs/frontend/candidate.py','utf8');\nconst {factor}=JSON.parse(await readFile('outputs/frontend/design.json','utf8'));\nconst actual=(await promisify(execFile)('python3',['outputs/frontend/candidate.py'])).stdout;\nawait writeBuckyballEvidence('reproduced',{sourceText,actual,factor});\n`)
+  await writeFile(reproduce, `import {readFile,mkdir} from 'node:fs/promises';\nimport {execFile} from 'node:child_process';\nimport {promisify} from 'node:util';\nimport {writeBuckyballEvidence} from ${JSON.stringify(fileURLToPath(new URL('./fixtures/buckyball-evidence.ts', import.meta.url)))};\nconst sourceText=await readFile('outputs/frontend/source.txt','utf8');\nconst {factor}=JSON.parse(await readFile('outputs/frontend/factor.json','utf8'));\nconst actual=(await promisify(execFile)('python3',['outputs/frontend/candidate.py'])).stdout;\nawait writeBuckyballEvidence('reproduced',{sourceText,actual,factor});\n`)
   const oldPath = process.env.PATH, oldUrl = process.env.SINGULARITY_SPIKE_BASE_URL, oldKey = process.env.SINGULARITY_SPIKE_API_KEY
   process.env.PATH = `${bin}:${oldPath ?? ''}`
   t.after(() => {
@@ -63,7 +65,7 @@ void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, ac
       assert.ok(round)
       return call('rsi_submit_patch', { patch: { v: 1, base: JSON.parse(baseText) as Ref, hypothesis: 'A reusable synthetic design guidance lowers the mocked synthesis factor while preserving actual numerical comparison.', predictedRisks: [], transferPlan: 'Synthetic fixture cases only.', changes: [
         { op: 'put-template', template: { id: 'bb-fixture-efficient', brief: 'Produce the synthetic finite fixture and retain all bound root checks.', guidance: `Use the synthetic fixture factor 0.5. ${round}`,
-          example: { goal: { summary: 'Produce a local mapped numerical fixture.', deliverable: 'result/', scope: ['Synthetic local workflow.'], constraints: [] }, inputs: [], localCriteria: [], localOutputs: [], acceptanceChecks: [{ criterionId: 'task-goal', checks: [buckyballCheck('numerical')] }] },
+          example: { goal: { summary: 'Produce a local mapped numerical fixture.', deliverable: 'result/', scope: ['Synthetic local workflow.'], constraints: [] }, inputs: [], localCriteria: [], localOutputs: [], acceptanceChecks: [{ criterionId: 'task-goal', checks: [buckyballCheck('numerical', 'campplus', 'result/evidence.json')] }] },
           instanceSchema: {}, requiredCriteria: [{ id: 'task-goal', statement: 'The actual compiled numerical fixture passes.', required: true, checks: [] }], requiredOutputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
           acceptancePolicy: sourceContract.acceptance, children: [], skills: [], tools: [] } },
         { op: 'set-entry', templateId: 'bb-fixture-efficient' },
@@ -79,7 +81,7 @@ void test('synthetic BB app fixture reproduces checks, evaluates PPA reports, ac
     if (self.taskId.endsWith(':published-work')) publishedConsumed = efficient
     if (!calls.includes('singularity_plan')) return call('singularity_plan', { sketch: { v: 1, taskId: self.taskId, runId: self.runId, contextEpoch: self.contextEpoch, sourceContract: self.contractDigest,
       objective: 'Produce an independently reproduced synthetic fixture.', levels: [0, 1].map(level => ({ level, purpose: 'Own the local synthetic numerical/interface result.', likelyChildren: [], expectedInputs: [], expectedOutputs: ['frontend/'] })), directPlan: [], assumptions: ['This test is synthetic.'] } })
-    if (!calls.includes('bash')) return call('bash', { description: 'Produce the synthetic candidate and design fixture.', command: `mkdir -p frontend\nprintf '%s' 'import json; print(json.dumps([0,1,2,3]))' > frontend/candidate.py\nprintf '%s' '{"factor":${efficient ? '0.5' : '1'}}' > frontend/design.json` })
+    if (!calls.includes('bash')) return call('bash', { description: 'Produce the synthetic candidate and design fixture.', command: `${process.execPath} ${produce} ${efficient ? '0.5' : '1'}\nprintf '%s' 'import json; print(json.dumps([0,1,2,3]))' > frontend/candidate.py\nprintf '%s' '{"factor":${efficient ? '0.5' : '1'}}' > frontend/factor.json` })
     return call('singularity_submit', { outputIds: ['frontend'], includeLearningDrafts: false })
   })
   t.after(() => fixture.close())

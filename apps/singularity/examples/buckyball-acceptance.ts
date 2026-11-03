@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdir,readFile,writeFile } from 'node:fs/promises'
+import { mkdir,readFile,rm,writeFile } from 'node:fs/promises'
 import { dirname,join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -16,7 +16,7 @@ import { createWakeMessage,readTreeBundle,snapshotSession,withToolExample,materi
 import { z } from 'zod'
 
 import { BUCKYBALL_FRONTEND_CAMPAIGN } from './buckyball-frontend-task.ts'
-import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE_REF,BUCKYBALL_ORACLE_SOURCE_REF } from './buckyball-checks.ts'
+import { BUCKYBALL_RECIPE,BUCKYBALL_RECIPE_REF,BUCKYBALL_CHECKER_SOURCE_REF,BUCKYBALL_ORACLE_SOURCE_REF,BUCKYBALL_CASES_SOURCE_REF } from './buckyball-checks.ts'
 
 export const PPA_WEIGHTS = { power: 0.3, delay: 0.4, area: 0.3 } as const
 export const FRONTEND_REVIEW_POLICY = `Independently review this frozen Buckyball frontend submission against its supplied TaskContract.
@@ -30,7 +30,7 @@ Use FP32 rtol=1e-4/atol=1e-5 for preserved FP32 semantics. Integer ISA/layout/ca
 Assess architecture/mapping independently from source and evidence; this is an LLM domain review plus reproduced tool evidence, not formal chip signoff. Do not claim more coverage than rerun.
 PPA objective weights power=0.30, delay=0.40, area=0.30. Extract only independently reproduced mapped synthesis estimates: total power mW, critical-path delay ns, cell area um^2. Use identical library/corner/clock/top/workload/activity/host-offload boundary for paired comparisons. Do not treat a clock target as achieved critical path or substitute guessed power. Record a condition identity and report commands/paths. Missing comparable PPA leaves the PPA metric absent, never invents a zero. Full-chip power simulation is excluded; static/vectorless power is an estimate and its activity assumption must match between arms.
 Root PPA must cover the implemented accelerator boundary used by the delivered workload, with active core/Ball instances and memory models accounted for. Standalone component or unused-IP reports are supporting evidence only; they do not establish frontend PPA. If that boundary is not independently reproduced, fail ppa-evidence and omit ppa.
-Read check-recipe.json for the frozen evidence schema, oracleInputSchema, public data policy and pass rule. frozen-checker.ts and buckyball-oracle.py are its public executables. After reproduction, create reproduced/evidence.json in this review directory following that schema. All file paths resolve under reproduced/. For hostReference and numerical, provide typed native stage inputs and independently reproduced actual arrays. The host generates reference values directly from the pinned original software/checkpoints with the frozen oracle; you cannot supply or replace reference arrays, dtype or oracle implementation. Original FP32 tolerances remain fixed even when the candidate has reduction noise. Unsupported cases or numerical failures require failure evidence and feedback, never an alternative oracle or relaxed contract. Select compiler for recipe/MLIR/Chip.pb without requiring RTL; synthesis for standalone RTL/netlist/raw synthesis reports without claiming workload PPA. delivery checks only file identity and cannot prove a technical task-goal. Integrated root checks must name the real independently produced source/config, native oracle inputs and actual compiled-arm arrays, generated recipe/graph/compiler/RTL routes, nonempty build/component reports, and normalized synthesis report. Copy raw independently reproduced files into this directory. The host computes comparisons and PPA; your verdict cannot override failed checks. Do not copy worker-generated PASS reports as independent results.
+Read check-recipe.json for the frozen evidence schema, numericalInterface and public case suite. frozen-checker.ts, buckyball-oracle.py and buckyball-cases.json are the public executables/data. Each numerical/host-reference check freezes its stage before admission. Every case in that stage is mandatory; failed inputs cannot be moved out of the formal denominator, explained away with FP64 or replaced. Numerical evidence lives at the check.params.manifest path inside the frozen delivery tree and names one Python entrypoint: referencePython <entrypoint.path> <absolute-project.json>, stdin one typed case, stdout one nonempty finite numeric array. The host freshly materializes the original CAS delivery and executes that program over the complete suite. Your reproduced arrays/programs cannot replace it. hostReference maps required caseIds to frozen original-software vector files, checked against the same native oracle/suite; it does not prove candidate implementation. Independently inspect/reproduce the delivered program and all dependencies, then submit findings. Extra valid numerical failures require a fail finding with feedback, even if the finite suite passes. Original FP32/integer tolerances remain fixed. For compiler/synthesis/integration/implementation/ppa/delivery, create reproduced/evidence.json with independently reproduced files under reproduced/. compiler has no RTL requirement; synthesis covers a component, not workload PPA; delivery checks only file identity. Integrated checks must name the actual compiled source/config, reachable compiler/RTL routes, nonempty build/component reports and normalized synthesis report. Worker-generated PASS reports never replace independent results.
 Submit exactly the required IDs in TaskContract.spec.criteria; spec.localGuidance is guidance only. Submit one result per required criterion. Explain commands, observed values and gaps. End with buckyball_review_submit. Maximum 4096 review requests; use them for verification, not implementation. Do not repair candidate code.`
 
 const ppaSchema = z.object({ power: z.number().positive(), delay: z.number().positive(), area: z.number().positive(),
@@ -68,9 +68,11 @@ export function frontendVerifier(ctx: Context, options: {
     const checker = join(workspace, 'frozen-checker.ts')
     const checkerBytes = (await request.readObject(BUCKYBALL_CHECKER_SOURCE_REF, 'object')).bytes
     const oracleBytes = (await request.readObject(BUCKYBALL_ORACLE_SOURCE_REF, 'object')).bytes
+    const caseBytes = (await request.readObject(BUCKYBALL_CASES_SOURCE_REF, 'object')).bytes
     const materializeChecker = async () => {
       await writeFile(checker, checkerBytes)
       await writeFile(join(workspace, 'buckyball-oracle.py'), oracleBytes)
+      await writeFile(join(workspace, 'buckyball-cases.json'), caseBytes)
     }
     await materializeChecker()
     let result: z.infer<typeof reviewSchema> | undefined
@@ -128,10 +130,21 @@ export function frontendVerifier(ctx: Context, options: {
       for (const check of criterion.checks) {
         if (check.recipeRef.id !== BUCKYBALL_RECIPE_REF.id || check.recipeRef.digest !== BUCKYBALL_RECIPE_REF.digest) throw new Error('Unknown Buckyball check recipe')
         request.signal.throwIfAborted()
-        const checkRoot = join(workspace, 'reproduced')
+        const numerical = check.params.kind === 'numerical' || check.params.kind === 'host-reference'
+        const checkRoot = numerical ? join(workspace, 'candidate', encodeURIComponent(criterion.id), encodeURIComponent(check.checkId)) : join(workspace, 'reproduced')
+        if (numerical) {
+          await rm(checkRoot, { recursive: true, force: true })
+          await mkdir(checkRoot, { recursive: true })
+          for (const input of request.task.spec.inputs) await materialize(input.object, join(checkRoot, input.path), false)
+          for (const spec of request.task.spec.outputs) {
+            const ref = request.outputs.find(value => value.id.endsWith(`:output:${spec.id}`))
+            if (ref !== undefined) await materialize(ref, join(checkRoot, spec.path), spec.kind === 'tree')
+          }
+        }
         const reportPath = join(workspace, 'checks', encodeURIComponent(criterion.id), `${encodeURIComponent(check.checkId)}.json`)
         const command = [checker, '--project', options.project, '--root', checkRoot, '--manifest', check.params.manifest as string,
-          '--kind', check.params.kind as string, '--report', reportPath]
+          '--kind', check.params.kind as string,
+          ...(numerical ? ['--stage', check.params.stage as string] : []), '--report', reportPath]
         const deadline = AbortSignal.timeout(Math.max(0, Math.min(BUCKYBALL_RECIPE.maxWallClockMs, request.task.limits.deadlineAt - Date.now())))
         const signal = AbortSignal.any([request.signal, deadline])
         const execution = promisify(execFile)(BUCKYBALL_RECIPE.entrypoint[0], command, { cwd: workspace, signal, maxBuffer: 8 * 1024 * 1024 })

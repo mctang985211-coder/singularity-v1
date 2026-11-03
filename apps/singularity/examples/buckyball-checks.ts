@@ -27,6 +27,8 @@ const dimension = z.number().int().positive()
 const melTensor = tensor.extend({ shape: z.tuple([dimension, z.literal(80), dimension]) })
 const batchLengths = integerTensor.extend({ shape: z.tuple([dimension]) })
 const oracleBase = { seed: z.number().int().min(0).max(2 ** 32 - 1) }
+export const BUCKYBALL_STAGES = ['campplus', 'tokenizer.codes', 'tokenizer.features', 'flow.velocity', 'flow.euler', 'hift', 'llm.hidden', 'llm.logits'] as const
+export type BuckyballStage = typeof BUCKYBALL_STAGES[number]
 const flowInputs = { x: melTensor, mask: tensor.extend({ shape: z.tuple([dimension, z.literal(1), dimension]) }), mu: melTensor,
   spks: tensor.extend({ shape: z.tuple([dimension, z.literal(80)]) }), cond: melTensor }
 const tokenizerInputs = { feats: tensor.extend({ shape: z.tuple([z.literal(1), z.literal(128), dimension]) }),
@@ -57,13 +59,16 @@ export const buckyballOracleInputSchema = z.discriminatedUnion('stage', [
   if (input.stage === 'llm.hidden' || input.stage === 'llm.logits') require(input.tensors.lengths.shape[0] === input.tensors.embeddings.shape[0] && input.tensors.lengths.values.every(value => value >= 1 && value <= input.tensors.embeddings.shape[1]), 'LLM lengths differ from input batch/frames')
   if (input.stage === 'hift' && !input.finalize) require(input.tensors.mel.shape[2] >= 9, 'Nonfinal HiFT needs at least 9 frames for a nonempty output')
 })
-/** Produced in an independent checkout after reproduction, never accepted from worker reports directly. */
+export const BUCKYBALL_CASES_SOURCE = new Uint8Array(await readFile(new URL('./buckyball-cases.json', import.meta.url)))
+export const BUCKYBALL_CASES_SOURCE_REF: Ref = { id: 'buckyball:public-cases', digest: computeDigestBytes('object', BUCKYBALL_CASES_SOURCE) }
+export const BUCKYBALL_CASES = z.object({ v: z.literal(1), cases: z.array(z.object({ id: z.string().min(1), input: buckyballOracleInputSchema })).min(1) })
+  .parse(JSON.parse(new TextDecoder().decode(BUCKYBALL_CASES_SOURCE))).cases
+/** Numerical programs and reference vectors are read from the frozen delivery, never reviewer replacements. */
 export const buckyballEvidenceSchema = z.object({
   design: source.extend({ compiledPrecision: z.string().min(1) }),
-  numerical: z.array(z.object({ actual: file, input: file,
-    compiledSource: file, compiledConfig: file, precision: z.string().min(1), quantization: z.string().min(1),
-    rtol: z.number().nonnegative(), atol: z.number().nonnegative() })).min(1).optional(),
-  hostReference: source.extend({ cases: z.array(z.object({ actual: file, input: file })).min(1) }).optional(),
+  numerical: source.extend({ entrypoint: file, precision: z.string().min(1), quantization: z.string().min(1),
+    rtol: z.number().nonnegative(), atol: z.number().nonnegative() }).optional(),
+  hostReference: source.extend({ cases: z.array(z.object({ caseId: z.string().min(1), actual: file })).min(1) }).optional(),
   compiler: compilerEvidence.optional(),
   synthesis: ppa.extend({ rtl: file }).optional(),
   integration: compilerEvidence.extend({ rtl: file,
@@ -76,8 +81,13 @@ export const buckyballEvidenceSchema = z.object({
 export type BuckyballEvidence = z.infer<typeof buckyballEvidenceSchema>
 export type BuckyballCheckKind = 'integration' | 'implementation' | 'numerical' | 'ppa' | 'delivery' | 'host-reference' | 'compiler' | 'synthesis'
 export const BUCKYBALL_CHECK_KINDS: BuckyballCheckKind[] = ['integration', 'implementation', 'numerical', 'ppa', 'delivery', 'host-reference', 'compiler', 'synthesis']
-const paramsSchema = { type: 'object', additionalProperties: false, required: ['kind', 'manifest'], properties: {
-  kind: { enum: BUCKYBALL_CHECK_KINDS }, manifest: { type: 'string', pattern: '^[A-Za-z0-9_./-]+\\.json$' } } }
+const manifestPath = z.string().regex(/^[A-Za-z0-9_./-]+\.json$/)
+const checkParams = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('numerical'), manifest: manifestPath, stage: z.enum(BUCKYBALL_STAGES) }),
+  z.object({ kind: z.literal('host-reference'), manifest: manifestPath, stage: z.enum(BUCKYBALL_STAGES) }),
+  z.object({ kind: z.enum(['integration', 'implementation', 'ppa', 'delivery', 'compiler', 'synthesis']), manifest: manifestPath }),
+])
+const paramsSchema = z.toJSONSchema(checkParams) as JsonObject
 let checkerSource = await readFile(fileURLToPath(import.meta.url), 'utf8')
 for (const name of ['@singularity/protocol', 'zod']) checkerSource = checkerSource.replaceAll(`'${name}'`, JSON.stringify(import.meta.resolve(name)))
 export const BUCKYBALL_CHECKER_SOURCE = new TextEncoder().encode(checkerSource)
@@ -85,11 +95,11 @@ export const BUCKYBALL_CHECKER_SOURCE_REF: Ref = { id: 'buckyball:checker-source
 export const BUCKYBALL_ORACLE_SOURCE = new Uint8Array(await readFile(new URL('./buckyball-oracle.py', import.meta.url)))
 export const BUCKYBALL_ORACLE_SOURCE_REF: Ref = { id: 'buckyball:oracle-source', digest: computeDigestBytes('object', BUCKYBALL_ORACLE_SOURCE) }
 export const BUCKYBALL_RECIPE = { v: 1, name: 'buckyball-independent-evidence',
-  entrypoint: [process.execPath, fileURLToPath(import.meta.url)], dependencies: [BUCKYBALL_CHECKER_SOURCE_REF, BUCKYBALL_ORACLE_SOURCE_REF], paramsSchema,
+  entrypoint: [process.execPath, fileURLToPath(import.meta.url)], dependencies: [BUCKYBALL_CHECKER_SOURCE_REF, BUCKYBALL_ORACLE_SOURCE_REF, BUCKYBALL_CASES_SOURCE_REF], paramsSchema,
   resultSchema: { anyOf: [{ type: 'object', required: ['checksRun', 'failures'], properties: {
     checksRun: { type: 'integer', minimum: 1 }, failures: { type: 'array', items: { type: 'string' } },
     metrics: { type: 'object', properties: {
-      casesRun: { type: 'integer', minimum: 1 }, valuesCompared: { type: 'integer', minimum: 1 },
+      casesRequired: { type: 'integer', minimum: 1 }, casesRun: { type: 'integer', minimum: 1 }, valuesCompared: { type: 'integer', minimum: 0 },
       mismatches: { type: 'integer', minimum: 0 }, maxAbsError: { type: 'number', minimum: 0 },
       stages: { type: 'integer', minimum: 0 }, routes: { type: 'integer', minimum: 0 },
       recipeOperations: { type: 'integer', minimum: 0 }, mappedOperations: { type: 'integer', minimum: 0 }, targets: { type: 'integer', minimum: 0 },
@@ -99,22 +109,27 @@ export const BUCKYBALL_RECIPE = { v: 1, name: 'buckyball-independent-evidence',
     } }, ppa: { type: 'object' } } },
     { type: 'object', additionalProperties: false, required: ['executionStatus', 'reason'], properties: {
       executionStatus: { const: 'timeout' }, reason: { type: 'string', minLength: 1 } } }] } as JsonObject,
-  publicDataPolicy: 'Independently reproduce candidate artifacts before checks. For host-reference and numerical, input files follow oracleInputSchema. The frozen buckyball-oracle.py directly calls pinned original source/checkpoints in the prepared referencePython, CPU, 2 threads, FP32 input/model with original internal semantics. Neither worker nor reviewer supplies reference arrays, dtype, checkpoint paths or oracle code. The host derives integer exact comparison for tokenizer.codes; all other preserved FP32 outputs use rtol=1e-4/atol=1e-5. Seed, tensors and finite native stage arguments are public. Unsupported stages stay local or report the validation gap; never replace the oracle or relax the contract. compiler parses reachable recipe/graph MLIR and Chip.pb target/core/Ball/ISA with no RTL requirement. synthesis parses raw reports and native Yosys write_json for the declared component boundary and pinned library/corner; its metrics are component estimates and do not produce workload PPA. integration/implementation/ppa retain the complete compiled-design boundary. Keep original source/config and reproduction commands. Semantic review may veto. Worker reports are debug evidence only.',
+  publicDataPolicy: 'Each numerical/host-reference check freezes one stage in params before admission. All cases of that stage in buckyball-cases.json are mandatory, including known valid failures; neither evidence nor reviewer selects or drops them. Host executes the frozen numerical entrypoint from a fresh CAS delivery for each check, through numericalInterface. Reviewer-supplied actual arrays are not accepted. hostReference instead maps every required caseId to its frozen original-software vector file. The frozen oracle calls pinned original source/checkpoints in referencePython, CPU, 2 threads, FP32 input/model with original internal semantics. FP32 remains rtol=1e-4/atol=1e-5; tokenizer.codes is exact safe-integer comparison. Quantized contracts still require independent semantic justification. Unsupported stages stay local. compiler checks reachable recipe/graph MLIR and Chip.pb; synthesis checks a component boundary; neither replaces complete integration/implementation/workload PPA. No FP64 diagnosis, excluded input or reviewer PASS overrides a failed comparison. Reports retain every case and generated expected/actual arrays.',
   passRule: 'All requested identity, nonempty coverage, numerical comparisons, integration and report checks succeed. Missing evidence fails. Quantized error rules require independent review justification.',
+  caseSuite: { ref: BUCKYBALL_CASES_SOURCE_REF, path: fileURLToPath(new URL('./buckyball-cases.json', import.meta.url)),
+    cases: BUCKYBALL_CASES.map(item => ({ id: item.id, stage: item.input.stage })) },
+  numericalInterface: 'referencePython <entrypoint.path> <absolute-project.json>; stdin is one public typed case; stdout must be one nonempty finite JSON number array. cwd is the CAS delivery root. Inputs, program and all dependencies come from the frozen delivery/public suite. Every case in check.params.stage is required.',
   maxWallClockMs: 10 * 60 * 1000, evidenceSchema: z.toJSONSchema(buckyballEvidenceSchema) as JsonObject,
   oracleInputSchema: z.toJSONSchema(buckyballOracleInputSchema) as JsonObject }
 export const BUCKYBALL_RECIPE_REF: Ref = { id: 'buckyball:recipe:independent-evidence', digest: computeDigest('object', BUCKYBALL_RECIPE) }
-export function buckyballCheck(kind: BuckyballCheckKind): ExecutableCheck {
-  return { checkId: kind, recipeRef: BUCKYBALL_RECIPE_REF, params: { kind, manifest: 'evidence.json' } }
+export function buckyballCheck(kind: BuckyballCheckKind, stage?: BuckyballStage, manifest = 'evidence.json'): ExecutableCheck {
+  const params = checkParams.parse({ kind, manifest, ...(stage === undefined ? {} : { stage }) })
+  return { checkId: stage === undefined ? kind : `${kind}:${stage}`, recipeRef: BUCKYBALL_RECIPE_REF, params }
 }
 export function describeBuckyballCheck({ check, spec }: { check: ExecutableCheck; spec: Pick<TaskSpec, 'criteria'> }) {
-  const params = z.object({ kind: z.enum(BUCKYBALL_CHECK_KINDS), manifest: z.string().regex(/^[A-Za-z0-9_./-]+\.json$/) }).parse(check.params)
+  const params = checkParams.parse(check.params)
   if (params.manifest.split('/').includes('..')) throw new AdmissionError('INVALID_ARGUMENT', 'Buckyball evidence manifest must stay in the current evidence directory')
   if (spec.criteria.some(criterion => criterion.id === 'task-goal' && criterion.required
     && criterion.checks.every(value => value.params.kind === 'delivery'))) {
     throw new AdmissionError('INVALID_ARGUMENT', 'Buckyball task-goal needs a technical check covering its goal; delivery only verifies file identities. Choose an applicable public recipe scope or keep unsupported work local.')
   }
-  return { displayCommand: [...BUCKYBALL_RECIPE.entrypoint, '--project', 'project.json', '--root', '.', '--manifest', params.manifest, '--kind', params.kind, '--report', `checks/${encodeURIComponent(check.checkId)}.json`],
+  return { displayCommand: [...BUCKYBALL_RECIPE.entrypoint, '--project', 'project.json', '--root', '.', '--manifest', params.manifest, '--kind', params.kind,
+    ...('stage' in params ? ['--stage', params.stage] : []), '--report', `checks/${encodeURIComponent(check.checkId)}.json`],
     expectedReport: { checksRun: 1, failures: [], metrics: { coverage: 'nonempty for the selected check' } } }
 }
 const sameFile = (a: z.infer<typeof file>, b: z.infer<typeof file>) => a.path === b.path && a.digest === b.digest
@@ -186,13 +201,13 @@ async function readCompilerMapping(root: string, data: z.infer<typeof compilerEv
     throw new BuckyballEvidenceError(`Native MLIR/Chip.pb inspection failed: ${(error as Error).message}`)
   }
 }
-async function executeNative(executable: string, args: string[], signal?: AbortSignal, input?: string) {
+async function executeNative(executable: string, args: string[], signal?: AbortSignal, input?: string, cwd?: string) {
   const termination = new AbortController()
   const cancel = () => { termination.abort(new Error('Checker terminated')) }
   process.once('SIGTERM', cancel)
   try {
     const execution = promisify(execFile)(executable, args,
-    { signal: AbortSignal.any([termination.signal, ...(signal === undefined ? [] : [signal])]), maxBuffer: 8 * 1024 * 1024 })
+    { signal: AbortSignal.any([termination.signal, ...(signal === undefined ? [] : [signal])]), maxBuffer: 8 * 1024 * 1024, cwd })
     execution.child.stdin?.end(input)
     const closed = new Promise<void>(resolve => { execution.child.once('close', () => { resolve() }) })
     try { return await execution } finally { await closed }
@@ -228,10 +243,13 @@ export function parseSynthesisReport(text: string, raw: { power: string; timing:
 }
 
 /** This finite domain checker computes comparisons; it does not read an LLM verdict or a PASS string. */
-export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckKind, manifest: string, projectFile: string, signal?: AbortSignal): Promise<JsonObject> {
+export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckKind, manifest: string, projectFile: string, signal?: AbortSignal, stage?: BuckyballStage): Promise<JsonObject> {
+  const params = checkParams.parse({ kind, manifest, ...(stage === undefined ? {} : { stage }) })
+  const cases = 'stage' in params ? BUCKYBALL_CASES.filter(item => item.input.stage === params.stage) : []
   const failures: string[] = []
   let checksRun = 0
-  const metrics: JsonObject = {}
+  const metrics: JsonObject = cases.length === 0 ? {} : { casesRequired: cases.length }
+  const caseResults: JsonObject[] = []
   const check = (condition: boolean, reason: string) => { checksRun += 1; if (!condition) failures.push(reason) }
   const read = async (identity: z.infer<typeof file>) => {
     const bytes = await readCandidate(identity.path)
@@ -254,18 +272,8 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
   await read(evidence.design.source)
   const configuration = parseCandidate(z.object({ precision: z.string().min(1) }), await read(evidence.design.config))
   check(configuration.precision === evidence.design.compiledPrecision, 'declared compiled precision differs from the reproduced compiler configuration')
-  const compare = async (item: { input: z.infer<typeof file>; actual: z.infer<typeof file> }, tolerance?: { rtol: number; atol: number }) => {
-    const oracleInput = parseCandidate(buckyballOracleInputSchema, await read(item.input))
-    const project = z.object({ referencePython: z.string().min(1) }).parse(JSON.parse(await readFile(projectFile, 'utf8')))
-    let result
-    try { result = await executeNative(project.referencePython, [fileURLToPath(new URL('./buckyball-oracle.py', import.meta.url)), resolve(projectFile)], signal, JSON.stringify(oracleInput)) }
-    catch (error) {
-      if ((error as { code?: number }).code !== 3) throw error
-      throw new BuckyballEvidenceError((error as Error).message)
-    }
-    const expected = z.array(z.number()).min(1).parse(JSON.parse(result.stdout))
-    const actual = parseCandidate(z.array(z.number()).min(1), await read(item.actual))
-    const integer = oracleInput.stage === 'tokenizer.codes'
+  const compare = (expected: number[], actual: number[], caseStage: BuckyballStage, tolerance?: { rtol: number; atol: number }) => {
+    const integer = caseStage === 'tokenizer.codes'
     const { rtol, atol } = integer ? { rtol: 0, atol: 0 } : tolerance ?? { rtol: 1e-4, atol: 1e-5 }
     if (integer) check(expected.every(Number.isSafeInteger) && actual.every(Number.isSafeInteger), 'integer reference comparison requires exact safe-integer values')
     check(expected.length === actual.length, 'numerical tensor lengths differ')
@@ -276,7 +284,7 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
       maxAbsError = Math.max(maxAbsError, error)
       if (!(error <= atol + rtol * Math.abs(value))) mismatches += 1
     }
-    return { valuesCompared, mismatches, maxAbsError, stage: oracleInput.stage }
+    return { valuesCompared, mismatches, maxAbsError }
   }
   const inspectCompiler = async (data: z.infer<typeof compilerEvidence>) => {
     await read(data.recipe); await read(data.graph); await read(data.compiler)
@@ -296,32 +304,55 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
     check(build.exitCode === 0, 'compiler did not complete successfully')
     return mapping
   }
-  if (kind === 'host-reference') {
-    const data = evidence.hostReference
-    if (data === undefined) return { checksRun: checksRun + 1, failures: [...failures, 'independent original-host reference evidence missing'], metrics }
-    check(sameFile(data.source, evidence.design.source) && sameFile(data.config, evidence.design.config), 'host reference source/config differs from reproduced original-host design')
-    let valuesCompared = 0, mismatches = 0, maxAbsError = 0
-    const stages = new Set<string>()
-    for (const item of data.cases) {
-      const compared = await compare(item)
-      stages.add(compared.stage)
-      valuesCompared += compared.valuesCompared; mismatches += compared.mismatches; maxAbsError = Math.max(maxAbsError, compared.maxAbsError)
+  if (kind === 'host-reference' || kind === 'numerical') {
+    const data = kind === 'numerical' ? evidence.numerical : evidence.hostReference
+    if (data === undefined) return { checksRun: checksRun + 1, failures: [...failures, `${kind} evidence missing`], metrics }
+    check(sameFile(data.source, evidence.design.source) && sameFile(data.config, evidence.design.config), 'numerical source/config differs from frozen design')
+    if ('entrypoint' in data) {
+      await read(data.entrypoint)
+      check(data.precision === evidence.design.compiledPrecision, 'numerical program does not exercise actual compiled precision')
+      if (data.precision === 'FP32') check(data.rtol === 1e-4 && data.atol === 1e-5, 'FP32 rules differ from the frozen reference contract')
+    } else check(new Set(data.cases.map(item => item.caseId)).size === data.cases.length, 'reference case IDs are duplicated')
+    const project = z.object({ referencePython: z.string().min(1) }).parse(JSON.parse(await readFile(projectFile, 'utf8')))
+    const oracle = async (oracleInput: z.infer<typeof buckyballOracleInputSchema>) => {
+      let result
+      try { result = await executeNative(project.referencePython, [fileURLToPath(new URL('./buckyball-oracle.py', import.meta.url)), resolve(projectFile)], signal, JSON.stringify(oracleInput)) }
+      catch (error) {
+        if ((error as { code?: number }).code !== 3) throw error
+        throw new BuckyballEvidenceError((error as Error).message)
+      }
+      return z.array(z.number()).min(1).parse(JSON.parse(result.stdout))
     }
-    check(valuesCompared > 0 && mismatches === 0, 'independent original-host reference comparison failed')
-    Object.assign(metrics, { casesRun: data.cases.length, stages: stages.size, valuesCompared, mismatches, maxAbsError })
-  }
-  if (kind === 'numerical') {
-    if (evidence.numerical === undefined) return { checksRun: checksRun + 1, failures: [...failures, 'actual compiled-arm numerical evidence missing'], metrics }
     let valuesCompared = 0, mismatches = 0, maxAbsError = 0
-    for (const item of evidence.numerical) {
-      check(sameFile(item.compiledSource, evidence.design.source) && sameFile(item.compiledConfig, evidence.design.config), 'numerical arm source/config differs from actual compiled design')
-      check(item.precision === evidence.design.compiledPrecision, 'numerical report does not exercise actual compiled precision')
-      if (item.precision === 'FP32') check(item.rtol === 1e-4 && item.atol === 1e-5, 'FP32 rules differ from the frozen reference contract')
-      const compared = await compare(item, { rtol: item.rtol, atol: item.atol })
-      valuesCompared += compared.valuesCompared; mismatches += compared.mismatches; maxAbsError = Math.max(maxAbsError, compared.maxAbsError)
+    for (const item of cases) {
+      try {
+        const expected = await oracle(item.input)
+        let actual: number[]
+        if ('entrypoint' in data) {
+          let execution
+          try { execution = await executeNative(project.referencePython, [resolve(root, data.entrypoint.path), resolve(projectFile)], signal, JSON.stringify(item.input), root) }
+          catch (error) {
+            if (typeof (error as { code?: unknown }).code !== 'number') throw error
+            throw new BuckyballEvidenceError(`Candidate execution failed: ${(error as Error).message}`)
+          }
+          actual = parseCandidate(z.array(z.number()).min(1), execution.stdout)
+        } else {
+          const reference = data.cases.find(value => value.caseId === item.id)
+          if (reference === undefined) throw new BuckyballEvidenceError('Required frozen reference vector missing')
+          actual = parseCandidate(z.array(z.number()).min(1), await read(reference.actual))
+        }
+        const compared = compare(expected, actual, item.input.stage, 'entrypoint' in data ? { rtol: data.rtol, atol: data.atol } : undefined)
+        check(compared.mismatches === 0, `${item.id}: original-reference comparison failed (${String(compared.mismatches)} mismatches)`)
+        caseResults.push({ caseId: item.id, ...compared, expected, actual })
+        valuesCompared += compared.valuesCompared; mismatches += compared.mismatches; maxAbsError = Math.max(maxAbsError, compared.maxAbsError)
+      } catch (error) {
+        if (!(error instanceof BuckyballEvidenceError)) throw error
+        check(false, `${item.id}: ${error.message}`)
+        caseResults.push({ caseId: item.id, failure: error.message })
+      }
     }
-    check(valuesCompared > 0 && mismatches === 0, 'independent actual-arm comparison failed')
-    Object.assign(metrics, { casesRun: evidence.numerical.length, valuesCompared, mismatches, maxAbsError })
+    check(cases.length > 0 && valuesCompared > 0 && mismatches === 0, 'independent original-reference comparison failed')
+    Object.assign(metrics, { casesRun: cases.length, stages: 1, valuesCompared, mismatches, maxAbsError })
   }
   if (kind === 'compiler') {
     const data = evidence.compiler
@@ -385,17 +416,23 @@ export async function checkBuckyballEvidence(root: string, kind: BuckyballCheckK
     check(evidence.delivery !== undefined && evidence.delivery.length > 0, 'reproducible delivery evidence missing')
     for (const identity of evidence.delivery ?? []) await read(identity)
   }
-  return { checksRun, failures, metrics, ...(reproducedPpa === undefined ? {} : { ppa: reproducedPpa }) }
+  return { checksRun, failures, metrics, ...(caseResults.length === 0 ? {} : { cases: caseResults }), ...(reproducedPpa === undefined ? {} : { ppa: reproducedPpa }) }
 }
 
 const entry = process.argv.at(1)
 if (entry !== undefined && import.meta.url === pathToFileURL(resolve(entry)).href) {
   const main = async () => {
     const args = process.argv.slice(2), option = (name: string) => args[args.indexOf(name) + 1]
+    if (args.includes('--list-cases')) {
+      const stage = z.enum(BUCKYBALL_STAGES).parse(option('--list-cases'))
+      console.log(JSON.stringify(BUCKYBALL_CASES.filter(item => item.input.stage === stage)))
+      return
+    }
     const kind = z.enum(BUCKYBALL_CHECK_KINDS).parse(option('--kind'))
     let result: JsonObject
     try {
-      result = await checkBuckyballEvidence(resolve(option('--root')), kind, option('--manifest'), option('--project'))
+      result = await checkBuckyballEvidence(resolve(option('--root')), kind, option('--manifest'), option('--project'), undefined,
+        args.includes('--stage') ? z.enum(BUCKYBALL_STAGES).parse(option('--stage')) : undefined)
     }
     catch (error) {
       if (!(error instanceof BuckyballEvidenceError)) throw error

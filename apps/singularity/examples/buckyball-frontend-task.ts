@@ -1,4 +1,4 @@
-import { buckyballCheck } from './buckyball-checks.ts'
+import { buckyballCheck,BUCKYBALL_STAGES } from './buckyball-checks.ts'
 import type { Ref,RoundPlan,TaskLimits,TaskSpec } from '@singularity/protocol'
 
 const maxWallClockMs = 12 * 60 * 60 * 1000
@@ -40,10 +40,10 @@ export function buckyballFrontendTaskSpec(project: Ref): TaskSpec {
         'Report incomplete or unsupported stages and failed experiments with their evidence.'],
     },
     criteria: [
-      { id: 'model-reference', required: true, checks: [buckyballCheck('host-reference')], statement: 'Pinned original model and inputs are identified; all inference stages and their interfaces are accounted for; original software reference vectors and numerical comparison rules are reproducible.' },
+      { id: 'model-reference', required: true, checks: BUCKYBALL_STAGES.map(stage => buckyballCheck('host-reference', stage, 'frontend/evidence.json')), statement: 'Pinned original model and inputs are identified; all inference stages and their interfaces are accounted for; original software reference vectors and numerical comparison rules are reproducible.' },
       { id: 'design-contract', required: true, checks: [buckyballCheck('integration')], statement: 'The implemented chip frontend has explicit topology, resource, memory, layout, precision, streaming/cache and host/accelerator contracts with a workload-based rationale.' },
       { id: 'implementation', required: true, checks: [buckyballCheck('implementation')], statement: 'Submitted patches apply to the pinned checkout, connect model recipes and RTL through current repository interfaces, and reproduce RTL elaboration and logic synthesis without unresolved implementation stubs. Declare clock/reset constraints and report actual static checks without inventing a frequency target.' },
-      { id: 'component-verification', required: true, checks: [buckyballCheck('numerical')], statement: 'Independent checks exercise the changed operators, numerical boundaries and hardware interfaces using small component/IP/subgraph cases; retain actual inputs, outputs, commands and terminal results. Every model stage has implementation and component evidence or fails this criterion.' },
+      { id: 'component-verification', required: true, checks: BUCKYBALL_STAGES.map(stage => buckyballCheck('numerical', stage, 'frontend/evidence.json')), statement: 'Independent checks exercise the changed operators, numerical boundaries and hardware interfaces using small component/IP/subgraph cases; retain actual inputs, outputs, commands and terminal results. Every model stage has implementation and component evidence or fails this criterion.' },
       { id: 'ppa-evidence', required: true, checks: [buckyballCheck('ppa')], statement: 'Reproduce logical-synthesis estimates of total power (mW), achieved critical-path delay (ns) and mapped cell area (um2) for the implemented accelerator boundary actually used by the workload, accounting for active core/Ball instances and memory models. Standalone component or unused-IP reports alone do not establish frontend PPA. Record library/corner/clock/activity and host-offload boundaries. Compare only identical conditions; use PPA weights 0.30/0.40/0.30. Static power is an estimate, not measured chip power.' },
       { id: 'delivery', required: true, checks: [buckyballCheck('delivery')], statement: 'A reviewer can reproduce the frontend checks from frozen artifacts and source identities. Report actual coverage and remaining integration gaps without claiming full-chip execution or measured chip performance.' },
     ],

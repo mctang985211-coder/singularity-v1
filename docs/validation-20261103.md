@@ -86,3 +86,21 @@ root Evidence digest 为 `sha256:72793c63e4c88ce17f20b3b6f0935779fe693d7adb9239d
 最终本地 `pnpm verify` **498/498**、0失败/取消/跳过，project/build/typecheck/lint通过；真实原生API smoke与Flow正负回归完成。预检首次7/8因operator缺少VCS PATH失败，按服务器指南补齐原生启动环境后完整重跑 **8/8**，包含真实UVM与compiler构建、MCP参数失败/取消，不跳过检查。提交 `b0bbdbee9438aeacd583309a299d108900c9e22f` 的 [GitHub CI](https://github.com/mctang985211-coder/singularity-v1/actions/runs/41555482478) 同样通过。
 
 修复后完整新根 `artifacts/takeover-full-native-oracle-20261103-0858` 于08:58:43 +08开始，继承全部历史消费、原14:15:16截止、剩余2468调用/776057275可分配tokens。启动只读审计partial/valid、issues=[]，生产源码快照未变。原02:15:16起点的30分钟watch继续，下一09:15:16。初期root触发READ_SELF_FIRST与PLAN_FIRST后自行完成self/计划再探索；不记作首次操作成功。尚无完整真实验收结果，PR保持Draft。
+
+09:15:16定时快照为7个Task、两批派发、最大深度2、1个冻结提交；shared1843调用/248712015 reported tokens、unknown3。根六项检查保持，完整project/guide Ref从self到直属合同再到Flow用例孙任务均一致，已启动Run目录独立、输入物化字节匹配CAS。审计`operator-audit-0915.json`为partial/valid、issues=[]、生产源码哈希未变。ONNX任务曾实际尝试FP64累加，冻结提交声明其最终actual使用FP32，独立review仍在核验；这里不把对照试验或自述记成通过。
+
+首份正式通过来自LLM数值child：Evidence `sha256:3837b4f619d20202e295f917197342fd9cad9a5755230ed1318a49b1d74e35b5`，check report `sha256:abee7550d2f441dffffd64651726f831a63e4cc0a49a5014de95e1dd06b19839`。原4例加reviewer独立新增7例，正式共70checks/11cases/162996值，0mismatch、maxAbsError=0；通过使用原生固定oracle与checkpoint-only独立executor。手写attention分支的数值差异保留，不能将SDPA分支通过升级为该分支或真实硬件通过。09:26审计核对Run/Task关闭、sessionCut/usage及receipt/check CAS身份，partial/valid、issues=[]；整个根仍未终结，没有完整frontend/PPA/RSI成功。
+
+0858根于09:34:41经SIGUSR1正常取消。ONNX reviewer重跑提交case通过，但新增有效campplus输入T16出现6/192超差、T8出现8/192超差；reviewer以FP64对照解释后将其排除在正式分母之外，仍正式pass。这是第二种真实错误放行，原生oracle身份正确不能保证用例覆盖正确。原Evidence为`sha256:06cc7974c0a381db7de5b24ef1caaa1feca69bcc2335b254966905ca0b7b7070`，report为`sha256:4f1665b8eb243943040876a7a33cc9a9a8b72a8085740aeb40f248bb22438743`；全部证据及停止原因保留。HiFT另有9个额外probe中34/65760值超差（final-t28为31、loud-t14为3），取消前无正式结论。
+
+正常取消终局审计为complete/valid、issues=[]，7个Task/Run全部关闭，2 verified、5 cancelled；唯一trace digest为`sha256:25a430074698f15d76c7adeb86fdd50c2283bab775db028ea7f7cf94ec0911e3`。本根694调用全部结算、96934305 reported tokens、unknown2。共享消费现为2226调用/313657030 reported tokens、unknown5、pending0，仍计入原12小时窗口。没有完整frontend/PPA/RSI成功，PR38不具备合并条件。
+
+针对分母缺口，领域配方冻结25个公开完整typed输入，覆盖8stage；每条数值check的stage由合同固定。宿主从CAS为每条check重新物化交付，执行数值入口的全部输入；不接受reviewer选择输入、提供actual数组或更换程序。host-reference使用同一suite的caseId向量。报告保留每例输入身份、expected/actual、指标及失败，已知有效失败不再作为可排除的诊断。FP32/整数阈值、完整root六项要求及量化语义审查保持。
+
+`artifacts/suite-regression-final-20261103`对原ONNX CAS代码仅加JSON CLI适配，全部3例/576值执行，10个超差并拒绝；原生参考向量正控0超差。candidate使用固定referencePython，与原review的系统python3环境不同，不能声称精确重现原6/8的舍入数字。首次脚本要求T8也必须失败而断言失败的记录原样保留，未改case或阈值。定向42项及完整app成功fixture通过，后续完整verify/预检和真实根另记，不能将此回归当作完整frontend成功。
+
+扩展归档回归对HiFT执行全部6例/30720值，精确复现34超差（final-t28为31、loud-t14为3）并拒绝；原LLM程序hidden/logits各3例、合计76081值均精确一致。全suite原生检查首次发现两条旧tokenizer T16/length12输入在原ONNX模型触发3×4广播错误；原始失败保留。最终仅将这两条输入的length改为实跑成功的15，保留全部tensor值、形状和其他字段，caseId同步l15，provenance明确记录这项operator修正。所有已知有效CAM++/HiFT数值失败仍必跑。固定Python3.10.20/NumPy1.26.4与原系统Python3.14.6/NumPy2.5.1的版本差异已核实。
+
+最终复核修正全部case程序失败的零比较值报告schema，并用清空后的目录物化CAS交付；相应回归42/42通过，覆盖reviewer预放未冻结dependency不能影响结果。首轮完整verify的app成功fixture在并行负载下超出180秒，测试预算按全8stage工作量提高至360秒；中间verify因suite调整主动停止，最终门禁结果另记。没有降低用例数、正确性断言或业务阈值。
+
+最终冻结版本的`pnpm verify` **503/503**，protocol210、runtime140、app138、inventory15，0失败/取消/跳过，project/build/typecheck/lint通过（artifacts/takeover-suite-frozen-verify-20261103.log）。`artifacts/suite-extended-release-regression-20261103`的原生正控覆盖全部8stage/25case/128831值、精确一致；`artifacts/suite-regression-frozen-20261103`的ONNX负/正控和扩展HiFT/LLM报告绑定相同recipe digest `sha256:59ec9223ad38d4f5bcd1ffb8b9471383c38103637c3d3fafe99b8a005ad667d2`。10:15:16巡检准时落盘，无新增付费请求；完整工具链预检仍在进行，新真实根尚未启动。
