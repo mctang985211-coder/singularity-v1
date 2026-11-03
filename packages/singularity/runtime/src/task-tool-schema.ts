@@ -50,7 +50,7 @@ export const taskProtocolReference: JsonValue = {
   examples: taskToolExamples,
   method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Register skill/MCP assets in the Method before binding their IDs; public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
   skills: 'Use skills as technical references and candidate procedures for this Task. Choose relevant parts from the current goal, inputs and checks; build your own local workflow under the frozen scope and acceptance policy. Load referenced skills by native skill(name=...) and bundled references/scripts from the returned resourceBase.',
-  checks: 'Read self for bound checks and prepare for allowed recipes and derived command/report previews. Bind checks for every required criterion through acceptanceChecks before admission; use [] only when the template already supplies every required check. localCriteria is guidance. Execute public checks during work and correct failures; submit freezes outputs for independent reproduction of the same checks.',
+  checks: 'Read self for bound checks, allowed recipe refs/params and derived command/report previews. Bind checks for every required criterion through acceptanceChecks before admission; use [] only when the template already supplies every required check. localCriteria is guidance. Execute public checks during work and correct failures; submit freezes outputs for independent reproduction of the same checks.',
   inputs: 'Copy complete authorized InputRefs from self or direct children, including object.id/object.digest, path and access. inputs:[] is for public-resource work independent of Task artifacts. A binary resource is available at its authorized local path; obtain its Ref from self rather than computing a digest.',
   results: 'Read evidence with a direct child ID or lastAttempt.runId. Join every data text page to parse {result,publicReceipt?}; publicReceipt.criteria contains the independent findings. Frozen child outputs are under children/; the previous attempt is under lastAttempt.outputsPath. Read each failed criterion and check report before retry. Update the sketch with the observed implementation, interface, evidence, input or environment problem and the assumption it disproved. Choose local correction, a new bounded batch or a concrete blocker. Reuse useful frozen artifacts, rerun checks affected by changes, then integrate and verify the actual consumer. Prior transcripts and private receipts are not exposed.',
 }
@@ -112,7 +112,6 @@ export const decomposeOutputSchema = {
     interface: { type: 'json' },
     resolved: { type: 'json' },
     acceptanceChecks: { type: 'json' },
-    checkRecipes: { type: 'json' },
     reminder: { type: 'string' },
     planningSketchRef: refValueSchema(false),
     contextEpoch: { type: 'string' },

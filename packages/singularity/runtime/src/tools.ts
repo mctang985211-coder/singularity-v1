@@ -398,7 +398,11 @@ export class RunToolController {
           acceptance: {
             provider: contract.acceptance,
             checks: [...this.options.acceptanceChecks.previews],
-            recipes: this.options.acceptanceChecks.recipes as unknown as JsonValue,
+            recipes: this.options.acceptanceChecks.recipes.map(({ ref, recipe }) => ({
+              ref,
+              name: recipe.name,
+              paramsSchema: recipe.paramsSchema,
+            })) as unknown as JsonValue,
           },
           workspace: this.options.workspace,
           contextEpoch: this.state.epoch,
@@ -549,7 +553,6 @@ export class RunToolController {
           example: prepared.response.example as unknown as JsonValue,
           interface: prepared.response.interface as unknown as JsonValue,
           resolved: prepared.response.resolved as unknown as JsonValue,
-          checkRecipes: prepared.response.checkRecipes as unknown as JsonValue,
         }
       },
     })

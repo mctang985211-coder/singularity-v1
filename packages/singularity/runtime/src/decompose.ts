@@ -109,9 +109,11 @@ export async function prepareDecompose(
     },
     resolved,
     acceptanceChecks: [...checks.previews],
-    checkRecipes: [...checks.recipes],
     sourceContract: input.contract.digest,
   }
+  // The full check recipe is already available through self; copying its
+  // evidence/case schemas into every preview pushes the result over the
+  // 32 KiB prepare budget without giving the model any new selection data.
   const preview = seal('preview', previewBody as unknown as JsonObject) as unknown as DecomposePreviewBody
   const previewId = `decompose-preview:${input.runId}:${bindingId}`
   const previewRef: Ref = { id: previewId, digest: preview.digest }
@@ -153,7 +155,6 @@ export async function prepareDecompose(
     interface: preview.interface,
     resolved,
     acceptanceChecks: [...checks.previews],
-    checkRecipes: [...checks.recipes],
     reminder: 'Read the complete example; keep this preview receipt for a later model step. Preview samples/<encoded input id> paths refer to the embedded example texts; bind real authorized InputRefs before commit.',
     planningSketchRef: input.planningSketchRef,
     contextEpoch: view.epoch,
