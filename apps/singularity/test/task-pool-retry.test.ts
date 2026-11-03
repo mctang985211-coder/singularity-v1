@@ -57,7 +57,7 @@ void test('maxActive=2 child retry counts its own descendants, excludes an expen
     const commit = (bindingIds: readonly string[]) => call('singularity_decompose', { action: 'commit', children: bindingIds.map(bindingId => ({
       bindingId, ackPreview: preview(request, bindingId), task: {
         goal: { summary: 'Produce exact fixture bytes in child.txt.', deliverable: 'child.txt', scope: [], constraints: [] },
-        inputs: [], localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Direct frozen result.' }],
+        acceptanceCriteria: [{ id: 'exact-child', statement: 'Produce the declared child result.', check: 'test -s child.txt' }], inputs: [], localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Direct frozen result.' }],
       },
     })) })
     if (currentTaskId === taskId) {

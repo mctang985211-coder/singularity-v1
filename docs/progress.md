@@ -300,3 +300,10 @@ recipe Run1虽已合并四路真实数值参考，仍因plan/graphs参数路径�
 16:06:05首次root独立验收failed：model-reference/component-verification/delivery通过，design-contract/implementation失败。review复现447SV和组件测试，但发现专用芯片与poly recipe脱节、Conv1dBall未接入实际图、bank分配合同矛盾；root Run2已读取公开反馈并返工。该receipt还把未接入recipe的单个Conv1dBall PPA判作通过；由于root其他required项失败，没有比较/赢家。下一轮同步收紧既有TaskSpec的ppa-evidence与领域review说明，要求实际workload使用的加速边界、活跃实例/存储模型及独立复现，组件报告只作支持证据。没有新增runtime校验器、状态或恢复机制，当前已冻结review保持不变。
 
 用户明确选择下一轮12小时/1600000000 reported tokens/16000请求，仍是整轮共享上限；深度8、256Tasks、单Run4096steps、并发4和40k输出保持。BB example的Task/proposer/evaluation配额与worker/reviewer原生MCP timeout共用配置，阶段时间继续取整轮剩余deadline，不重新领取整轮额度。仅修改examples、既有fixture与领域文档，protocol/runtime源码不变。定向原生DSH4/4；最终根pnpm verify **445/445**（protocol206/runtime135/app91/domain13）、0fail/skip，project/build/typecheck/lint通过；日志artifacts/bb-12h-20261102-{targeted,final-verify}.log。12小时执行根尚未启动，当前根仍按16:55:05和原额度结算；不以配置或fixture通过声称复杂芯片RSI/PPA闭环完成。
+
+
+### 2026-11-03：按 dac8c0e 收敛 Task 修复
+
+真实模型测试已停止，本次仅运行本地协议与脚本化 DSH 回归。旧记录中的 seed 完整传递、数值验收成功和当前运行状态，以 [Task 修复审计](task-repair-20261103.md) 的逐项更正为准；已撤除首轮配方、固定 suite 和项目 skill 挂载，改由 parent 编写 child 验收，并修复 self Ref 与工作流指引。
+
+相对 `dac8c0e`：core 源码净增 57 行；整个 apps/packages（含源码、测试与配置）净增 64 行；Buckyball 生产代码净减 18 行，含测试净减 16 行。project/build/typecheck/lint 通过；本地测试 445 项通过、1 项被宿主 inotify 配额耗尽阻断（runtime 的既有 CAS 原子发布 fs.watch 测试，ENOSPC；8192/8192 已占用），app 单独完整 92/92 通过。未修改测试跳过它，未终止编辑器或改系统配额；日志 `artifacts/thin-repair-final-{verify,app,protocol-targeted}.log`。PR 保持 Draft，等待独立 CI；本次没有新增真实模型行为改善证据。

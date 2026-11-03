@@ -1,5 +1,7 @@
 # Buckyball / CosyVoice3 芯片前端实跑准备
 
+2026-11-03：按用户最新要求，全部真实模型测试已停止，不启动新轮。以下保留环境与历史证据；当前修复与证据更正见 [Task 修复审计](task-repair-20261103.md)。
+
 ## 场景与范围
 
 前次 inventory 证据是真实模型执行的受控案例，包括预先引导的 Method、公共 skill 和空 Method 探索；任务数据、领域规则、评测 case 是预设的。另有脚本化的原生 DSH fixture。它们证明框架闭环，不能证明真实芯片设计能力。
@@ -8,7 +10,7 @@
 
 仓库 model-port/model-optimize 中的 full-model BEMU、完整 P2E 和 FPGA 性能完成门槛由这次任务范围覆盖；不要为满足旧 skill 而执行这些步骤。交付只能声称芯片前端及其实际组件验证，不能声称芯片端到端正确、实测芯片吞吐或完成流片。
 
-只固定目标、验收、资源和预算。模型自行发现仓库、提出拓扑与数值方案、安排直属 workflow、实现并整合。操作者不预置 task 分解树、答案、调用顺序或可直接照抄的芯片实现。每个节点先形成初始草图，读过相关 skill、文档和源码后细化；长链按职责、产物和检查边界委派直属任务，串行阶段也用后续批次衔接，child 自己发现更深结构。每层保留本地技术工作和集成责任；叶节点目标应有界且可直接验证。不用预设 tree depth 或 child 数制造递归证据。额外模型暂不添加；CosyVoice3 本身已经覆盖多种不同计算阶段。
+只固定目标、验收、资源和预算。模型自行发现仓库、提出拓扑与数值方案、安排直属 workflow、实现并整合。操作者不预置 task 分解树、答案、调用顺序或可直接照抄的芯片实现。每个节点先形成初始草图，读过相关参考文档和源码后细化；长链按职责、产物和检查边界委派直属任务，串行阶段也用后续批次衔接，child 自己发现更深结构。每层保留本地技术工作和集成责任；叶节点目标应有界且可直接验证。不用预设 tree depth 或 child 数制造递归证据。额外模型暂不添加；CosyVoice3 本身已经覆盖多种不同计算阶段。
 
 ## 固定资产
 
@@ -33,7 +35,7 @@
 初始 Method 的 templates/skills/tools 均为空。公共 exploration catalog 提供下列资源的简述和身份，正文按需读取；Method 演化只能发生在 RSI，不在 Task 执行中改合同。
 
 - 仓库说明、当前 Task 协议、范围覆盖说明和固定资产清单。
-- 现有 `model-port`、`model-optimize`、`chip-designer`、`ip-designer`、`ball-align`、`workload-tests`、`debug-compiler`、`check` 和 `report` skills；以注册的原生 skill loader 加载。
+- 项目原有 `.agents/skills/` 仅由 root 合同中的绝对路径作为参考文档暴露，不注册或挂载为 skill；只有 Singularity 自产 Method 资产沿原生 skill 路径使用。
 - 标准领域 MCP `mcp__buckyball__checkout(project)` 创建完整准备副本，`mcp__buckyball__bbdev(project,args)`，在各自绝对 checkout 目录执行 `nix develop --command bash -c 'exec bbdev "$@"' -- ...args`；原生 `bash` 用于编辑和独立组件工具。
 - 固定平台 `explore-child`；是否分解、如何分解、是否继续分解由当前模型决定。父节点仍承担自己的技术工作和直属结果整合。
 
@@ -78,18 +80,18 @@ Singularity host 使用已验证的官方 Node 24.9.0 二进制。Buckyball Nix 
 | 范围 | 启动值/上限 |
 |---|---|
 | 模型 | `deepseek-flash`，reasoning `max`，700000 context，40000 output |
-| 整轮所有模型请求 | 最长 12 小时、1600000000 tokens、16000 次调用；source/child/Summary/proposer/评测/发布后验证共用累计计量 |
+| 整轮所有模型请求 | 最长 12 小时、1000000000 tokens、4000 次调用；source/child/Summary/proposer/评测/发布后验证共用累计计量 |
 | 单 Run | `maxStepsPerRun: 4096`；避免先于整轮调用上限截断 |
-| RSI proposer | `maxSteps: 4096`、1600000000 tokens；时间仍受整轮剩余 deadline 限制，不沿用 inventory 的 96 步/2M token 默认值 |
-| 双臂评测 | `maxRuns: 4608`、1600000000 tokens、`maxActiveRuns: 4`；六棵 baseline/candidate 树顺序执行，此并发值用于单棵树内部；实际购买请求仍受整轮累计 16000 次限制 |
+| RSI proposer | `maxSteps: 4096`、1000000000 tokens；时间仍受整轮剩余 deadline 限制，不沿用 inventory 的 96 步/2M token 默认值 |
+| 双臂评测 | `maxRuns: 4608`、1000000000 tokens、`maxActiveRuns: 4`；六棵 baseline/candidate 树顺序执行，此并发值用于单棵树内部；实际购买请求仍受整轮累计 4000 次限制 |
 | Task 树 | `maxDepth: 8`、`maxTasks: 256`、`maxBatchChildren: 8`、`maxRuns: 3`；不是必须达到的目标 |
-| 初始 root 子树 token 上限 | 1600000000；子树配额不能使整轮总额增加 |
+| 初始 root 子树 token 上限 | 1000000000；子树配额不能使整轮总额增加 |
 | 活跃 Task 上限 | 4；外部构建并发与模型上下文限制分别配置 |
 | 输出冻结上限 | 256 MiB；交付 patch、必要小向量和证据，不重复提交权重或整个 build 目录 |
 
-绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 12 小时。给 proposer/evaluation 的相对时间取整轮剩余时间，所有阶段共用累计计量，不各自重新获得 12 小时或 16 亿 tokens。worker/reviewer 的原生 MCP toolCallTimeoutMs 共用这一配置，整轮取消仍沿既有 AbortSignal 传递。每次执行使用全新 execution root；不复用此前已过期的 inventory 窗口。秘密只经 launch environment 注入。
+绝对 deadline 在付费启动时生成；准备阶段不启动或消耗这 12 小时。给 proposer/evaluation 的相对时间取整轮剩余时间，所有阶段共用累计计量，不各自重新获得 12 小时或 10 亿 tokens。worker/reviewer 的原生 MCP toolCallTimeoutMs 共用这一配置，整轮取消仍沿既有 AbortSignal 传递。每次执行使用全新 execution root；不复用此前已过期的 inventory 窗口。秘密只经 launch environment 注入。
 
-上述上限于 2026-11-02 经用户确认用于下一轮。13:55 启动的既有执行根保持原 3h/400M/4000 与 16:55:05 截止，冻结配置不在运行中改写。
+当前示例配置保留最初修复授权的 12h/1B/4000 上限；最新停止要求优先，不据此启动真实模型测试。历史执行各自使用当时冻结的额度。
 
 后续轮的root PPA须对应交付workload实际使用的加速边界，说明活跃core/Ball实例及存储模型并独立复现；单个组件或未接入IP的报告只作支持证据，不替代frontend PPA，缺失则ppa-evidence失败且不提交ppa数值。该要求来自13:55轮首次root审查把未接入recipe的Conv1dBall报告判作PPA通过的实际缺口；该root仍因设计/实现不合格失败，未产生比较或赢家。
 
@@ -116,9 +118,9 @@ RSI 只读取 root 验收结束后的 sealed trace，改进可复用 Method/skil
 
 ## 自主 campaign 启动入口
 
-`apps/singularity/examples/buckyball-campaign.ts` 通过现有 root/child/trace/proposer/evaluation/activation 接口执行：最多三个连续 RSI Round，共用同一 3 小时窗口；达到预算即停。初始 Method 为空，不预置设计答案或分解树。使用原生 bash-local、tool-bash 和 tool-jobs 代替最小 profile 的 persistent bash，后台构建由 DSH 管理，模型可用 job_output 等待结果；没有新增进程管理器。
+`apps/singularity/examples/buckyball-campaign.ts` 通过现有 root/child/trace/proposer/evaluation/activation 接口执行：最多三个连续 RSI Round，共用同一 campaign 窗口；达到预算即停。初始 Method 为空，不预置设计答案或分解树。使用原生 bash-local、tool-bash 和 tool-jobs 代替最小 profile 的 persistent bash，后台构建由 DSH 管理，模型可用 job_output 等待结果；没有新增进程管理器。
 
-用户授权本实验自主选择设计与 PPA 比例，覆盖旧 skill 中逐项请示设计的约定。领域验收按上述仓库 skill，由**独立 DSH review Agent**在独立目录读取冻结 CAS 输出、检查合同和源代码、应用 patch 并重跑相关真实工具。它不读取原 worker 的可写目录、不修复候选、不把 exit 0 或模型自报 PASS 当正确性。review 的请求和 tokens 同样入总账。这是独立模型审查与复跑证据，并非形式化签核；数值/组件覆盖和缺口留在原生 session 与 receipt。
+用户授权本实验自主选择设计与 PPA 比例，覆盖旧 skill 中逐项请示设计的约定。领域验收按冻结 root 合同，仓库文档仅供参考，由**独立 DSH review Agent**在独立目录读取冻结 CAS 输出、检查合同和源代码、应用 patch 并重跑相关真实工具。它不读取原 worker 的可写目录、不修复候选、不把 exit 0 或模型自报 PASS 当正确性。review 的请求和 tokens 同样入总账。这是独立模型审查与复跑证据，并非形式化签核；数值/组件覆盖和缺口留在原生 session 与 receipt。
 
 PPA 采用综合估计，权重 **功耗 0.30 / 关键路径延迟 0.40 / 映射面积 0.30**；比较 `pow(Pb/Pc,.30) * pow(Db/Dc,.40) * pow(Ab/Ac,.30) - 1`。面积、功耗、关键路径延迟分别保留 um²、mW、ns 及 library/corner/clock/activity/offload 身份；不能用时钟约束冒充达到的关键路径或猜测功耗。所有功能项通过、条件一致、均值改善至少 1% 且任一 case 无回退才允许激活。缺 PPA、缺实现或无法验证时保持失败/not-comparable，不强行选赢家。
 

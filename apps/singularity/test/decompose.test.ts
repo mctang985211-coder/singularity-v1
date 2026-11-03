@@ -285,10 +285,11 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
       const childId = childScenario.contract.taskId
       const first = selfReadAndPlan(request, index - 4, childScenario, childId, `${childId}:run`)
       if (first !== undefined) return first
+      if (index === 6) return { toolCalls: [{ id: 'child-write', name: 'bash', arguments: JSON.stringify({ command: 'printf sample > notes.txt' }) }], usage: fixtureUsage(index) }
       return {
         toolCalls: [{
           id: 'child-submit', name: 'singularity_submit',
-          arguments: JSON.stringify({ outputIds: [], includeLearningDrafts: false }),
+          arguments: JSON.stringify({ outputIds: ['s4b2-child-note'], includeLearningDrafts: false }),
         }],
         usage: fixtureUsage(index),
       }
@@ -326,7 +327,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
                   scope: ['single committed child sample'],
                   constraints: ['Use only host-authorized inputs.'],
                 },
-                acceptanceCriteria: [{
+                acceptanceCriteria: [{ check: 'test -s notes.txt',
                   id: 's4b2-child-criterion',
                   statement: 'The local note records the observed sample.',
                 }],
@@ -448,11 +449,11 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
       assert.equal(child.contract.method.id, active.method.id)
       assert.equal(child.contract.template.id, 'template:s3c-child')
       assert.equal(child.contract.spec.inputs.length, 0)
-      assert.deepEqual(child.contract.spec.localGuidance, [{
+      assert.deepEqual(child.contract.spec.criteria.filter(criterion => criterion.id === 's4b2-child-criterion'), [{ required: true, check: 'test -s notes.txt',
         id: 's4b2-child-criterion',
         statement: 'The local note records the observed sample.',
       }])
-      assert.deepEqual(child.contract.spec.criteria, [])
+      assert.deepEqual(child.contract.spec.criteria.map(criterion => criterion.id), ['s4b2-child-criterion'])
       assert.deepEqual(child.contract.resources.baseTools, active.contract.resources.baseTools)
       assert.deepEqual(child.contract.resources.skills, active.contract.resources.skills)
       assert.equal(child.contract.resources.mcpServers.length, 0)
@@ -528,7 +529,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
             contractDigest: request.task.digest,
             inputDigests: request.inputs.map(ref => ref.digest),
             outputDigests: request.outputs.map(ref => ref.digest),
-            criteria: [], exit: { code: 0, signal: null }, timedOut: false,
+            criteria: request.task.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Observed fixture note.' })), exit: { code: 0, signal: null }, timedOut: false,
           }))
         },
       },

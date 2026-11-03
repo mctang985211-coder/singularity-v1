@@ -182,7 +182,6 @@ void test('S7 synthetic numeric fixtures activate an improved domain Round, star
         ...source.contract.spec,
         goal: { summary: 'Return one integer from 1 to 3; the synthetic metric prefers larger valid integers.', deliverable: OUTPUT_PATH, scope: ['synthetic numeric fixture'], constraints: ['Write exactly one digit with no trailing newline.'] },
         criteria: [{ id: 'numeric-result', statement: 'The result is an integer from 1 to 3.', required: true }],
-        localGuidance: [{ id: 'numeric-output', statement: 'Use the Method guidance to choose a valid integer.' }],
       },
     })
     const actor = { kind: 'operator', id: 'synthetic-round-fixture' } as const

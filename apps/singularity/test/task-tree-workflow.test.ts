@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import { parseProtocolValue, inputRefSchema, sealMethodRevision, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type { InputRef, TaskContract } from '@singularity/protocol'
-import { CommandService, executeTaskTree } from '@singularity/runtime'
+import { CommandService, executeTaskTree, verifyRunSubmission } from '@singularity/runtime'
 import type { RunVerifier } from '@singularity/runtime'
 
 import { buildSingleRunComposition } from '../src/host-composition.ts'
@@ -28,7 +28,7 @@ function commit(request: WireRequest, index: number, bindingId: string, inputs: 
   return call(index, 'singularity_decompose', { action: 'commit', children: [{
     bindingId, ackPreview: previewDigestFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }),
     task: { goal: { summary: 'Produce exact fixture bytes in child.txt.', deliverable: 'child.txt', scope: [], constraints: [] },
-      acceptanceCriteria: [], inputs,
+      acceptanceCriteria: [{ id: 'child-result', statement: 'The declared result contains the completed work.', check: `test "$(cat child.txt)" = '${FROZEN_OUTPUT}'` }], inputs,
       localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Direct frozen output.' }],
     },
   }] })
@@ -49,6 +49,30 @@ function outputInput(request: WireRequest): InputRef {
   }
   throw new Error('Fixture model did not receive a direct frozen output')
 }
+
+void test('frozen commands consume CAS bytes, preserve review failures and cancel native subprocesses', async () => {
+  await withHarness(() => { throw new Error('This regression must not request a model') }, async ({ spike, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, { taskId: 'frozen-command', maxRuns: 1 })
+    const service = await CommandService.open({ root: storeRoot, actor: { kind: 'runtime', id: 'check-fixture' }, clock: Date.now })
+    try {
+      const output = await service.putObject('check-run:output:result', new TextEncoder().encode(FROZEN_OUTPUT))
+      const input = await service.putObject('binary', new Uint8Array([0, 255, 7]))
+      const check = `python3 - <<'PY'\nfrom pathlib import Path\nassert Path('seed.bin').read_bytes() == bytes([0,255,7])\nassert Path('result.txt').read_text() == '${FROZEN_OUTPUT}'\nPY`
+      for (const [command, review, expected] of [[check, 'pass', 'verified'], ['exit 1', 'pass', 'failed'], [check, 'fail', 'failed'], ['sleep 30 & wait', 'pass', 'invalid']] as const) {
+        const contract = sealTaskContract({ ...contractPayload(scenario.contract), spec: { ...scenario.contract.spec,
+          inputs: [{ id: 'binary', object: input, path: 'seed.bin', access: 'read' }],
+          criteria: [{ id: 'check', statement: 'Match frozen input/output bytes.', required: true, check: command }] },
+          limits: { ...scenario.contract.limits, deadlineAt: Date.now() + (expected === 'invalid' ? 100 : 10_000) } })
+        const result = await verifyRunSubmission({ shell: spike.ctx.shell, contract, runId: 'check-run', inputs: [input], outputs: [output], reader: service, writer: service,
+          verifier: { provider: contract.acceptance, verify: request => Promise.resolve(sealPublicReceipt({ v: 1, provider: contract.acceptance,
+            operationId: request.operationId, contractDigest: contract.digest, inputDigests: [input.digest], outputDigests: [output.digest],
+            criteria: [{ id: 'check', verdict: review, reason: 'Independent domain finding.' }], exit: { code: 0, signal: null }, timedOut: false })) } })
+        assert.equal(result.verdict, expected)
+        if (result.verdict !== 'invalid') assert.match(result.receipt.criteria[0].reason, /Frozen check:/)
+      }
+    } finally { await service.close() }
+  })
+})
 
 void test('S4 required child failure returns scheduler feedback, enforces replan, admits replacement and joins its verified winner', { timeout: 240_000 }, async () => {
   const taskId = `task-replacement-${String(process.pid)}-${String(Date.now())}`
@@ -104,7 +128,7 @@ void test('S4 required child failure returns scheduler feedback, enforces replan
           const exact = new TextDecoder().decode((await request.readObject(output, 'object')).bytes) === FROZEN_OUTPUT
           return sealPublicReceipt({ v: 1, provider: task.acceptance, operationId: request.operationId, contractDigest: task.digest,
             inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-            criteria: task.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: exact ? 'pass' : 'fail', reason: exact ? 'Exact bytes.' : 'Fixture bytes differ.' })),
+            criteria: task.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: exact ? 'Exact bytes.' : 'Reviewer incorrectly accepts bad bytes.' })),
             exit: { code: 0, signal: null }, timedOut: false })
         },
       })
@@ -123,6 +147,7 @@ void test('S4 required child failure returns scheduler feedback, enforces replan
       assert.equal(result.root.classification, 'verified', result.root.executionRecord?.reason)
       assert.equal(fixture.requests.length, 23)
       assert.deepEqual(result.runs.map(run => run.classification), ['failed', 'verified', 'verified'])
+      assert.match(JSON.stringify(result.runs[0].receipt), /Frozen check:.*exitCode/)
       const state = await service.taskRunState([])
       assert.equal(state.tasks.get(children[0].taskId)?.supersededBy, children[1].taskId)
       assert.equal(state.tasks.get(children[1].taskId)?.closed?.outcome, 'verified')

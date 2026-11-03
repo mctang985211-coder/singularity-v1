@@ -452,6 +452,9 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
     const localOutputs = request.proposal.localOutputs ?? []
     validateLocalOutputs(localOutputs)
     const outputs = mergeOutputs(template.requiredOutputs, localOutputs)
+    const criteria = [...template.requiredCriteria,
+      ...request.proposal.acceptanceCriteria.map(criterion => ({ ...criterion, required: true }))]
+    assertUniqueIds(criteria, 'Child spec.criteria')
 
     let contract: TaskContract
     try {
@@ -460,14 +463,7 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
         taskId: request.taskId,
         spec: {
           goal: request.proposal.goal,
-          criteria: template.requiredCriteria.map(criterion => ({ ...criterion })),
-          ...(request.proposal.localCriteria === undefined
-            ? {}
-            : {
-                localGuidance: request.proposal.localCriteria.map(criterion => ({
-                  ...criterion,
-                })),
-              }),
+          criteria,
           inputs: request.proposal.inputs,
           outputs: outputs,
         },

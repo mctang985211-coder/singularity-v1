@@ -4,13 +4,13 @@
 
 - `docs/framework.md` 是协议唯一权威；`spec-lock.json` 固定其 digest。`AGENTS.md` 只写施工约束，`docs/progress.md` 写当前状态、证据和缺口。调研 artifact 不替代规范，不另建平行任务卡和交接规范。
 - 开始或恢复工作时阅读相关规范、进度和实际消费者；保留工作区已有未提交成果。旧 Singularity 仓库不提供本仓库兼容要求。
-- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011/012/013/014/015 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
+- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011/012/013/014/015/016 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
 
 ## 启动条件先于执行
 
 - 使用 Node >=24.9.0、pnpm 11.18.0、DSH 0.2.2-alpha.2 和固定 lockfile。启动前固定 provider/model/profile、凭据、可信 MCP/skill 资产、验收、预算和绝对 deadline。
 - 一个执行根归一个进程；运行中不重启，不让 supervisor 自动重启。退出后的根只作归档，下一次执行使用新根和新 IDs，不建立 crash resume/reconcile/灾备产品。
-- app 在 profile boot 前验证剩余预算并 exclusive create 输出根；Run 在模型创建前验证冻结资源、provider identity 并准备输入。真实 scoped prompt/MCP surface 在 setup、第一模型请求前完成校验；固定 profile 只启用原生 skill registry/loader，冻结 skills 直接注册到 Agent scope，不逐字段重读自检。
+- app 在 profile boot 前验证剩余预算并 exclusive create 输出根；Run 在模型创建前验证冻结资源、provider identity 并准备输入。真实 scoped prompt/MCP surface 在 setup、第一模型请求前完成校验；固定 profile 只启用原生 skill registry/loader，Singularity 自产冻结 skills 注册到 Agent scope；项目原有 skills 只用 root 提示中的参考文档路径暴露，不逐字段重读自检。
 - 操作者提供健康存储和干净 launch env。可信公开任务沿现有本地 profile 执行；隐藏数据或不可信代码先用现成 OS/容器/broker 建立真实读写/网络/进程边界。cwd、HOME、chmod、loopback URL 和 manifest capability 声明均不能代替这些边界。
 - profile 不挂载任意 filesystem/global skill provider，不在执行中修改共享 registry；全局公开资源先冻结再注册到当前 scope。MCP 的 HOME/TMP/XDG 路径由部署环境提供，框架不创建或重定向。可信 bundle 的 capability 列表只作描述，manifest/config 只解析消费字段，不设 exact-key/能力白名单门禁；实际 surface 对比保留。
 - 领域 MCP 上线前实测全部公开工具的业务成功、参数失败和取消退出；帮助/握手只证明接口可见，不能替代执行。独立源码副本由领域 checkout/现成复制工具携带完整预装依赖，不让 Task 模型重新安装。
@@ -24,7 +24,7 @@
 - DSH 拥有 Agent/Session、模型 loop、tool/skill registry、MCP transport、compaction、session persistence、创建回滚、取消和 disposal。直接组合公开能力；同步 receipt/usage 原始事件读取只留一个经过接入成本比较的适配入口，不复制 inbox 或 transcript。
 - 每个 worker 是 workflow 的一级：先形成初始草图，再依据相关资源细化职责、产物和检查边界；长链阶段创建直属任务，串行阶段用后续批次衔接。每层承担本地技术工作与集成，叶目标应有界且可直接验证。优化现有 prompt，不增语义判定器、固定树深或分解数量门禁；guided 分解证据不能升级为空 Method 自主发现多层 workflow 的证据。
 - 正式 child Task 使用独立 DSH session；只创建 direct children，root/descendants 固定 Method revision，运行中合同不变。Summary 是按合同 digest 派生的只读业务缓存，usage 归 source Task；Summary 使用原生 agents.create/dispose；替换为 subagent 所需的 live parent/preset/catalog 成本比较见 `docs/progress.md` 的原生接入比较。
-- root acceptance 归 operator/domain。explore-child 的固定 task-goal 标准也须由领域 provider 验证，空 criteria 不代表完成本地目标；探索 child 用固定 required result/ tree 交付证据，root 输出由 operator/domain 定义。保留冻结 Ref/digest 和外部 receipt 绑定；DB 外键不能证明外部内容身份。Proposer 只提交 patch，host 评测、比较和 trusted expected-head activation；隐藏 payload 保持实际部署读取边界。
+- root acceptance 归 operator/domain；parent 在派发前编写非空 acceptanceCriteria（statement + 自包含 shell check），准入后冻结为 required 合同项。探索 child 仍固定 required result/ tree；host 用原生 shell 对 CAS 产物复验命令，review 不能放行失败检查。保留冻结 Ref/digest 和外部 receipt 绑定；DB 外键不能证明外部内容身份。Proposer 只提交 patch，host 评测、比较和 trusted expected-head activation；隐藏 payload 保持实际部署读取边界。
 
 ## 最短正常路径
 

@@ -112,7 +112,7 @@ function exampleBody(marker = 'complete example'): Record<string, unknown> {
       scope: ['sample'],
       constraints: ['Read-only sample.'],
     },
-    acceptanceCriteria: [{ id: 'local', statement: 'Record the sample.' }],
+    acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local', statement: 'Record the sample.' }],
     inputs: [{ id: 'sample', exampleText: 'sample text' }],
     localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
   }

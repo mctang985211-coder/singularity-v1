@@ -10,12 +10,12 @@
 - id: persistent-bash
   disabled: true
 
+- id: task-check-shell
+  config:
+    timeoutMs: 60000
+    maxTimeoutMs: 10800000
+
 - insert:
-    - id: frontend-shell
-      name: '@deepseek-ai/dsh-bash-local'
-      config:
-        timeoutMs: 60000
-        maxTimeoutMs: 10800000
     - id: frontend-shell-env
       name: '@deepseek-ai/dsh-shell-env'
     - id: frontend-bash

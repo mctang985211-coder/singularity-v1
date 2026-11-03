@@ -79,6 +79,8 @@ export const EXPLORATION_CARD = `Discover the workflow from available resources.
 responsibilities and preserve reusable discoveries as skill/tool drafts for RSI.`
 
 export const WORKER_PERSONA = "You are a Singularity Task worker. Own this Task's workflow, technical work and integration."
+export const SUMMARY_PERSONA = 'You are the contract summarizer. Extract only the supplied frozen contract into the declared summary schema.'
+export const PROPOSER_PERSONA = 'You are the RSI proposer. Propose reusable Method changes from sealed evidence under the fixed evaluation policy.'
 
 export const WORKER_CARD = `Read singularity_read(kind="self"), following all pages, then singularity_plan.
 Inspect relevant inputs, source and references; refine the completion path,
@@ -101,9 +103,7 @@ A child's pass does not complete this Task. Copy complete authorized InputRefs
 from self or direct results; inputs:[] means no dependency on Task artifacts.
 Use singularity_feedback for contract concerns. On retry read lastAttempt.runId
 evidence and reuse its frozen outputsPath; revise the failed work or handoff.
-Submit declared outputs for independent verification, or stop with a concrete
-blocker. Only Singularity-produced skills are workflow assets; project reference
-documents supply technical knowledge under the current Task contract.`
+Call singularity_submit for declared outputs, or singularity_stop with a concrete blocker.`
 
 /** Hard prompt caps from docs/framework.md §14.3. */
 export const WORKER_CARD_MAX_BYTES = 2 * 1024
@@ -114,7 +114,7 @@ const textEncoder = new TextEncoder()
 /** Render the operational card and its local exploration guidance. */
 export function renderWorkerCard(exploration: boolean): string {
   const card = exploration ? `${WORKER_CARD}\n\n${EXPLORATION_CARD}` : WORKER_CARD
-  assertPromptBudget(card, WORKER_CARD_MAX_BYTES, 'worker card')
+  assertPromptBudget(`${WORKER_PERSONA}\n${card}`, WORKER_CARD_MAX_BYTES, 'worker card')
   return card
 }
 

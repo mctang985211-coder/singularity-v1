@@ -1,3 +1,7 @@
+import { mkdtemp,mkdir,rm,writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname,join } from 'node:path'
+import type { ShellExecutor,ShellRunResult } from '@deepseek-ai/dsh-shell'
 import type {
 Evidence,
 ExecutionRecord,
@@ -17,12 +21,15 @@ executionRecordPayloadSchema,
 parseProtocolValue,
 seal,
 sealEvidence,
+sealPublicReceipt,
 validateEvidence,
 validatePublicReceipt,
 } from '@singularity/protocol'
 import { SingleRunError } from './errors.ts'
+import { readTreeBundle } from './resource-bundle.ts'
 
 import type { CasDigestDomain } from './store.ts'
+import { prepareWorkspace } from './workspace.ts'
 import type { CasObjectReader,CasObjectWriter } from './workspace.ts'
 
 /** Stable closure reasons used by the fixed retry policy. */
@@ -73,6 +80,7 @@ export function publicVerificationOf(verification: Evidence['verification']): Om
 }
 
 export interface RunVerificationInput {
+  readonly shell: ShellExecutor
   readonly contract: TaskContract
   readonly runId: string
   readonly inputs: readonly Ref[]
@@ -124,6 +132,7 @@ export async function verifyRunSubmission(
   try {
     signal.throwIfAborted()
     if (remaining <= 0) throw timeout
+    const checks = await rerunChecks(input, signal)
     // Await the domain operation itself; a timer must not abandon a live verifier.
     receipt = await input.verifier.verify({
       operationId,
@@ -135,6 +144,19 @@ export async function verifyRunSubmission(
     })
     signal.throwIfAborted()
     if (clock() >= input.contract.limits.deadlineAt) throw timeout
+    if (checks.size > 0 && validatePublicReceipt(receipt, {
+      provider: input.contract.acceptance, operationId, contractDigest: input.contract.digest,
+      inputDigests: input.inputs.map(ref => ref.digest), outputDigests: input.outputs.map(ref => ref.digest), requiredCriteria,
+    }).verdict !== 'invalid') {
+      const { digest, ...payload } = receipt
+      void digest
+      receipt = sealPublicReceipt({ ...payload, criteria: receipt.criteria.map(criterion => {
+        const check = checks.get(criterion.id)
+        return check === undefined ? criterion : { ...criterion,
+          verdict: check.exitCode === 0 && !check.timedOut && check.signal === null ? criterion.verdict : 'fail',
+          reason: `${criterion.reason}\nFrozen check: ${JSON.stringify(check)}` }
+      }) })
+    }
   } catch (error) {
     const aborted = signal.aborted && (error === signal.reason
       || (error instanceof Error && error.name === 'AbortError' && error.cause === signal.reason))
@@ -178,6 +200,35 @@ export async function verifyRunSubmission(
     receipt: validation.receipt,
     receiptRef,
   }
+}
+
+/** Reuse native shell lifecycle; only CAS inputs and outputs enter the fresh check directory. */
+async function rerunChecks(input: RunVerificationInput, signal: AbortSignal) {
+  const checks = input.contract.spec.criteria.flatMap(criterion => criterion.required && criterion.check !== undefined
+    ? [{ id: criterion.id, command: criterion.check }] : [])
+  const results = new Map<string, ShellRunResult>()
+  if (checks.length === 0) return results
+  const workspace = await mkdtemp(join(tmpdir(), 'singularity-check-'))
+  try {
+    await prepareWorkspace(workspace, input.contract.spec.inputs.map(ref => ({ ...ref, access: 'copy-to-work' as const })), input.reader)
+    for (const spec of input.contract.spec.outputs) {
+      const ref = input.outputs.find(ref => ref.id.endsWith(`:output:${spec.id}`))
+      if (ref === undefined) continue
+      const files = spec.kind === 'tree' ? (await readTreeBundle(input.reader, ref, Number.MAX_SAFE_INTEGER)).contents
+        : new Map([['', (await input.reader.readObject(ref, 'object')).bytes]])
+      for (const [path, bytes] of files) {
+        const target = join(workspace, spec.path, path)
+        await mkdir(dirname(target), { recursive: true })
+        await writeFile(target, bytes)
+      }
+    }
+    for (const criterion of checks) {
+      const execution = await input.shell.execute(input.shell.resolve({ command: `set -e -o pipefail\n${criterion.command}`, workdir: workspace, signal, timeoutMs: input.contract.limits.deadlineAt - Date.now() }))
+      results.set(criterion.id, await execution.result())
+      signal.throwIfAborted()
+    }
+    return results
+  } finally { await rm(workspace, { recursive: true, force: true }) }
 }
 
 function invalidFromValidation(

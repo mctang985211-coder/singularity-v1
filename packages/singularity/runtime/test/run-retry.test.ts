@@ -510,6 +510,7 @@ function makeFakeContext(options: FakeContextOptions): {
     get: () => undefined,
     on() {},
     systemPrompt: {
+      getSectionOrder: () => 0,
       section(section: { name: string; order: number; text: string; interpolate?: boolean }) {
         options.sections?.push(section)
       },

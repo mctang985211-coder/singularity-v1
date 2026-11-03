@@ -390,12 +390,7 @@ export class RunToolController {
           contractDigest: contract.digest,
           goal: contract.spec.goal,
           criteria: contract.spec.criteria,
-          localGuidance: contract.spec.localGuidance ?? [],
-          inputs: contract.spec.inputs.map(input => ({
-            id: input.id,
-            path: input.path,
-            access: input.access,
-          })),
+          inputs: contract.spec.inputs,
           outputs: contract.spec.outputs,
           acceptance: {
             provider: contract.acceptance,

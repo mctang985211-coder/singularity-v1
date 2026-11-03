@@ -35,7 +35,7 @@ const goal = {
 const baseProposal: TaskProposal = {
   goal,
   acceptanceCriteria: [
-    { id: 'traceable', statement: 'Results should be traceable to this input' },
+    { check: 'test -s notes.txt', id: 'traceable', statement: 'Results should be traceable to this input' },
   ],
   inputs: [
     {
@@ -51,8 +51,7 @@ const baseProposal: TaskProposal = {
 }
 
 function firstAcceptanceCriterion(proposal: TaskProposal) {
-  const first = proposal.acceptanceCriteria?.[0]
-  if (first === undefined) throw new Error('expected a local criterion')
+  const first = proposal.acceptanceCriteria[0]
   return first
 }
 
@@ -126,10 +125,11 @@ const proposalUnknownFields: readonly {
 void test('TaskProposal accepts a complete proposal and a minimal proposal', () => {
   assert.deepEqual(parseProtocolValue(taskProposalSchema, baseProposal), baseProposal)
 
-  const minimal: TaskProposal = { goal, inputs: [] }
+  const minimal: TaskProposal = { goal, inputs: [], acceptanceCriteria: baseProposal.acceptanceCriteria }
   const parsed = parseProtocolValue(taskProposalSchema, minimal)
   assert.deepEqual(parsed, minimal)
-  assert.equal('acceptanceCriteria' in parsed, false)
+  assert.throws(() => parseProtocolValue(taskProposalSchema, { ...minimal, acceptanceCriteria: [] }))
+  assert.throws(() => parseProtocolValue(taskProposalSchema, { goal, inputs: [] }))
   assert.equal('localOutputs' in parsed, false)
 })
 
@@ -289,7 +289,7 @@ void test('decompose prepare and commit inputs accept their frozen shapes', () =
     action: 'commit',
     children: [
       commitChild,
-      { bindingId: 'second-binding', ackPreview: digestB, task: { goal, inputs: [] } },
+      { bindingId: 'second-binding', ackPreview: digestB, task: { goal, inputs: [], acceptanceCriteria: baseProposal.acceptanceCriteria } },
     ],
   }
   assert.deepEqual(parseProtocolValue(decomposeInputSchema, ordered), ordered)

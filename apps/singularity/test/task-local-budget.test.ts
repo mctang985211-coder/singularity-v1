@@ -77,7 +77,7 @@ void test('local child cap settles failed while its sibling continues; parent re
       { bindingId: 'sibling', ackPreview: previewDigestFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) },
     ] : [{ bindingId: 'exhausted', ackPreview: previewDigestFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) }])
       .map(item => ({ ...item, task: {
-        goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, inputs: [],
+        goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, acceptanceCriteria: [{ id: 'exact-child', statement: 'Produce the declared child result.', check: 'test -s child.txt' }], inputs: [],
         localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Direct public output.' }],
       } })) }, step === 4 ? 100 : 50)
     if (step === 6 || step === 15) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })

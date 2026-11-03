@@ -64,7 +64,7 @@ void test('reported budget exhaustion drains native child/parent sessions and cl
     }
     if (index === 2) return call('singularity_decompose', { action: 'prepare', bindingId: 'required-work' })
     if (index === 3) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: 'required-work', ackPreview: previewDigestFrom(request), task: {
-      goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, inputs: [],
+      goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, acceptanceCriteria: [{ id: 'exact-child', statement: 'Produce the declared child result.', check: 'test -s child.txt' }], inputs: [],
       localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Public child output.' }],
     } }] })
     if (index === 6) return call('bash', { command: 'printf child > child.txt' })

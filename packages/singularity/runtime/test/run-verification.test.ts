@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ToolDefinition,ToolRunContext } from '@deepseek-ai/dsh-tools'
@@ -124,6 +125,7 @@ async function run(
   clock: () => number = () => 0,
 ) {
   return verifyRunSubmission({
+    shell: {} as ShellExecutor,
     contract: options.contract,
     runId: 'run-verify',
     inputs: [{ id: 'input', digest: digestA }],
@@ -921,7 +923,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
         scope: ['child'],
         constraints: [],
       },
-      acceptanceCriteria: [{ id: 'local', statement: 'Record the result.' }],
+      acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local', statement: 'Record the result.' }],
       inputs: [],
       localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
     }

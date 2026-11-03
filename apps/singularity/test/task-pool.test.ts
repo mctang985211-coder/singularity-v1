@@ -52,7 +52,7 @@ for (const joinMode of ['required', 'probe'] as const) {
       if (index === 3) return call('singularity_decompose', {
         action: 'commit', children: Array.from({ length: childCount }, (_, n) => ({ bindingId, ackPreview: previewDigestFrom(request), task: {
           goal: { summary: `Write the exact bytes for part ${String(n)} to child.txt.`, deliverable: 'child.txt', scope: [], constraints: [] },
-          acceptanceCriteria: [], inputs: [],
+          acceptanceCriteria: [{ id: 'child-result', statement: 'The declared result contains the completed work.', check: 'test -s child.txt' }], inputs: [],
           localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Frozen child result.' }],
         } })),
       })

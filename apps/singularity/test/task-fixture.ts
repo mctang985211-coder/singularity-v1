@@ -391,10 +391,6 @@ export async function makeScenario(
           statement: `The declared output ${OUTPUT_PATH} exists and contains exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline.`,
           required: true,
         }],
-        localGuidance: [{
-          id: 'exact-output',
-          statement: `Use bash with printf, for example: printf %s ${JSON.stringify(FROZEN_OUTPUT)} > ${OUTPUT_PATH}`,
-        }],
         inputs: [{
           id: 'source',
           object: input,

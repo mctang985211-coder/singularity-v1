@@ -62,6 +62,7 @@ export async function settleSubmitted(
   let verification
   try {
     verification = await verifyRunSubmission({
+      shell: request.ctx.shell,
       contract: runtime.contract,
       runId: request.runId,
       inputs: frozen.inputRefs,

@@ -85,7 +85,7 @@ void test('worker card and NodeView stay inside the fixed prompt budgets', () =>
   assert.ok(plain.includes('ackPreview'), 'the current card must explain the commit acknowledgement')
   assert.ok(plain.includes('children'), 'the current card must explain the commit batch')
   assert.ok(!plain.includes('Child commit is not available yet'), 'the card must match the implemented commit tool')
-  assert.ok(renderWorkerCard(true).includes('Local exploration is enabled'))
+  assert.ok(renderWorkerCard(true).includes('Discover the workflow'))
 
   const rendered = renderNodeView(makeView())
   assert.ok(new TextEncoder().encode(rendered).byteLength <= NODE_VIEW_MAX_BYTES)

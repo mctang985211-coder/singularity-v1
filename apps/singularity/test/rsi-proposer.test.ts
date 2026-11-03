@@ -140,7 +140,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
           } } },
           { op: 'put-template', template: {
             ...template, guidance: 'Read the criteria, produce the output and check it with the bound review skill.',
-            example: { goal: { summary: 'Produce result.txt with the requested content.', deliverable: 'result.txt', scope: ['Write the requested text.'], constraints: ['Use the declared output path.'] }, inputs: [{ id: 'request', exampleText: 'Write the requested text.' }] },
+            example: { goal: { summary: 'Produce result.txt with the requested content.', deliverable: 'result.txt', scope: ['Write the requested text.'], constraints: ['Use the declared output path.'] }, acceptanceCriteria: [{ id: 'requested-text', statement: 'The result contains the requested text.', check: 'test -s result.txt' }], inputs: [{ id: 'request', exampleText: 'Write the requested text.' }] },
             skills: ['skill:s5-review'],
           } },
         ], predictedRisks: ['Review may add cost.'], transferPlan: 'Measure against the frozen paired cases.',

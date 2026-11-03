@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { EXPLORE_BINDING_ID, EXPLORE_TEMPLATE_ID, sealMethodRevision, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
-import type { TaskContract } from '@singularity/protocol'
+import type { InputRef,TaskContract } from '@singularity/protocol'
 import { CommandService, DomainStore, executeTaskTree, freezeGlobalResources, readTreeBundle } from '@singularity/runtime'
 import type { RunVerifier } from '@singularity/runtime'
 
@@ -71,9 +71,13 @@ void test('empty Method plans three levels, commits direct children only, and in
     }
     if (index === 5 || index === 9) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: EXPLORE_BINDING_ID, ackPreview: previewDigestFrom(request), task: {
       goal: { summary: 'Write a local finding.', deliverable: 'result/finding.txt', scope: [], constraints: [] },
-      acceptanceCriteria: [], inputs: [], localOutputs: [],
+      acceptanceCriteria: [{ id: 'child-result', statement: 'The declared result contains the completed work.', check: 'test -s result/finding.txt' }], inputs: messageTexts(request).flatMap(text => {
+        try { const value = JSON.parse(text) as { data?: { inputs?: InputRef[] } | string }
+          const data = typeof value.data === 'string' ? JSON.parse(value.data) as { inputs?: InputRef[] } : value.data
+          return data?.inputs ?? [] } catch { return [] }
+      }), localOutputs: [],
     } }] })
-    if (index === 12) return call('bash', { command: 'mkdir -p result\nprintf child-result > result/finding.txt' })
+    if (index === 12) return call('bash', { command: `python3 -c "from pathlib import Path; assert Path('seed.bin').read_bytes() == bytes([0,255,7])" && mkdir -p result && printf child-result > result/finding.txt` })
     if (index === 13 || index === 19) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
     if (index === 16) return call('singularity_read', { kind: 'children' })
     if (index === 17) return call('singularity_feedback', { kind: 'needs-replan', summary: 'Preserve the reusable local finding as a skill draft.', proposedChanges: [{ field: 'outputs', suggestion: 'Include a public learning draft when integrating this finding.' }], refs: [] })
@@ -96,12 +100,13 @@ void test('empty Method plans three levels, commits direct children only, and in
     try {
       const method = sealMethodRevision({ v: 1, id: 'empty-method', templates: [], skills: [], tools: [] })
       await store.putObject(method.id, new TextEncoder().encode(JSON.stringify(method)), 'method')
+      const seedInput = await store.putObject('binary-seed', new Uint8Array([0,255,7]))
       const handbook = await store.putObject('public-handbook', new TextEncoder().encode('A public exploration document.'))
       const exploration = await freezeGlobalResources(store, 'public-resources', {
         documents: [{ id: 'public-handbook', description: 'Public local workflow guidance.', object: handbook }],
         skills: original.method.skills, tools: [], baseTools: original.contract.resources.baseTools, fallbackAcceptance: original.contract.acceptance,
       })
-      const contract = sealTaskContract({ ...contractPayload(original.contract), method: { id: method.id, digest: method.digest },
+      const contract = sealTaskContract({ ...contractPayload(original.contract), spec: { ...original.contract.spec, inputs: [{ id: 'binary-seed', object: seedInput, path: 'seed.bin', access: 'copy-to-work' }] }, method: { id: method.id, digest: method.digest },
         template: { id: EXPLORE_TEMPLATE_ID, digest: method.digest }, resources: { ...original.contract.resources, exploration } })
       const composition = await buildSingleRunComposition(spike.ctx, { store, id: 'empty-method-root', contract, agentOptions: agentOptions(), base: { v: 1, seed: contract.environment.seed } })
       scenario = { ...original, contract, composition, method, runAdmission: { ...original.runAdmission, contract } }
@@ -143,12 +148,14 @@ void test('empty Method plans three levels, commits direct children only, and in
       assert.ok(child)
       assert.equal(child.method.digest, active.contract.method.digest)
       assert.equal(child.template.id, EXPLORE_TEMPLATE_ID)
-      assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['task-goal', true]])
+      assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['child-result', true]])
       assert.deepEqual(child.spec.outputs.filter(output => output.required), [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }])
       assert.equal(child.resources.exploration?.digest, active.contract.resources.exploration?.digest)
       assert.equal(result.root.manifest?.learningDrafts[0]?.id, '__skill-drafts')
       assert.ok(result.root.manifest.learningDrafts[0].object)
       assert.ok(grandchild)
+      assert.deepEqual(grandchild.spec.inputs, child.spec.inputs)
+      assert.equal(grandchild.spec.inputs[0].object.id, 'binary-seed')
       assert.deepEqual(grandchild.spec.criteria, child.spec.criteria)
       assert.deepEqual(grandchild.spec.outputs, child.spec.outputs)
       assert.deepEqual(grandchild.method, active.contract.method)

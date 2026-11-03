@@ -100,6 +100,7 @@ export async function verifyInventory(request: PublicInventoryVerifyRequest): Pr
     v: 1, provider: request.task.acceptance, operationId: request.operationId, contractDigest: request.task.digest,
     inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
     criteria: required.map(criterion => {
+      if (criterion.check !== undefined) return { id: criterion.id, verdict: 'pass', reason: 'Parent-authored command is independently executed by the host.' }
       if (criterion.id !== 'inventory-exact') return { id: criterion.id, verdict: 'invalid',
         reason: `Inventory verifier does not implement criterion ${criterion.id}.` }
       return { id: criterion.id, verdict: passed ? 'pass' : 'fail', reason,

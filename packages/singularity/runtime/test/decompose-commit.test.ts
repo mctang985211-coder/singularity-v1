@@ -181,7 +181,7 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
         scope: ['single child sample'],
         constraints: ['Use only authorized inputs.'],
       },
-      acceptanceCriteria: [{ id: 'local', statement: 'Record the observed sample.' }],
+      acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local', statement: 'Record the observed sample.' }],
       inputs: [{ id: 'sample', exampleText: 'sample input' }],
       localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
     }, 'child-example')
@@ -377,7 +377,7 @@ function proposal(scenario: Scenario, overrides: Partial<TaskProposal> = {}): Ta
       scope: ['child sample'],
       constraints: ['Use only the authorized input.'],
     },
-    acceptanceCriteria: [{ id: 'local-1', statement: 'The note records the sample.' }],
+    acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local-1', statement: 'The note records the sample.' }],
     inputs: [{
       id: 'source',
       object: scenario.parentInput,
@@ -509,8 +509,8 @@ void test('S4-B2 commit admits one host-derived child and appends exactly one fa
       batchId: result.batchId,
       bindingId: 'b1',
     })
-    assert.deepEqual(child.contract.spec.localGuidance, task.acceptanceCriteria)
-    assert.deepEqual(child.contract.spec.criteria.map(item => item.id), ['template-criterion'])
+    assert.deepEqual(child.contract.spec.criteria.slice(-task.acceptanceCriteria.length), task.acceptanceCriteria.map(criterion => ({ ...criterion, required: true })))
+    assert.deepEqual(child.contract.spec.criteria.map(item => item.id), ['template-criterion', 'local-1'])
     assert.deepEqual(child.contract.spec.inputs, task.inputs)
     assert.deepEqual(child.contract.resources.baseTools, scenario.contract.resources.baseTools)
     assert.deepEqual(child.contract.resources.skills, [scenario.skillBundle])
@@ -689,7 +689,7 @@ void test('S4-B2 commit derives per-child budget, join, and rejects exhausted or
     const { prepared, preparedSecond } = await prepareBoth(scenario)
     const firstTask = proposal(scenario)
     const secondTask = proposal(scenario, {
-      acceptanceCriteria: [{ id: 'local-second', statement: 'Second child note.' }],
+      acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local-second', statement: 'Second child note.' }],
     })
     const args = {
       action: 'commit' as const,
@@ -761,7 +761,7 @@ void test('S4-B2 commit rejects an active batch, unauthorized inputs, and invali
     const secondArgs = {
       action: 'commit' as const,
       children: [{ bindingId: 'b1', ackPreview: prepared.previewRef.digest, task: proposal(scenario, {
-        acceptanceCriteria: [{ id: 'second', statement: 'A second batch cannot start.' }],
+        acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'second', statement: 'A second batch cannot start.' }],
       }) }],
     }
     const secondSession = fakeSession([
@@ -902,7 +902,7 @@ void test('S4-B2 one preview admits distinct same-probe instances and replays th
           bindingId: 'b1',
           ackPreview: prepared.previewRef.digest,
           task: proposal(scenario, {
-            acceptanceCriteria: [{ id: 'duplicate-binding', statement: 'Duplicate binding.' }],
+            acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'duplicate-binding', statement: 'Duplicate binding.' }],
           }),
         },
       ],

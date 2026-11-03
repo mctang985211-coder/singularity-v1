@@ -4,13 +4,14 @@ import { digestSchema, seal, verifyDigest } from './digest.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue, workspaceRelativePathSchema } from './schema.ts'
 
-/** Model-supplied local guidance; never an acceptance obligation. */
-export const localCriterionSchema = closedObject({
+/** Parent-authored acceptance frozen before dispatch. */
+export const acceptanceCriterionSchema = closedObject({
   id: z.string(),
   statement: z.string(),
+  check: z.string().regex(/\S/),
 })
 
-export type LocalCriterion = z.infer<typeof localCriterionSchema>
+export type AcceptanceCriterion = z.infer<typeof acceptanceCriterionSchema>
 
 /** Model-supplied supporting output; this shape cannot express required deliverables. */
 export const localOutputSchema = closedObject({
@@ -33,6 +34,7 @@ export const taskCriterionSchema = closedObject({
   id: z.string(),
   statement: z.string(),
   required: z.boolean(),
+  check: z.string().regex(/\S/).optional(),
 })
 
 export type TaskCriterion = z.infer<typeof taskCriterionSchema>
@@ -85,7 +87,6 @@ export type TaskLimits = z.infer<typeof taskLimitsSchema>
 export const taskSpecSchema = closedObject({
   goal: taskGoalSchema,
   criteria: z.array(taskCriterionSchema),
-  localGuidance: z.array(localCriterionSchema).optional(),
   inputs: z.array(inputRefSchema),
   outputs: z.array(outputSpecSchema),
 })
@@ -95,7 +96,7 @@ export type TaskSpec = z.infer<typeof taskSpecSchema>
 /** The only Task shape a model may submit through decomposition. */
 export const taskProposalSchema = closedObject({
   goal: taskGoalSchema,
-  localCriteria: z.array(localCriterionSchema).optional(),
+  acceptanceCriteria: z.array(acceptanceCriterionSchema).min(1),
   inputs: z.array(inputRefSchema),
   localOutputs: z.array(localOutputSchema).optional(),
 })

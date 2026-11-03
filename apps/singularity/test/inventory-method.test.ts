@@ -56,7 +56,7 @@ void test('guided inventory Method integrates a required independently accepted 
       assert.match(messageTexts(request).join('\n'), /BOLT,4/)
       return call('singularity_decompose', { action: 'commit', children: [{ bindingId: INVENTORY_CHILD_BINDING,
         ackPreview: previewDigestFrom(request), task: { goal: inventoryTaskSpec(scenario.contract.spec.inputs[0].object).goal,
-          acceptanceCriteria: [], inputs: scenario.contract.spec.inputs, localOutputs: [] } }] })
+          acceptanceCriteria: [{ id: 'child-result', statement: 'The declared result contains the completed work.', check: 'test -s report.json' }], inputs: scenario.contract.spec.inputs, localOutputs: [] } }] })
     }
     if (index === 7) {
       assert.match(messageTexts(request).join('\n'), /explore-child/)

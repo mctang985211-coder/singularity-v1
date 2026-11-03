@@ -161,7 +161,6 @@ const rootInput: RootAdmissionInput = {
     criteria: [
       { id: 'root-required', statement: 'The root result is verified', required: true },
     ],
-    localGuidance: [{ id: 'root-local', statement: 'Keep root notes with the result' }],
     inputs: [inputA, inputB],
     outputs: rootBaseOutputs,
   },
@@ -177,8 +176,8 @@ const rootInput: RootAdmissionInput = {
 const childProposal: TaskProposal = {
   goal,
   acceptanceCriteria: [
-    { id: 'local-first', statement: 'Keep local notes in proposal order' },
-    { id: 'local-second', statement: 'Keep local notes separate from acceptance' },
+    { check: 'test -s notes.txt', id: 'local-first', statement: 'Keep local notes in proposal order' },
+    { check: 'test -s notes.txt', id: 'local-second', statement: 'Include the required local notes' },
   ],
   inputs: [inputA, inputB],
   localOutputs: [
@@ -264,7 +263,7 @@ void test('root admission appends fixed drafts last and seals a verifiable contr
   assert.deepEqual(contract.template, rootTemplateRef)
   assert.deepEqual(contract.spec.inputs, [inputA, inputB])
   assert.deepEqual(contract.spec.criteria, rootInput.spec.criteria)
-  assert.deepEqual(contract.spec.localGuidance, rootInput.spec.localGuidance)
+  assert.equal('localGuidance' in contract.spec, false)
   assert.deepEqual(contract.spec.outputs, [
     ...rootBaseOutputs,
     SKILL_DRAFTS_OUTPUT,
@@ -411,7 +410,7 @@ void test('root admission rejects inconsistent method/template refs and unknown 
   )
 })
 
-void test('child admission merges template obligations, proposal guidance, and supporting outputs in order', () => {
+void test('child admission merges template obligations, parent acceptance, and supporting outputs in order', () => {
   const input = childBatchInput()
   const before = clone(input)
   const batch = admitChildBatch(input)
@@ -440,8 +439,7 @@ void test('child admission merges template obligations, proposal guidance, and s
   assert.deepEqual(child.contract.environment, childEnvironment)
   assert.deepEqual(child.contract.limits, childLimits)
 
-  assert.deepEqual(child.contract.spec.criteria, childTemplate.requiredCriteria)
-  assert.deepEqual(child.contract.spec.localGuidance, childProposal.acceptanceCriteria)
+  assert.deepEqual(child.contract.spec.criteria, [...childTemplate.requiredCriteria, ...childProposal.acceptanceCriteria.map(criterion => ({ ...criterion, required: true }))])
   assert.deepEqual(child.contract.spec.inputs, [inputA, inputB])
   assert.deepEqual(child.contract.spec.outputs, [
     ...childTemplate.requiredOutputs,
@@ -550,7 +548,7 @@ void test('child admission derives probe join from the fixed binding', () => {
   })
 })
 
-void test('empty Method children inherit a fixed goal criterion and cannot verify with an empty receipt', () => {
+void test('empty Method children freeze parent-authored criteria and cannot verify with an empty receipt', () => {
   const emptyMethod = sealMethodRevision({ v: 1, id: 'empty', templates: [], skills: [], tools: [] })
   const pinned = { id: emptyMethod.id, digest: emptyMethod.digest }
   const exploration: protocol.GlobalResourceSnapshot = { v: 1, documents: [], skills: [], tools: [],
@@ -561,11 +559,11 @@ void test('empty Method children inherit a fixed goal criterion and cannot verif
   const request = childRequest(childBatchInput())
   const child = firstChild(admitChildBatch({ parent, method: emptyMethod, exploration,
     parentRunId: 'run-root-1', batchId: 'batch-1', children: [{ ...request,
-      bindingId: protocol.EXPLORE_BINDING_ID, proposal: { ...request.proposal, acceptanceCriteria: [] } }] })).contract
-  assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['task-goal', true]])
+      bindingId: protocol.EXPLORE_BINDING_ID, proposal: { ...request.proposal, acceptanceCriteria: [{ id: 'child-result', statement: 'The declared result contains the completed work.', check: 'test -s notes.txt' }] } }] })).contract
+  assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['child-result', true]])
   const resultOutput: OutputSpec = { id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }
   for (const localOutputs of [undefined, []]) {
-    const proposal: TaskProposal = { goal, inputs: [], ...(localOutputs === undefined ? {} : { localOutputs }) }
+    const proposal: TaskProposal = { goal, inputs: [], acceptanceCriteria: request.proposal.acceptanceCriteria, ...(localOutputs === undefined ? {} : { localOutputs }) }
     const input = { parent, method: emptyMethod, exploration, parentRunId: 'run-root-1', batchId: 'batch-result',
       children: [{ ...request, bindingId: protocol.EXPLORE_BINDING_ID, authorizedInputs: [], proposal }] }
     assert.deepEqual(firstChild(admitChildBatch(input)).contract.spec.outputs.filter(output => output.required), [resultOutput])
@@ -580,7 +578,7 @@ void test('empty Method children inherit a fixed goal criterion and cannot verif
     contractDigest: expected.contractDigest, inputDigests: [], outputDigests: [], exit: { code: 0, signal: null }, timedOut: false }
   assert.equal(protocol.validatePublicReceipt(protocol.sealPublicReceipt({ ...payload, criteria: [] }), expected).verdict, 'invalid')
   for (const verdict of ['pass', 'fail'] as const) {
-    const receipt = protocol.sealPublicReceipt({ ...payload, criteria: [{ id: 'task-goal', verdict, reason: 'Independent local goal finding.' }] })
+    const receipt = protocol.sealPublicReceipt({ ...payload, criteria: [{ id: 'child-result', verdict, reason: 'Independent local goal finding.' }] })
     assert.equal(protocol.validatePublicReceipt(receipt, expected).verdict, verdict === 'pass' ? 'verified' : 'failed')
   }
 })
