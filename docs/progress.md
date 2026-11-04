@@ -345,3 +345,15 @@ Buckyball guide 删除重复平台流程，领域就绪仅固定环境、资源�
 Buckyball 指引删减重复交付/PPA 压力，既有 core/Ball/compiler 作为需要证据的候选；资料区分 elaboration、功能检查和带条件的综合估计。早期综合可验证明确设计假设，最终 PPA 必须对应 workload 实际消费的实现；不规定统一设计阶段顺序。项目旧 skills 继续只在 root 给出参考文档路径，其角色、审批和流程门槛不覆盖 Task 合同；非 root 合同和验收仍由模型编写。root criteria 未变。
 
 新真实轮：`artifacts/round7-workflow-planning-20261104-122838` 于 2026-11-04 12:28:38 +0800 启动，绝对截止 2026-11-05 00:28:38 +0800。冻结提交 `5673c534e3d0868b0e95afb49780d822380e9d6a`，启动记录的 79 个源文件 hash 与当前文件一致；12 小时 / 1,000,000,000 reported tokens / 4,000 requests，maxActive=4，deepseek-flash/reasoning=max，使用全新执行根，不续跑归档 root。operator PID 1341135、只读 monitor PID 1341136；启动约 8 个请求已结算，unknown=0，无启动失败。实时结果只在该根的 SQLite、requests.jsonl 和模型 session 中判断，不把启动或脚本 fixture 当作成功证据。
+
+### round7 取消审计（2026-11-04）
+
+round7 于 20:36:12 +0800 被取消，未生成最终 `result.json`；最终计量为 3,083 requests / 460,696,768 input / 3,105,029 output / unknown=0。`operator-cancelled.json` 中“RSI 尚未开始”的原因与事实事件不一致：SQLite 显示 round1 在 19:38:42 打开 RSI，19:44:24 proposer 提交后被 precheck 以 `Template MCP server binding is dangling` 拒绝；随后 round2 已开始并派发两个直属 child，取消时其中 Ball authoring/PPA probe 尚未提交。
+
+这轮的因果证据如下：root 合同一次性要求五个推理阶段、架构/内存/精度/数据流、compiler/emulator mapping、RTL、逻辑综合、每阶段组件验证和 workload 实际边界 PPA，六项 required criteria 全部必须通过。round1 同一 root Task 自动消耗三次 Run（194、111、139 steps；分别失败 4 项、1 项、1 项），累计 root 输入约 121M tokens；child 侧 17 次 verified、5 次 failed/blocked。首轮最终已有独立 PPA 报告，但 implementation 仍发现 330 条 micro-op 没有合法 K-window/累加链/银行字段和 repository consumer，258 个 elementwise/FFT/sampling 操作没有实际实现，因而不是单纯 EDA 失败。
+
+模型编写的 child 合同确实出现了会消耗整轮的错误：`param-anchors` 检查自引用而不可满足；`BuckyballAccelerator == 12` 与 `inputChannels == 5` 的真实拓扑互相矛盾（可达结果是 10，12 需要改成 inputChannels=6 和 ball-bearing controller）。child 通过 feedback 正确指出并 blocked，parent 修正后继续；这证明反馈机制工作，但也证明当前领域任务让模型在一个过大的 root 下同时编写架构、合同和实现，错误成本过高。
+
+当前轮没有使用商业 EDA：root/child 只通过公开 `bbdev` surface 使用 Yosys/OpenSTA；repo 的 `bbdev yosys --run` 还遇到 `arch/build.sc` 缺少 tapeout module 的真实环境缺口，reviewer 使用了记录清楚的替代 flow。round6 归档中曾有 `dc_shell` 作业和 skill 草稿，但那不是 round7 的运行路径，且 `dc_shell` 不在项目 Nix 环境/MCP 工具面。商业 EDA 即使可用，也不能解决 recipe 无 lowering、bank capacity 违规和 root 合同过大的问题；它只会增加一次长综合的等待。
+
+结论：主因是领域 root Task/验收集过大且把“探索、实现、集成、完整验证、最终 PPA”绑成一个不可中间收敛的 required 目标；次因是模型编写的若干 child checks 有矛盾；Buckyball 有 tapeout flow 缺口；Singularity 另有一个具体 RSI 绑定缺陷（proposer patch 引用了 `buckyball-bbdev`，却没有在 Method patch 中提供对应 tool binding，precheck 因 dangling 拒绝）。Singularity 的 direct-child、跨批和 feedback 机制本身在这轮被实际使用，不能把长战线主要归因于它不会分解。
