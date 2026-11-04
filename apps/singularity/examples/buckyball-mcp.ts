@@ -7,7 +7,7 @@ import { promisify } from 'node:util'
 import { fromJsonSchema,McpServer } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 
-export const bbdevInstructions = 'First use checkout to create your independent prepared Buckyball directory. Then run frontend operations through bbdev, which activates nix develop in that directory. Use bash for source edits and standalone component tools. Follow the Task scope: frontend only, no full-chip simulation, P2E or physical backend.'
+export const bbdevInstructions = 'First use checkout to create your independent prepared Buckyball directory. Then run domain operations through bbdev, which activates nix develop in that directory. Use bash for source edits and standalone component tools. Follow the Task scope: focused Ball work; no full-chip simulation, P2E or physical backend.'
 export const checkoutDescription = 'Copy prepared baseline and install configs into a new absolute project path.'
 export const checkoutParameters = { type: 'object' as const, additionalProperties: false,
   properties: { project: { type: 'string' as const } }, required: ['project'] }

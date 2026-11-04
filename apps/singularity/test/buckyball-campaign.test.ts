@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict'
-import { chmod,mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
+import { chmod,glob,mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { gzipSync } from 'node:zlib'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 
@@ -16,8 +15,8 @@ import type { PublicEvaluationEvidence } from '@singularity/runtime'
 import { createWakeMessage,snapshotSession } from '@singularity/runtime'
 
 import { runBuckyballCampaign } from '../examples/buckyball-campaign.ts'
-import { compareFrontendPpa } from '../examples/buckyball-acceptance.ts'
-import { BUCKYBALL_FRONTEND_CAMPAIGN } from '../examples/buckyball-frontend-task.ts'
+import { compareBallCost } from '../examples/buckyball-acceptance.ts'
+import { BUCKYBALL_BALL_CAMPAIGN } from '../examples/buckyball-ball-task.ts'
 import { nativeAccounting } from '../examples/native-accounting.ts'
 import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
 import { withHarness } from './run-fixture.ts'
@@ -139,23 +138,21 @@ void test('native campaign meter includes auxiliary calls; session projection co
   })
 })
 
-void test('PPA comparator normalizes units and rejects incomplete correctness or unmatched synthesis conditions', () => {
-  const caseRef = { id: 'frontend-case', digest: `sha256:${'a'.repeat(64)}` }
+void test('Ball comparator counts whole-subtree cost only after complete functional acceptance', () => {
+  const caseRef = { id: 'ball-case', digest: `sha256:${'a'.repeat(64)}` }
   const plan = { cases: [caseRef], validationCases: [], trialsPerCase: 1 } as unknown as RoundPlan
-  const trial = (arm: 'baseline' | 'candidate', factor: number, conditions = 'smic180/tt/1.8V/25C/activity=.1/top=same') => {
-    const ppa = { power: 10 * factor, delay: 2 * factor, area: 100 * factor, conditions, evidence: 'independently reproduced synthesis report' }
-    return { caseRef, arm, verdict: 'verified', receipt: { criteria: [{ id: 'ppa-evidence', verdict: 'pass', reason: JSON.stringify(ppa),
-      metric: { name: 'ppa-weighted-cost', unit: 'mW^0.3 ns^0.4 um2^0.3', value: ppa.power ** 0.3 * ppa.delay ** 0.4 * ppa.area ** 0.3 } }] } } as unknown as PublicEvaluationEvidence
-  }
-  const good = compareFrontendPpa(plan, [trial('baseline', 1), trial('candidate', 0.5)])
+  const trial = (arm: 'baseline' | 'candidate', tokens: number) => ({ caseRef, arm, verdict: 'verified',
+    usage: { inputTokens: tokens, outputTokens: 10, complete: true } }) as PublicEvaluationEvidence
+  const before = trial('baseline', 2000), after = trial('candidate', 900)
+  const good = compareBallCost(plan, [before, after])
   assert.equal(good.comparable, true)
-  assert.ok(Math.abs(good.aggregateDelta - 1) < 1e-10)
-  assert.equal(compareFrontendPpa(plan, [trial('baseline', 1), trial('candidate', 0.5, 'different-corner')]).comparable, false)
-  assert.equal(compareFrontendPpa(plan, [trial('baseline', 1), { ...trial('candidate', 0.5), verdict: 'failed' }]).comparable, false)
-  assert.equal(compareFrontendPpa(plan, [trial('baseline', 1)]).comparable, false)
+  assert.equal(good.aggregateDelta, 1100)
+  assert.equal(compareBallCost(plan, [before, { ...after, verdict: 'failed' }]).comparable, false)
+  assert.equal(compareBallCost(plan, [before, { ...after, usage: { ...after.usage, complete: false } }]).comparable, false)
+  assert.equal(compareBallCost(plan, [before]).comparable, false)
 })
 
-void test('chip campaign admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 120_000 }, async t => {
+void test('Ball campaign admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'buckyball-campaign-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const baseline = join(directory, 'baseline'), prepared = join(directory, 'prepared'), root = join(directory, 'execution')
@@ -164,10 +161,7 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     await mkdir(join(baseline, '.agents/skills', name), { recursive: true })
     await writeFile(join(baseline, '.agents/skills', name, 'SKILL.md'), `# ${name}\nRead current domain sources.\n`)
   }
-  await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: baseline },
-    publicSeed: { archive: 'prior-public.tar.gz', description: 'Recorded incomplete public artifacts; not an accepted chip.' } }))
-  const seedBytes = gzipSync('frozen public seed fixture')
-  await writeFile(join(prepared, 'prior-public.tar.gz'), seedBytes)
+  await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: baseline } }))
   const bin = join(directory, 'bin')
   await mkdir(bin)
   await writeFile(join(bin, 'nix'), '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > "$PWD/nix-argv.txt"\nprintf "fixture bbdev help\\n"\n')
@@ -177,17 +171,17 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
   t.after(() => { if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath })
   let reviews = 0, proposers = 0, exhaustReview = false
   const fixture = await startChatCompletionsFixture((request, index) => {
-    const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `chip-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
+    const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `ball-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
       usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
     if (toolSchemaNames(request).includes('buckyball_review_submit')) {
-      if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens,
-        completionTokens: 10, totalTokens: BUCKYBALL_FRONTEND_CAMPAIGN.maxReportedTokens + 10 } }
+      if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: BUCKYBALL_BALL_CAMPAIGN.maxReportedTokens,
+        completionTokens: 10, totalTokens: BUCKYBALL_BALL_CAMPAIGN.maxReportedTokens + 10 } }
       if (!toolNames(request).includes('buckyball_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
         name: 'buckyball_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
       reviews += 1
-      return call('buckyball_review_submit', { result: { criteria: ['model-reference', 'design-contract', 'implementation', 'component-verification', 'ppa-evidence', 'delivery']
-        .map(id => ({ id, verdict: 'fail', reason: 'Fixture intentionally supplies no chip implementation or independently reproduced evidence.' })) } })
+      return call('buckyball_review_submit', { result: { criteria: ['executable-mapping', 'target-correctness', 'regression', 'delivery']
+        .map(id => ({ id, verdict: 'fail', reason: 'Missing actual MXMM consumer: fixture failure must remain actionable.' })) } })
     }
     if (toolSchemaNames(request).includes('rsi_submit_patch')) {
       const calls = toolNames(request)
@@ -209,14 +203,13 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     const data = JSON.parse(pages.map(value => value.data).join('')) as { taskId: string; runId: string; contractDigest: string }
     if (!calls.includes('singularity_plan')) return call('singularity_plan', { sketch: { v: 1, taskId: data.taskId, runId: data.runId, sourceContract: data.contractDigest, contextEpoch: last.contextEpoch,
       objective: 'Deliver the incomplete fixture honestly.', levels: [0, 1].map(level => ({ level, purpose: 'Inspect local output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })), directPlan: [], assumptions: [] } })
-    if (!messageTexts(request).join('\n').includes('Resource is binary.')) return call('singularity_read', { kind: 'resource', id: 'public-seed' })
     assert.ok(toolSchemaNames(request).includes('mcp__buckyball__bbdev'), 'the frozen domain MCP is available in each fresh Run')
     if (!calls.includes('mcp__buckyball__bbdev')) return call('mcp__buckyball__bbdev', { project: baseline, args: ['--help', 'literal;$(false)'] })
     if (!calls.includes('bash')) {
-      assert.match(messageTexts(request).join('\n'), /frontend/)
-      return call('bash', { description: 'Inspect public seed and create incomplete output.', command: "test \"$(gzip -cd public-seed.tar.gz)\" = 'frozen public seed fixture' && mkdir -p frontend && printf 'Incomplete fixture, no chip implementation.\\n' > frontend/report.md" })
+      assert.match(messageTexts(request).join('\n'), /ball/)
+      return call('bash', { description: 'Create incomplete Ball output.', command: "mkdir -p ball && printf 'Incomplete fixture, no target execution.\\n' > ball/report.md" })
     }
-    return call('singularity_submit', { outputIds: ['frontend'], includeLearningDrafts: false })
+    return call('singularity_submit', { outputIds: ['ball'], includeLearningDrafts: false })
   })
   t.after(() => fixture.close())
   const oldUrl = process.env.SINGULARITY_SPIKE_BASE_URL, oldKey = process.env.SINGULARITY_SPIKE_API_KEY
@@ -242,13 +235,17 @@ void test('chip campaign admits empty Method, independently reviews frozen outpu
     sourceSpec: { inputs: { id: string; object: { digest: string } }[]; goal: { constraints: string[] } }
     cases: { spec: { inputs: { id: string; object: { digest: string } }[]; goal: { constraints: string[] } } }[]
   }
-  const seedInput = launch.sourceSpec.inputs.find(value => value.id === 'public-seed')
   assert.ok(launch.sourceSpec.goal.constraints.some(value => value.includes(`${baseline}/.agents/skills/`)))
-  assert.ok(seedInput)
-  assert.deepEqual(await readFile(join(root, 'domain/objects', seedInput.object.digest.slice('sha256:'.length))), seedBytes)
+  assert.deepEqual(launch.sourceSpec.inputs.map(value => value.id), ['project', 'experiment-guide'])
+  assert.equal(launch.cases.length, 3)
   for (const { spec } of launch.cases) {
-    assert.deepEqual(spec.inputs.find(value => value.id === 'public-seed'), seedInput, 'both arms use each frozen case with the identical seed')
-    assert.ok(spec.goal.constraints.some(value => value.includes('prior verdicts do not establish')))
+    assert.ok(spec.goal.constraints.some(value => value.includes(`${baseline}/.agents/skills/`)))
+    assert.deepEqual(spec.inputs.map(value => value.id), ['project', 'experiment-guide'])
+  }
+  const receipts = glob(`${root}/reviews/*/receipt.json`)
+  for await (const path of receipts) {
+    const receipt = JSON.parse(await readFile(path, 'utf8')) as { criteria: { reason: string }[] }
+    assert.ok(receipt.criteria.every(value => value.reason.includes('Missing actual MXMM consumer')))
   }
   assert.deepEqual((await readFile(join(baseline, 'nix-argv.txt'), 'utf8')).trimEnd().split('\n'),
     [baseline, 'develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', '--help', 'literal;$(false)'])

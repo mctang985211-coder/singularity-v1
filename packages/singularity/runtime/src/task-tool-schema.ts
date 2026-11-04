@@ -40,7 +40,7 @@ export const taskProtocolReference: JsonValue = {
   ],
   method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Register skill/MCP assets in the Method before binding their IDs; public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
   skills: 'Bound skills use native DSH discovery; directory resources include frozen relative files. Use the path returned by the skill tool for bundled scripts.',
-  results: 'Read evidence with a direct child ID or lastAttempt.runId. Join every data text page to parse {result,publicReceipt?}; publicReceipt.criteria contains the independent findings. Frozen child outputs are under children/; the previous attempt is under lastAttempt.outputsPath. Copy useful artifacts to your current outputs and correct the observed failures before resubmitting. Prior transcripts and private receipts are not exposed.',
+  results: 'Read evidence with a direct child ID or lastAttempt.runId. Join ALL data pages to parse {outputs,result,publicReceipt?}; outputs gives complete authorized InputRefs to copy unchanged into child contracts. publicReceipt.criteria contains independent findings, including gaps in passing verdicts. Correct those gaps before resubmitting; preserve the parent goal. Prior transcripts and private receipts are not exposed.',
 }
 
 export const planningParameters = {

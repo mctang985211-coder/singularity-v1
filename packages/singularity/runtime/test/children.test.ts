@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { canonicalize, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
-import type { Ref, TaskState } from '@singularity/protocol'
+import { canonicalize, inputRefSchema, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
+import type { InputRef, Ref, TaskState } from '@singularity/protocol'
 
 import { readChildData } from '../src/children.ts'
 import type { DirectChildren } from '../src/children.ts'
@@ -41,23 +41,30 @@ void test('parent reads public child Evidence while the private receipt stays ou
   const task: TaskState = { taskId: 'child', contract, rootTaskId: 'parent', parentTaskId: 'parent',
     parentRunId: 'parent-run', depth: 1, phase: 'closed', runIds: ['child-run'], childIds: [],
     closed: { outcome: 'verified', reason: 'verified', source: 'task/closed', factDigest: ref('closure').digest } }
-  const children: DirectChildren = { results: [{ task, evidenceRef, outputs: [] }], inputs: [], requiredFailure: false,
+  const output: InputRef = { id: 'child:result', object: ref('frozen-result'), path: 'children/child/result', access: 'read' }
+  const children: DirectChildren = { results: [{ task, evidenceRef, outputs: [{ ...output, kind: 'file' }] }], inputs: [], requiredFailure: false,
     view: { requiredObligations: [], childBatch: null, childHistory: { total: 1, outcomes: { verified: 1 } }, recentChildResults: [] } }
-  let text = '', cursor: string | undefined, pages = 0
-  do {
-    const result = await readChildData(service, children, [], { kind: 'evidence', id: task.taskId, ...(cursor === undefined ? {} : { cursor }) })
-    assert.equal(typeof result.data, 'string')
-    assert.ok(new TextEncoder().encode(JSON.stringify(result)).byteLength < 16 * 1024)
-    text += result.data as string
-    cursor = result.nextCursor
-    pages++
-  } while (cursor !== undefined)
-  assert.ok(pages > 1, 'long independent findings use bounded pages')
-  const payload = JSON.parse(text) as { publicReceipt: typeof receipt }
-  assert.equal(payload.publicReceipt.criteria[0]?.reason, finding)
-  assert.ok(text.includes(publicReceipt.id))
-  assert.ok(!text.includes('privateReceipt'))
-  assert.ok(!text.includes(privateReceipt.id))
+  for (const retry of [false, true]) {
+    const expected = retry ? { ...output, id: 'old-run:result', path: 'attempts/old-run/result' } : output
+    let text = '', cursor: string | undefined, pages = 0
+    do {
+      const result = await readChildData(service, children, [], { kind: 'evidence', id: retry ? 'old-run' : task.taskId, ...(cursor === undefined ? {} : { cursor }) },
+      retry ? { runId: 'old-run', evidenceRef, outputs: [{ ...expected, kind: 'file' }] } : undefined)
+      assert.equal(typeof result.data, 'string')
+      assert.ok(new TextEncoder().encode(JSON.stringify(result)).byteLength < 16 * 1024)
+      text += result.data as string
+      cursor = result.nextCursor
+      pages++
+    } while (cursor !== undefined)
+    assert.ok(pages > 1, 'long independent findings use bounded pages')
+    const payload = JSON.parse(text) as { outputs: InputRef[]; publicReceipt: typeof receipt }
+    assert.deepEqual(payload.outputs, [expected])
+    assert.deepEqual(inputRefSchema.array().parse(payload.outputs), [expected], 'wire refs are valid child inputs unchanged')
+    assert.equal(payload.publicReceipt.criteria[0]?.reason, finding)
+    assert.ok(text.includes(publicReceipt.id))
+    assert.ok(!text.includes('privateReceipt'))
+    assert.ok(!text.includes(privateReceipt.id))
+  }
   await assert.rejects(readChildData(service, children, [], { kind: 'evidence', id: 'unrelated-run' }), { code: 'INPUT_NOT_AUTHORIZED' })
   await assert.rejects(readChildData(service, children, [], { kind: 'resource', id: privateReceipt.id }), { code: 'INPUT_NOT_AUTHORIZED' })
   assert.ok(new TextDecoder().decode((await service.readObject(evidenceRef, 'evidence')).bytes).includes(privateReceipt.id))

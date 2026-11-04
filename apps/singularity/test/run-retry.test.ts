@@ -6,7 +6,7 @@ import test from 'node:test'
 
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 
-import type { ExecutionRecord,Ref } from '@singularity/protocol'
+import type { ExecutionRecord,InputRef,Ref,TaskContract } from '@singularity/protocol'
 import {
 computeDigest,
 executionRecordSchema,
@@ -15,16 +15,22 @@ sealPublicReceipt,
 submissionManifestSchema
 } from '@singularity/protocol'
 import {
+CommandService,
 DomainStore,
 executeSingleRun,
+executeTaskTree,
 retrySingleRun
 } from '@singularity/runtime'
 
+import { buildSingleRunComposition } from '../src/host-composition.ts'
 import type { bootSpikeProfile } from '../src/host-composition.ts'
+import type { VerifierRequest } from '@singularity/runtime'
 import type { ChatCompletionsFixture } from './fixtures/chat-completions.ts'
-import { messageTexts,toolSchemaNames } from './fixtures/chat-completions.ts'
+import { contextEpochFrom,messageTexts,toolSchemaNames } from './fixtures/chat-completions.ts'
 
+import { previewDigestFrom,s4b2Example } from './method-fixture.ts'
 import {
+planReply,
 assertSecretNotPersisted,
 captureAgentContexts,
 currentComposition,
@@ -46,7 +52,6 @@ writeOutputReply
 import type { ReplyScript,Scenario } from './task-fixture.ts'
 import {
 FROZEN_OUTPUT,
-CRITERION_ID,
 LIVE,
 LIVE_TIMEOUT_MS,
 OUTPUT_PATH,
@@ -272,58 +277,86 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
   })
 })
 
-void test('retry reads public criterion findings and reuses frozen output without opening the prior workspace', { timeout: 240_000 }, async () => {
+void test('retry passes an unchanged evidence InputRef to a fresh child and integrates its result', { timeout: 240_000 }, async () => {
   const taskId = `retry-findings-${String(process.pid)}-${String(Date.now())}`
   const firstRunId = `${taskId}:run:1`, secondRunId = `${taskId}:run:2`
-  const reason = 'The boundary case is missing; add the independent boundary check.'
+  const reason = 'The boundary case is missing; repair the frozen result through a new child.'
   const previousPath = `attempts/${encodeURIComponent(firstRunId)}/result`
-  let scenario: Scenario | undefined
+  let scenario: Scenario | undefined, child: TaskContract | undefined, childRunId = '', retryWorkspace = ''
+  let previous: InputRef | undefined
   await withHarness((request, index) => {
-    const local = index < 4 ? index : index - 4
-    const runId = index < 4 ? firstRunId : secondRunId
-    if (local <= 1) {
-      const reply = selfReadAndPlan(request, local, scenario, taskId, runId)
-      assert.ok(reply)
-      return reply
+    assert.ok(scenario)
+    const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `retry-${String(index)}`, name, arguments: JSON.stringify(args) }], usage: fixtureUsage(index) })
+    if ([0, 4, 9, 14].includes(index)) return call('singularity_read', { kind: 'self' })
+    if ([1, 5, 10, 15].includes(index)) {
+      const contract = index === 10 ? child : scenario.contract
+      assert.ok(contract)
+      return planReply({ ...scenario, contract }, contract.taskId, index === 10 ? childRunId : index === 1 ? firstRunId : secondRunId,
+        contextEpochFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) ?? '')
     }
     if (index === 2) return writeOutputReply()
-    if (index === 3 || index === 8) return submitReply()
-    if (index === 6) return { toolCalls: [{ id: 'previous-findings', name: 'singularity_read',
-      arguments: JSON.stringify({ kind: 'evidence', id: firstRunId }) }], usage: fixtureUsage(index) }
-    assert.equal(index, 7)
-    const wire = messageTexts(request).join('\n')
-    assert.ok(wire.includes(reason), 'the actual criterion finding reaches the retry model')
-    assert.ok(wire.includes(`attempts/${encodeURIComponent(firstRunId)}`), 'the NodeView advertises the frozen previous outputs')
-    return { toolCalls: [{ id: 'reuse-frozen-output', name: 'bash',
-      arguments: JSON.stringify({ command: `cat '${previousPath}' > '${OUTPUT_PATH}'` }) }], usage: fixtureUsage(index) }
+    if (index === 3 || index === 18) return submitReply()
+    if (index === 6) return call('singularity_read', { kind: 'evidence', id: firstRunId })
+    if (index === 7) {
+      const wire = messageTexts(request)
+      const response = wire.map(text => { try { return JSON.parse(text) as { data?: string } } catch { return {} } })
+        .find(value => typeof value.data === 'string' && value.data.includes('publicReceipt'))
+      assert.ok(response?.data)
+      const evidence = JSON.parse(response.data) as { outputs: InputRef[]; publicReceipt: { criteria: { reason: string }[] } }
+      assert.equal(evidence.publicReceipt.criteria[0].reason, reason)
+      previous = evidence.outputs[0]
+      assert.equal(previous.path, previousPath)
+      return call('singularity_decompose', { action: 'prepare', bindingId: 'repair' })
+    }
+    if (index === 8) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: 'repair',
+      ackPreview: previewDigestFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }), task: {
+        goal: { summary: 'Consume the previous frozen result and return exact bytes.', deliverable: 'child.txt', scope: [], constraints: [] }, inputs: [previous],
+        acceptanceCriteria: [{ id: 'copy', statement: 'Preserve frozen bytes.', check: `test "$(cat child.txt)" = '${FROZEN_OUTPUT}'` }],
+        localOutputs: [{ id: 'copy', path: 'child.txt', kind: 'file', description: 'Repaired result.' }],
+      } }] })
+    if (index === 11) return call('singularity_read', { kind: 'resource', id: previous?.id })
+    if (index === 12) {
+      assert.ok(messageTexts(request).some(text => text.includes(FROZEN_OUTPUT)))
+      return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
+    }
+    if (index === 13) return call('singularity_submit', { outputIds: ['copy'], includeLearningDrafts: false })
+    if (index === 16) return call('singularity_read', { kind: 'children' })
+    assert.equal(index, 17)
+    assert.ok(child)
+    return call('bash', { command: `cat 'children/${encodeURIComponent(child.taskId)}/copy' > result.txt` })
   }, async ({ spike, fixture, workspace, storeRoot }) => {
-    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 2 })
+    scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 2, maxStepsPerRun: 24, maxTasks: 2,
+      childBinding: { bindingId: 'repair', templateId: 'repair-child', brief: 'Repair a frozen result.', join: 'probe', example: s4b2Example() } })
     const active = scenario
-    const first = await executeSingleRun({ ctx: spike.ctx, journalRoot: storeRoot, workspace,
-      runId: firstRunId, sessionId: `${firstRunId}:session`, admission: active.runAdmission,
-      composition: active.composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
-      verifier: { provider: active.provider, async verify(request) {
-        await writeFile(join(workspace, OUTPUT_PATH), 'mutable old workspace must not be reused\n')
-        return sealPublicReceipt({ v: 1, provider: active.provider, operationId: request.operationId,
-          contractDigest: active.contract.digest, inputDigests: request.inputs.map(ref => ref.digest),
-          outputDigests: request.outputs.map(ref => ref.digest), criteria: [{ id: CRITERION_ID, verdict: 'fail', reason }],
-          exit: { code: 0, signal: null }, timedOut: false })
-      } }, transientInvalidReasons: [] })
-    assert.ok(first.kind === 'settled')
-    assert.equal(first.classification, 'failed')
-    assert.ok(first.evidenceRef)
-    const secondWorkspace = join(storeRoot, 'retry-findings-workspace')
-    const calls: { readonly inputs: readonly Ref[]; readonly outputs: readonly Ref[] }[] = []
-    const second = await retrySingleRun({ ctx: spike.ctx, journalRoot: storeRoot, workspace: secondWorkspace,
-      previousRunId: firstRunId, runId: secondRunId, sessionId: `${secondRunId}:session`,
-      composition: await currentComposition(spike.ctx, storeRoot, active), agentOptions: agentOptions(), maxOutputBytes: 1024,
-      verifier: passingVerifier(active, secondRunId, secondWorkspace, calls), transientInvalidReasons: [] })
-    assert.ok(second.kind === 'settled')
-    assert.equal(second.classification, 'verified')
-    assert.equal(await readFile(join(secondWorkspace, previousPath), 'utf8'), FROZEN_OUTPUT)
-    assert.equal(await readFile(join(workspace, OUTPUT_PATH), 'utf8'), 'mutable old workspace must not be reused\n')
-    assert.equal(calls[0]?.inputs.length, active.contract.spec.inputs.length + 1, 'previous frozen output retains its evidence lineage')
-    assert.equal(fixture.requests.length, 9)
+    retryWorkspace = join(workspace, 'fresh-runs', computeDigest('object', { runId: secondRunId }).slice('sha256:'.length))
+    const service = await CommandService.open({ root: storeRoot, actor: { kind: 'runtime', id: 'singularity-runtime' }, clock: Date.now })
+    const verify = async (request: VerifierRequest) => {
+      assert.equal(new TextDecoder().decode((await request.readObject(request.outputs[0], 'object')).bytes), FROZEN_OUTPUT)
+      const failed = request.operationId === `${firstRunId}:verify`
+      if (failed) await writeFile(join(workspace, OUTPUT_PATH), 'mutable old workspace must not be reused')
+      if (request.task.origin.kind === 'child') assert.deepEqual(request.inputs, [previous?.object])
+      return sealPublicReceipt({ v: 1, provider: request.task.acceptance, operationId: request.operationId, contractDigest: request.task.digest,
+        inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
+        criteria: request.task.spec.criteria.map(value => ({ id: value.id, verdict: failed ? 'fail' : 'pass', reason: failed ? reason : 'Frozen bytes independently checked.' })),
+        exit: { code: 0, signal: null }, timedOut: false })
+    }
+    try {
+      const result = await executeTaskTree({ ctx: spike.ctx, journalRoot: storeRoot, workspace, runId: firstRunId, sessionId: `${firstRunId}:session`,
+        admission: active.runAdmission, composition: active.composition, agentOptions: agentOptions(), maxOutputBytes: 1024,
+        verifier: { provider: active.provider, verify }, maxActive: 1, workspaceRoot: join(workspace, 'fresh-runs'),
+        async resolveRun(input) {
+          if (input.contract.origin.kind === 'child') { child = input.contract; childRunId = input.runId; assert.deepEqual(child.spec.inputs, [previous]) }
+          return { composition: await buildSingleRunComposition(spike.ctx, { store: service, id: input.runId, contract: input.contract, agentOptions: agentOptions(), base: { v: 1, seed: input.contract.environment.seed } }),
+            agentOptions: agentOptions(), maxOutputBytes: 1024, verifier: { provider: input.contract.acceptance, verify } }
+        },
+      }, service)
+      assert.equal(result.root.classification, 'verified', result.root.executionRecord?.reason)
+      assert.equal(result.runs.length, 3)
+      assert.equal(await readFile(join(retryWorkspace, previousPath), 'utf8'), FROZEN_OUTPUT)
+      assert.equal(await readFile(join(workspace, OUTPUT_PATH), 'utf8'), 'mutable old workspace must not be reused')
+      assert.ok(result.root.evidence?.inputs.some(ref => ref.digest === previous?.object.digest))
+      assert.equal(fixture.requests.length, 19)
+    } finally { await service.close() }
   })
 })
 

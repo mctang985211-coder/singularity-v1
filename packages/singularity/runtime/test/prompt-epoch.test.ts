@@ -57,8 +57,6 @@ function makeView(): NodeView {
       readSelf: true,
       readPlanningSketch: false,
       requiredFailure: false,
-      canDecompose: false,
-      canSubmit: false,
       denialCodes: ['READ_SELF_FIRST'],
     },
     planningSketchRef: null,

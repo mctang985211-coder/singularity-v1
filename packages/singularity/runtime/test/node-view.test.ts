@@ -38,7 +38,7 @@ const controller = {
   snapshot: () => ({ contextEpoch: initialContextEpoch('session-node-view') }),
   obligations: () => ({
     readSelf: true, readPlanningSketch: true, requiredFailure: false,
-    canDecompose: false, canSubmit: false, denialCodes: ['READ_SELF_FIRST'],
+    denialCodes: ['READ_SELF_FIRST'],
   }),
 } as unknown as RunToolController
 

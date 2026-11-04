@@ -652,7 +652,6 @@ void test('tool dispatch uses the exact host budget check while preserving read 
     const assertSubmissionGate = (expected: string | undefined) => {
       const refusal = controller.checkGuard(execution('singularity_submit'))
       assert.equal(refusal === undefined ? undefined : (JSON.parse(refusal) as { code: string }).code, expected)
-      assert.equal(controller.obligations().canSubmit, expected === undefined)
       assert.deepEqual(controller.obligations().denialCodes, expected === undefined ? [] : [expected])
     }
     assertSubmissionGate('READ_SELF_FIRST')
@@ -750,7 +749,6 @@ void test('S4-B1/B2 registers decompose for empty child bindings and accepts dup
     })
     const noChildTools = register(noChild)
     assert.ok(noChildTools.has('singularity_decompose'), 'prepare schema must stay discoverable without child bindings')
-    assert.equal(noChild.obligations().canDecompose, false)
     const noChildGuard = noChild.checkGuard(execution('singularity_decompose', { action: 'prepare', bindingId: 'b1' }))
     assert.ok(noChildGuard)
     assert.equal((JSON.parse(noChildGuard) as { readonly code: string }).code, 'BINDING_FIXED')
@@ -1035,7 +1033,6 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
     assert.equal(codeOf(controller.checkGuard(execution('bash', {}))), 'CHILD_BATCH_ACTIVE')
     assert.equal(codeOf(controller.checkGuard(execution('singularity_stop'))), 'CHILD_BATCH_ACTIVE')
     assert.equal(codeOf(controller.checkGuard(execution('singularity_read', { kind: 'status' }))), undefined)
-    assert.equal(controller.obligations().canSubmit, false)
     assert.deepEqual(controller.obligations().denialCodes, ['CHILD_BATCH_ACTIVE'])
     await assert.rejects(
       decompose.execute(commitArgs, execution('singularity_decompose')),

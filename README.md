@@ -31,4 +31,4 @@ The JSON config accepts `scenario: "warehouse-network"`, `initialMethod: "empty"
 
 [The 2026-11-01 validation report](docs/validation-20261101.md) distinguishes actual model runs, local fixtures, failures and remaining domain validation.
 
-[Buckyball / CosyVoice3 frontend preparation](docs/buckyball-cosyvoice3-frontend.md) fixes the real project scope, public assets, empty-Method Task specification and long-task budgets. It excludes full-chip simulation, P2E and physical backend work; preparation is distinct from a completed chip campaign.
+[Buckyball MXMM Ball task preparation](docs/buckyball-mxmm-ball.md) defines a bounded executable tiling task, frozen cases and correctness-qualified RSI cost comparison. The model authors its implementation, workflow and non-root checks; real environment preflight is separate from model success.

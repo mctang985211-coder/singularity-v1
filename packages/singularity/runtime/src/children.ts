@@ -23,6 +23,8 @@ interface RunResult {
   readonly outputs: readonly (InputRef & { readonly kind: 'file' | 'tree' })[]
 }
 
+const inputRefs = ({ outputs }: RunResult): InputRef[] => outputs.map(({ id, object, path, access }) => ({ id, object, path, access }))
+
 export interface DirectChildResult extends RunResult {
   readonly task: TaskState
 }
@@ -160,7 +162,7 @@ export async function readChildData(
       taskId: result.task.taskId, parentRunId: result.task.parentRunId ?? '',
       batchId: result.task.batchId ?? '', bindingId: result.task.bindingId ?? '',
       join: result.task.join ?? 'probe', outcome: result.task.closed?.outcome ?? null,
-      reason: result.task.closed?.reason ?? null, outputs: result.outputs,
+      reason: result.task.closed?.reason ?? null, outputs: inputRefs(result),
       ...(result.evidenceRef === undefined ? {} : { evidenceRef: result.evidenceRef }),
       ...(result.executionRecordRef === undefined ? {} : { executionRecordRef: result.executionRecordRef }),
     }))
@@ -174,14 +176,14 @@ export async function readChildData(
       ?? (previous !== undefined && (previous.runId === query.id || previous.evidenceRef?.id === query.id
         || previous.executionRecordRef?.id === query.id) ? previous : undefined)
     const ref = result?.evidenceRef ?? result?.executionRecordRef
-    if (ref === undefined) throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'no direct child or previous attempt result is authorized by this id')
-    const { bytes } = await service.readObject(ref, result?.evidenceRef === undefined ? 'object' : 'evidence')
+    if (result === undefined || ref === undefined) throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'no direct child or previous attempt result is authorized by this id')
+    const { bytes } = await service.readObject(ref, result.evidenceRef === undefined ? 'object' : 'evidence')
     const value = parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-    if (result?.evidenceRef === undefined) return readPage(canonicalize({ result: value }), ref, query.cursor)
+    if (result.evidenceRef === undefined) return readPage(canonicalize({ outputs: inputRefs(result), result: value }), ref, query.cursor)
     const evidence = parseProtocolValue(evidenceSchema, value)
     const receipt = parseProtocolValue(publicReceiptSchema, parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode(
       (await service.readObject(evidence.verification.publicReceipt, 'object')).bytes)))
-    return readPage(canonicalize({ result: { ...evidence, verification: publicVerificationOf(evidence.verification) }, publicReceipt: receipt }), ref, query.cursor)
+    return readPage(canonicalize({ outputs: inputRefs(result), result: { ...evidence, verification: publicVerificationOf(evidence.verification) }, publicReceipt: receipt }), ref, query.cursor)
   }
   if (query.kind === 'resource') {
     const input = [...inputs, ...children.inputs, ...(previous?.outputs ?? [])].find(input => input.id === query.id || input.object.id === query.id)

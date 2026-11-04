@@ -206,15 +206,10 @@ export class RunToolController {
   obligations(): NodeView['obligations'] {
     this.refreshEpoch()
     const code = this.denialCode('singularity_submit', this.agent, undefined)
-    const decomposeCode = this.options.decompose === undefined
-      ? 'BINDING_FIXED'
-      : this.denialCode('singularity_decompose', this.agent, { action: 'prepare' })
     return {
       readSelf: !this.state.readSelf,
       readPlanningSketch: this.state.planningSketchRef === undefined,
       requiredFailure: this.options.requiredFailure?.() === true,
-      canDecompose: decomposeCode === undefined,
-      canSubmit: code === undefined,
       denialCodes: code === undefined ? [] : [code],
     }
   }

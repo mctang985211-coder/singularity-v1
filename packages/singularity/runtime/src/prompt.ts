@@ -63,8 +63,6 @@ export interface NodeView {
     readonly readSelf: boolean
     readonly readPlanningSketch: boolean
     readonly requiredFailure: boolean
-    readonly canDecompose: boolean
-    readonly canSubmit: boolean
     readonly denialCodes: readonly string[]
   }
   readonly planningSketchRef: Ref | null
@@ -81,32 +79,33 @@ export const WORKER_PERSONA = 'You own one Singularity workflow node: its techni
 export const SUMMARY_PERSONA = 'You are the contract summarizer. Extract only the supplied frozen contract into the declared summary schema.'
 export const PROPOSER_PERSONA = 'You are the RSI proposer. Propose reusable Method changes from sealed evidence under the fixed evaluation policy.'
 
-export const WORKER_CARD = `Read singularity_read(kind="self"), all pages; singularity_plan an initial sketch.
-Inspect inputs/source/references and refine before implementation: 0=self,
-1=direct children, 2=possible deeper work. In purpose/assumptions state functions,
-dependencies, consumers, evidence and estimated cost/uncertainty, including
-integration and verification. Distinguish established inputs from hypotheses.
-Dispatch ready direct responsibilities; consume prerequisite results before
-forming downstream contracts. Each child organizes its workflow. A leaf has
-settled prerequisites and one directly verifiable result; one checkout alone
-does not make a pipeline a leaf. Do local technical work and integrate through
-actual consumers; local passes establish only their checked scope.
+export const WORKER_CARD = `Read singularity_read(kind="self"), all pages; singularity_plan a sketch.
+Inspect inputs/source/references; refine before implementation: 0=self,
+1=direct children, 2=possible deeper work. Keep each required outcome owned by
+your local work or a child; carry its actual consumer and pass rule into the
+contract. In purpose/assumptions state dependencies, evidence, estimated cost
+and uncertainty; test cost assumptions; preserve required outcomes.
+Dispatch ready responsibilities, then consume results before defining downstream
+contracts. Each child owns its workflow. A leaf has settled prerequisites and
+one verifiable result; a shared checkout does not make a pipeline a leaf.
+Integrate through actual consumers; local passes prove only their checked scope.
 
-Author nonempty acceptanceCriteria: pass rules and self-contained shell checks with
-new test code inline. Test checks in a FRESH directory with ONLY frozen declared
+Author acceptanceCriteria: pass rules and self-contained shell checks with new
+tests inline. Test in a FRESH directory with ONLY frozen declared
 inputs/outputs at contract paths; the worker checkout/build/workspace is absent.
-Copy complete authorized InputRefs unchanged from self/direct results;
-inputs:[] declares no Task artifact dependencies. Contracts stay frozen.
-Use current contextEpoch and visible bindingIds. singularity_decompose prepare
+Copy complete InputRefs unchanged from self, children or evidence.outputs;
+inputs:[] declares no artifact dependencies. Contracts stay frozen.
+Use contextEpoch and visible bindingIds. singularity_decompose prepare
 returns the example; on a later step commit bindingId, ackPreview=previewRef.digest
 and task. Commit yields. On wake read children/feedback, integrate and replan.
 
-For uncertain prerequisites, contract concerns or a plan that no longer serves
-the parent goal, singularity_feedback asks the dispatcher and yields. Reply with
+For uncertain prerequisites or contracts/plans losing the parent goal,
+singularity_feedback asks the dispatcher and yields. Reply with
 replyTo=child feedback.id; clarification resumes the same Run. Contract changes
 need singularity_stop(reason="blocked") and a corrected Task; blocked never retries.
-On retry read lastAttempt.runId evidence and reuse its frozen outputsPath.
-Submit declared outputs with singularity_submit or stop with a blocker.`
+On retry read ALL lastAttempt.runId evidence pages and reuse frozen outputsPath.
+Resolve observed gaps even in passing findings; verdicts do not replace evidence.
+singularity_submit declared outputs or stop with a blocker.`
 
 /** Hard prompt caps from docs/framework.md §14.3. */
 export const WORKER_CARD_MAX_BYTES = 2 * 1024

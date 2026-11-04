@@ -357,3 +357,20 @@ root 合同要求五个推理阶段、架构/内存/精度/数据流、compiler/
 round7 冻结 PPA 报告使用 Yosys/OpenSTA，没有实际 `bbdev dc` 调用；root 读到过商业 EDA 指南和 DC/PT 信息，不能据此断言商业 EDA 不可用或只会增加等待。repo 的 `bbdev yosys --run` 遇到 `arch/build.sc` 缺少 tapeout module 的真实环境缺口，reviewer 使用了替代 flow。该 SRAM/PPA 问题没有阻止本轮成功运行 ISA/BEMU 组件测试，不能解释 recipe consumer 未写和 bank capacity 违规。
 
 进一步责任审计见 [round7 workflow 职责审计](round7-workflow-responsibility-audit-20261104.md)。主要断点是 root 看见接口要求后自行缩范围，直属合同用 JSON/数学参考代替目标执行；Run2 没有读取 Run1 详细验收，reviewer 又在明确写出“无 consumer、指令流不可执行”时判 implementation pass，Run3 因而主要补 PPA。三个提交的 recipe 与 generator hash 完全相同。芯片 child 还将 `PLAN_FIRST` 时的暂态 `canDecompose=false` 误解为永久禁止分解；上一 Run 冻结输出虽被宿主授权向下传递，模型界面却未像直属结果一样暴露完整 InputRef。不能因出现多层树宣称 task workflow 问题已解决，也不能仅以任务大作为根因。RSI precheck 拒绝的是 proposer 自己提交的 dangling tool 引用；尚不能称为已经证实的框架绑定实现缺陷。
+
+
+### round7 根因修复与 Ball 测试集替换（2026-11-04，amendment 019）
+
+修改前备份 `6090aa8`；归档 round7 保持停止，本次没有重开付费模型 campaign。根因以 [职责审计](round7-workflow-responsibility-audit-20261104.md) 更正旧结论：root 在可见完整要求时主动将目标 consumer 缩成 JSON/数学参考，child 合同没有继承实际实现职责，retry 漏读独立 findings，Run2 reviewer 又在明确记录无 consumer 时判 pass。任务过大增加成本，但不能替代这条责任链分析；出现孙节点也不能证明 workflow 使用正确。原生 feedback 本来可用于合同异议，不另建父子通信机制。
+
+通用修改删除把暂态前置条件误当永久权限的 canDecompose/canSubmit 重复投影，实际 guards 保持。children/evidence 统一返回可直接用于 child 合同的完整 InputRef，并排除只用于内部挂载的 kind 字段；previous attempt 复用相同入口。worker/card 与按需参考强调每个 required outcome 的本地或 child 责任、真实 consumer、完整 retry findings，以及 passing verdict 中仍存在的缺口。不新增 read 门禁、语义判定器、状态、消息副本、固定任务树或逐任务时限。framework/spec-lock/AGENTS 同步为 amendment 019。
+
+新的 [Ball 领域任务](buckyball-mxmm-ball.md) 替换旧 frontend 入口、整模型 guide/review、PPA scorer 与 public-seed 复用分支；旧执行产物仍作审计证据。选择现有 MXMM Ball 的可执行容量感知分块：长 K、A/B 超 bank、C 超 bank、不同有限 scales、有符号/零 codes、输出 guards 和连续调用。要求真实 callable consumer → ISA → RISC-V ELF → focused BEMU；非 root 合同/检查与实现由模型自己编写。项目既有 skills 仍只给 root 参考文档路径。RSI 比较两边完整功能通过后的子树 reported tokens（含 child/retry），不再为固定硬件的软件分块强求芯片 PPA；proposer 仍须先注册再绑定 Method tool，dangling patch 不放行。
+
+真实无模型预检发现并修复一个 bbdev 缺陷：CLI 的 core-index 被后端 core_index 拼写静默丢弃，实际运行的是默认 tile runner。领域补丁只统一 API/event 两处键名；没有 runtime 参数补救或兼容别名。初次四项 tile runner PASS 不算单 core 证据。操作者又把局部 core_id=1 误当全局 index；经 generated derived.json 核对后纠正为 attention global index=2，终止了该独立预检中选错 controller 的进程，保留失败记录，未用超时替代根因修复。
+
+修正后实际命令均为 `--bin bebop-bemu -- ... --core-index 2`，capacity/window/window-chain/window-rows 四项全部 PASS，system+core-index 的非法组合也返回真实失败。独立 checkout/config 与 fresh C/ELF build 成功。准备副本固定为 `07a85ea2898e59a80d0dfbb30520d8ed5c39390a`，bbdev `207c4b73998a1d34279d854d7b3f52d86721e86d`；与成功预检的 API/event、ISA、RTL 和 bank 配置 hash 相同。证据与下一轮 project manifest 位于 `artifacts/buckyball-mxmm-ball-20261104/`，摘要 `preflight-summary.json`；0 模型请求。这只证明领域消费/环境回归可用，不代表模型已写出大矩阵 tiler，也不证明 RTL 等价。
+
+验证：根 `pnpm verify` 447/447 通过（protocol 206、runtime 136、app 92、inventory 13），0 fail/skip，project/build/typecheck/lint 通过；日志 `artifacts/ball-repair-verify-20261104.log`。既有 retry fixture 已升级为 root fail → evidence 完整 InputRef → 新 child 准入/真实读取 → parent 集成，确认旧可写 workspace 不被复用；长 findings 分页与 private receipt 不泄露也覆盖。新 campaign fixture 验证空 Method、四项根失败保留具体原因、预算封存、无错误 activation；不能作为模型自主改善证据。最后短 card 措辞同步后另跑定向回归与 project 检查，日志 `ball-repair-final-{targeted,project}-20261104.log`。
+
+相对 `dac8c0e`，整个 apps/packages（含源码、测试、配置和领域补丁）+867/-768，净增 **99 行**；protocol/runtime src 净增 **80 行**；Buckyball 生产文件净减 **41 行**。worker persona/card/exploration **2042/2048 bytes**。旧 frontend 文档已由 Ball 文档替换。仍需下一轮真实模型证明 required 职责没有在分解中丢失、实际 consumer 被实现、完整 findings 被消费及 RSI 获益；独立 LLM review 的语义错误不由新判定器兜底。本次交付代码、测试集、准备副本与可复查证据，不声称这些行为已被修复保证。

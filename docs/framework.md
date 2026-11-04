@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–018 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–019 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -1218,8 +1218,6 @@ interface NodeView {
     readonly readSelf: boolean
     readonly readPlanningSketch: boolean
     readonly requiredFailure: boolean
-    readonly canDecompose: boolean
-    readonly canSubmit: boolean
     readonly denialCodes: readonly string[]
   }
   readonly planningSketchRef: ObjectRef | null
@@ -1230,7 +1228,7 @@ interface NodeView {
 }
 ~~~
 
-obligations 与 dispatch guard 使用相同规则，不在 prompt renderer 再写一套 canSubmit。canSubmit 只承诺结构/状态允许尝试提交，不预测文件是否存在或 verifier 是否通过。模型看到的预算统一是 0–100 的剩余百分比；精确 token、step、deadline、Task 数和字节只在 host guard、日志和评测中保存。
+obligations 复用 dispatch guard，denialCodes 表示当前提交前置条件，不是永久分解权限。完成 self/plan 后按当前 context 和 bindings 继续；不重复投影 canDecompose/canSubmit 布尔值，也不预测 verifier 结果。模型看到的预算统一是 0–100 的剩余百分比；精确 token、step、deadline、Task 数和字节只在 host guard、日志和评测中保存。
 
 预算视图与 start/batch wake 使用同一当前投影：tokens 以冻结 Task 总额度为分母，扣除该子树全部已结算尝试及当前 Run usage，并受当前 reservation 限制；wall-clock 使用该 Task 首次 run/opened 的时间原点与固定 deadline，retry 不重置。steps 以本 Run 额度为分母；depth 为当前剩余深度相对 root 最大深度，零深度为 0；taskSlots 扣除已创建的完整本地子树。无需新增预算账本或事实。
 
@@ -1265,39 +1263,40 @@ children/<taskId>/<outputId>/...
 | RSI proposer | 完整 Method、sealed source trace 的可分页索引与公开轨迹、能力资产 | 控制运行中的 Task、评测私有数据、改平台或主动跑实验 |
 | verifier | 合同、固定输入、声明产物、固定规则 | executor 的自述和推理作为验收依据 |
 
-`lastAttempt` 只引用本 Task 最近一个 closed Run。retry 以该 runId 调用现有 `singularity_read(kind='evidence')` 读取公开结果与逐项验收意见；有冻结提交时，host 复用 child 产物加载/挂载路径，将其获准输出挂载在 `attempts/<encodeURIComponent(runId)>/<outputId>`，NodeView 的 `lastAttempt.outputsPath` 给出目录。该命名空间由 runtime 使用，不作为当前声明输出；worker 将需复用的内容明确复制/整合进本次输出。旧 workspace/transcript 和 private receipt 均不公开；这些 CAS refs 可作为本次直属 child 的显式 inputs 和 verifier inputs。没有冻结提交就不提供旧文件。
+`lastAttempt` 只引用本 Task 最近一个 closed Run。retry 以该 runId 调用现有 `singularity_read(kind='evidence')` 读取公开结果与逐项验收意见；有冻结提交时，host 复用 child 产物加载/挂载路径，将其获准输出挂载在 `attempts/<encodeURIComponent(runId)>/<outputId>`，NodeView 的 `lastAttempt.outputsPath` 给出目录。该命名空间由 runtime 使用，不作为当前声明输出；worker 将需复用的内容明确复制/整合进本次输出。旧 workspace/transcript 和 private receipt 均不公开；evidence 读取的 outputs 列表提供完整 id/object/path/access，可原样作为本次直属 child 的显式 inputs；相同 CAS refs 也进入 verifier inputs。没有冻结提交就不提供旧文件。
 
 ## 13. System prompt：固定短 card，领域内容外置
 
 profile 使用中性身份；worker、summary、proposer、reviewer 在原生 scoped persona section 设置各自角色，composition 使用同一 worker 身份。worker persona 与 card、探索追加合计不超过 2 KiB。下列 worker card 为 V1 规范的完整平台正文。它提供当前目标、可执行动作和下一步；schema、guard 和结算负责协议约束。模板 guidance 和 skill 与该 card 冲突时，平台义务优先。
 
 ~~~text
-Read singularity_read(kind="self"), all pages; singularity_plan an initial sketch.
-Inspect inputs/source/references and refine before implementation: 0=self,
-1=direct children, 2=possible deeper work. In purpose/assumptions state functions,
-dependencies, consumers, evidence and estimated cost/uncertainty, including
-integration and verification. Distinguish established inputs from hypotheses.
-Dispatch ready direct responsibilities; consume prerequisite results before
-forming downstream contracts. Each child organizes its workflow. A leaf has
-settled prerequisites and one directly verifiable result; one checkout alone
-does not make a pipeline a leaf. Do local technical work and integrate through
-actual consumers; local passes establish only their checked scope.
+Read singularity_read(kind="self"), all pages; singularity_plan a sketch.
+Inspect inputs/source/references; refine before implementation: 0=self,
+1=direct children, 2=possible deeper work. Keep each required outcome owned by
+your local work or a child; carry its actual consumer and pass rule into the
+contract. In purpose/assumptions state dependencies, evidence, estimated cost
+and uncertainty; test cost assumptions; preserve required outcomes.
+Dispatch ready responsibilities, then consume results before defining downstream
+contracts. Each child owns its workflow. A leaf has settled prerequisites and
+one verifiable result; a shared checkout does not make a pipeline a leaf.
+Integrate through actual consumers; local passes prove only their checked scope.
 
-Author nonempty acceptanceCriteria: pass rules and self-contained shell checks with
-new test code inline. Test checks in a FRESH directory with ONLY frozen declared
+Author acceptanceCriteria: pass rules and self-contained shell checks with new
+tests inline. Test in a FRESH directory with ONLY frozen declared
 inputs/outputs at contract paths; the worker checkout/build/workspace is absent.
-Copy complete authorized InputRefs unchanged from self/direct results;
-inputs:[] declares no Task artifact dependencies. Contracts stay frozen.
-Use current contextEpoch and visible bindingIds. singularity_decompose prepare
+Copy complete InputRefs unchanged from self, children or evidence.outputs;
+inputs:[] declares no artifact dependencies. Contracts stay frozen.
+Use contextEpoch and visible bindingIds. singularity_decompose prepare
 returns the example; on a later step commit bindingId, ackPreview=previewRef.digest
 and task. Commit yields. On wake read children/feedback, integrate and replan.
 
-For uncertain prerequisites, contract concerns or a plan that no longer serves
-the parent goal, singularity_feedback asks the dispatcher and yields. Reply with
+For uncertain prerequisites or contracts/plans losing the parent goal,
+singularity_feedback asks the dispatcher and yields. Reply with
 replyTo=child feedback.id; clarification resumes the same Run. Contract changes
 need singularity_stop(reason="blocked") and a corrected Task; blocked never retries.
-On retry read lastAttempt.runId evidence and reuse its frozen outputsPath.
-Submit declared outputs with singularity_submit or stop with a blocker.
+On retry read ALL lastAttempt.runId evidence pages and reuse frozen outputsPath.
+Resolve observed gaps even in passing findings; verdicts do not replace evidence.
+singularity_submit declared outputs or stop with a blocker.
 ~~~
 
 探索模式只追加：
@@ -1336,7 +1335,7 @@ singularity_read
   output: { data, objectRef?, nextCursor?, asOf, remainingBudgetPct }
   resource 文本分页只接受 UTF-8；合法 CAS 的二进制输入返回 INVALID_ARGUMENT 与已物化路径，模型使用原生文件工具读取/解包。此调用失败不终止 Run；实际 CAS 读取错误仍保留宿主异常。
   self 返回完整 TaskSpec、acceptance 公开描述、own guidance、输入/输出路径
-  evidence 以 direct child ID/result Ref ID 或 lastAttempt.runId 返回分页 JSON text {result, publicReceipt?}；result 为公开 Evidence/ExecutionRecord，publicReceipt 包含真实 criteria/reason，去除 privateReceipt；连续拼接 data 页后解析，不截断 findings
+  evidence 以 direct child ID/result Ref ID 或 lastAttempt.runId 返回分页 JSON text {outputs, result, publicReceipt?}；result 为公开 Evidence/ExecutionRecord，publicReceipt 包含真实 criteria/reason，去除 privateReceipt；outputs 为可原样复制进 child 合同的完整 InputRef（不含内部 kind 元数据），直属结果和 previous attempt 使用同一形状；连续拼接全部 data 页后解析，不截断 findings
   ancestor 按祖先 contractDigest 返回 ContractSummary；摘要未生成时返回 SUMMARY_PENDING；feedback 返回 direct child 提问和对本 Task 提问的 parent 答复
 
 singularity_plan
@@ -2236,7 +2235,7 @@ C-24 single-case gain with validation regression is not improved
 
 ## 22. 发布冻结与版本治理
 
-本 V1 发布版冻结 C1–C3、A–F、amendment 001–018 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
+本 V1 发布版冻结 C1–C3、A–F、amendment 001–019 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
 
 ### 22.1 冻结内容
 
@@ -2257,7 +2256,7 @@ C-24 single-case gain with validation regression is not improved
 
 ~~~text
 版本：V1 发布规范
-修订：2026-11-04 纳入 amendment 006–018（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 多实例、原生工具参数失败、局部 workflow、parent 自编验收、固定产物出口与依赖规划）
+修订：2026-11-04 纳入 amendment 006–019（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 多实例、原生工具参数失败、局部 workflow、parent 自编验收、固定产物出口与依赖规划）
 权威文件：docs/framework.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威
@@ -2296,7 +2295,7 @@ C-24 single-case gain with validation regression is not improved
 
 实现默认沿 DSH 公开接口或现成库完成。保留自定义层必须提供具体原生调用路径，并比较本项目实际接入后的状态、分支和适配；只有明确证明原生方案更复杂时才保留。“暂不能证明等价”“库存在不代表可替代”都不能单独充当保留理由。可由操作者保证的条件在启动前固定，runtime 不为环境违约另建探测、恢复或兜底系统。输入不符合合同或权限时返回对应错误，普通执行失败按现有分类结束。改变公开字段、状态或 authority 时提出 amendment；独立正常功能继续推进。
 
-当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014/015/016/017/018 为准）：
+当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014/015/016/017/018/019 为准）：
 
 | Amendment | 状态 | 纳入内容 |
 |---|---|---|
@@ -2326,6 +2325,7 @@ C-24 single-case gain with validation regression is not improved
 | 017 | 2026-11-04 用户批准停止当前轮、最小修复后新开；已纳入 §7.2/§9/§14/§19 | 反馈提问 yield、直属 parent replyTo 答复、同 session 续接与原生消息判重；blocked 明确交回不盲重试；简化 feedback 输入并授权公开 refs。无新 fact/inbox/broker/归档恢复；fresh CAS-only checks 明示给模型，领域准备不预制求解流程。 |
 
 | 018 | 2026-11-04 用户批准停止 round6、提交备份并最小修复后重开 | 明确计划中的功能、依赖、消费者、证据和成本估计；只派发当前就绪的直属职责，消费前批结果后形成后续合同；叶节点以前提和可验证结果界定。计划失去父目标价值时反馈。启动预算标注百分比字段，领域资料区分 elaboration/功能/PPA 证据；无新增 schema、状态、门禁或预制领域 workflow。 |
+| 019 | 2026-11-04 用户授权深入修复；已纳入 | 移除重复许可布尔值，保留实际 guard；evidence/children 统一暴露可直接派发的完整 InputRef，重试读取全部 findings 并保留未满足父目标；不加语义门禁或新状态 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

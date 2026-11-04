@@ -10,27 +10,26 @@ import type { EvaluationTaskRequest } from '@singularity/runtime'
 import { activateRoundCandidate,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
 
 import { bootSpikeProfile,buildSingleRunComposition } from '../src/host-composition.ts'
-import { FRONTEND_REVIEW_POLICY,frontendVerifier,compareFrontendPpa,PPA_WEIGHTS } from './buckyball-acceptance.ts'
-import { buckyballFrontendTaskSpec,BUCKYBALL_FRONTEND_CAMPAIGN } from './buckyball-frontend-task.ts'
+import { BALL_REVIEW_POLICY,ballVerifier,compareBallCost } from './buckyball-acceptance.ts'
+import { buckyballBallTaskSpec,BUCKYBALL_BALL_CAMPAIGN } from './buckyball-ball-task.ts'
 import { nativeAccounting } from './native-accounting.ts'
 import { freezeBuckyballTools } from './buckyball-resources.ts'
 
 const actor = { kind: 'runtime', id: 'buckyball-campaign' } as const
 const bytes = (value: unknown) => new TextEncoder().encode(canonicalize(value))
-/** One trusted public experiment, using existing Task/RSI APIs without chip branches in runtime. */
+/** One trusted public experiment, using existing Task/RSI APIs without domain branches in runtime. */
 export async function runBuckyballCampaign(root: string, prepared: string) {
   const project = JSON.parse(await readFile(join(prepared, 'project.json'), 'utf8')) as {
     source: { destination: string }
-    publicSeed?: { archive: string; description: string }
   }
   const baseline = project.source.destination
-  const startedAt = Date.now(), deadlineAt = startedAt + BUCKYBALL_FRONTEND_CAMPAIGN.maxWallClockMs
+  const startedAt = Date.now(), deadlineAt = startedAt + BUCKYBALL_BALL_CAMPAIGN.maxWallClockMs
   await mkdir(root)
   const cancellation = new AbortController()
   const patch = join(root, 'compaction.patch.yml')
   await copyFile(new URL('./buckyball.patch.yml', import.meta.url), patch)
   const spike = await bootSpikeProfile({ home: join(root, 'dsh'), patchFiles: [patch] })
-  const accounting = nativeAccounting(spike.ctx, { ...BUCKYBALL_FRONTEND_CAMPAIGN, deadlineAt, cancellation, log: join(root, 'requests.jsonl') })
+  const accounting = nativeAccounting(spike.ctx, { ...BUCKYBALL_BALL_CAMPAIGN, deadlineAt, cancellation, log: join(root, 'requests.jsonl') })
   const service = await CommandService.open({ root: join(root, 'domain'), actor, clock: Date.now })
   const timer = setTimeout(() => { cancellation.abort('campaign-deadline') }, Math.max(0, deadlineAt - Date.now()))
   const commit = <T extends 'method/registered' | 'method/activated'>(type: T, data: Parameters<typeof service.commit<T>>[0]['data'], id: string) => service.commit({
@@ -42,39 +41,39 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
   const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
-    const provider = await put('buckyball:acceptance', { v: 1, kind: 'independent-native-review-and-reproduction', policy: FRONTEND_REVIEW_POLICY,
+    const provider = await put('buckyball:acceptance', { v: 1, kind: 'independent-native-review-and-reproduction', policy: BALL_REVIEW_POLICY,
       limitations: 'Public trusted local experiment; independent LLM review and rerun evidence, not formal signoff or hidden-data isolation.',
-      tracePolicy: 'Include terminal ExecutionRecords as failure evidence; exhausted campaigns seal without opening RSI.', weights: PPA_WEIGHTS })
-    const comparatorAsset = await put('buckyball:comparator', { v: 1, metric: 'weighted geometric PPA improvement', weights: PPA_WEIGHTS, minDelta: 0.01, noCaseRegression: true })
+      tracePolicy: 'Include terminal ExecutionRecords as failure evidence; exhausted campaigns seal without opening RSI.' })
+    const comparatorAsset = await put('buckyball:comparator', { v: 1, metric: 'mean reported tokens per verified Task subtree', minDelta: 1000, noCaseRegression: true })
     const baseTools = await Promise.all(['bash', 'job_output', 'job_list', 'job_kill'].map(name => put(`base-tool:${name}`, { v: 1, name })))
     const protocol = await put('buckyball:task-protocol', taskProtocolReference)
-    const guideText = `Autonomous CosyVoice3 frontend experiment. Read project.json and your TaskContract. Discover workload requirements and implementation dependencies; existing cores, Balls and compiler paths are candidates whose applicability needs evidence. Identify actual host/accelerator execution and test the consuming recipe/dataflow.\nEvidence scope: elaboration establishes structural generation; synthesis estimates the selected RTL under its library, constraints, memory and activity models; component checks establish the behaviors exercised. Topology and synthesis alone do not establish model mapping or functional correctness. Early synthesis may test an explicit design hypothesis; final PPA must correspond to the implementation actually used by the workload. The root contract defines completion and comparable PPA.\nCreate your independent buckyball/ checkout with mcp__buckyball__checkout, then use mcp__buckyball__bbdev with its absolute path and CLI argv; it activates project-local nix develop. Use bash for edits and standalone components. The prepared copy includes dependencies and configs; preserve them. Shared baseline ${baseline}, pinned sources and checkpoints are read-only. Write only in your Run workspace; leave other runs, Singularity, profile and verifier unchanged.\nNo full-chip simulation, whole-model BEMU, P2E/FPGA or physical backend. Focused component/IP/subgraph tests, RTL elaboration and logical synthesis are allowed. Routine design choices and fixes within this scope are authorized. Deliver patches, actual inputs/outputs, numerical/interface contracts, tool reports and reproduction commands; exclude weights and build trees. Report failures and incomplete work.`
+    const guideText = `MXMM Ball development experiment. Read project.json and your TaskContract; discover the actual ISA, packing, bank capacities and existing consumers. Deliver a callable tiler and real target execution, not an operator list or independent Python-only calculation. Existing capacity/window/chain tests are references and regressions, not a solution to the supplied large matrices. The model owns technical decisions, intermediate contracts and workflow decomposition.\nCreate a new independent checkout with mcp__buckyball__checkout, then use mcp__buckyball__bbdev with absolute project path and separate CLI argv; it activates Nix. Bash supports edits and standalone tools. The prepared copy includes dependencies/configs; preserve them. Baseline ${baseline} is read-only. Work only inside your Run workspace; leave other runs, Singularity, profile and verifier unchanged.\nUse focused MXMM-core BEMU, not whole-chip execution. No synthesis/PPA, model porting, FPGA or physical backend. Preserve failed commands and report incomplete work; satisfy every root criterion. Deliver patches and reproducible inputs/outputs, excluding build trees.`
     const guide = await put('buckyball:guide', { v: 1, text: guideText })
     const tools = await freezeBuckyballTools(service, baseline)
     const snapshotValue: GlobalResourceSnapshot = { v: 1, skills: [], tools, baseTools, fallbackAcceptance: provider, fallbackJoin: 'probe',
-      documents: [{ id: 'frontend-guide', description: 'Scope overrides, independent checkout, delivery and PPA policy. Read before domain operations.', object: guide },
+      documents: [{ id: 'ball-guide', description: 'Ball scope, independent checkout and executable delivery. Read before domain operations.', object: guide },
         { id: 'task-protocol', description: 'Current Task planning, direct decomposition, schemas and resource usage.', object: protocol },
-        { id: 'acceptance-policy', description: 'Independent review criteria, original-reference checks and synthesis PPA conditions.', object: provider }] }
+        { id: 'acceptance-policy', description: 'Independent target-execution and numerical acceptance policy.', object: provider }] }
     const snapshot = await freezeGlobalResources(service, 'buckyball:global-resources', snapshotValue)
-    const seed = await put('buckyball:seed', { v: 1, name: 'cosyvoice3-frontend-20261101' })
-    const profile = await put('buckyball:profile', { v: 1, options, compaction: { threshold: 0.75, maxTokens: 40000 }, budget: BUCKYBALL_FRONTEND_CAMPAIGN })
+    const seed = await put('buckyball:seed', { v: 1, name: 'mxmm-ball-20261104' })
+    const profile = await put('buckyball:profile', { v: 1, options, compaction: { threshold: 0.75, maxTokens: 40000 }, budget: BUCKYBALL_BALL_CAMPAIGN })
     const method = await service.putObject('buckyball:method-empty', bytes(sealMethodRevision({ v: 1, id: 'buckyball:method-empty', templates: [], skills: [], tools: [] })), 'method')
     await commit('method/registered', { revision: method }, 'buckyball:register-empty')
     await commit('method/activated', { next: method, approval: await put('buckyball:initial-approval', { v: 1, purpose: 'empty-initialization' }) }, 'buckyball:activate-empty')
     const summaries = new ContractSummaryService({ ctx: spike.ctx, writer: service, agentOptions: options })
-    const verify = frontendVerifier(spike.ctx, { root: join(root, 'reviews'), baseline, project: join(prepared, 'project.json'), agentOptions: options })
+    const verify = ballVerifier(spike.ctx, { root: join(root, 'reviews'), baseline, project: join(prepared, 'project.json'), agentOptions: options })
     const runTask = async (contract: TaskContract, slot?: EvaluationTaskRequest) => {
       const runId = `${contract.taskId}:run:1`, sessionId = `${runId}:session`
       const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract, agentOptions: options, base: { v: 1, seed } })
       return executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace: join(root, 'workspaces', Buffer.from(contract.taskId).toString('hex')),
         runId, sessionId, admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt } },
-        composition, agentOptions: options, maxOutputBytes: BUCKYBALL_FRONTEND_CAMPAIGN.maxOutputBytes, verifier: { provider, verify }, actor,
-        maxActive: slot?.maxActive ?? BUCKYBALL_FRONTEND_CAMPAIGN.maxActive, workspaceRoot: join(root, 'runs'), summaries,
+        composition, agentOptions: options, maxOutputBytes: BUCKYBALL_BALL_CAMPAIGN.maxOutputBytes, verifier: { provider, verify }, actor,
+        maxActive: slot?.maxActive ?? BUCKYBALL_BALL_CAMPAIGN.maxActive, workspaceRoot: join(root, 'runs'), summaries,
         signal: slot === undefined ? cancellation.signal : AbortSignal.any([cancellation.signal, slot.signal]),
         checkReportedBudget: value => accounting.available() && (slot?.checkReportedBudget(value) ?? true),
         ...(slot === undefined ? {} : { canOpenRun: slot.canOpenRun }),
         async resolveRun(input) { return { composition: await buildSingleRunComposition(spike.ctx, { store: service, id: input.runId, contract: input.contract, agentOptions: options, base: { v: 1, seed } }),
-          agentOptions: options, maxOutputBytes: BUCKYBALL_FRONTEND_CAMPAIGN.maxOutputBytes, verifier: { provider: input.contract.acceptance, verify } } },
+          agentOptions: options, maxOutputBytes: BUCKYBALL_BALL_CAMPAIGN.maxOutputBytes, verifier: { provider: input.contract.acceptance, verify } } },
       }, service)
     }
     const contractFor = async (taskId: string, spec: TaskSpec, pinned: Ref, purpose: 'work' | 'evaluation', requestRef: Ref) => {
@@ -86,67 +85,61 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
         resources: { baseTools, exploration: snapshot,
           skills: view.skills.map(id => { const asset = revision.skills.find(value => value.id === id); if (asset === undefined) throw new Error(`Missing skill ${id}`); return asset.bundle }),
           mcpServers: view.tools.map(id => { const asset = [...revision.tools, ...tools].find(value => value.id === id); if (asset === undefined) throw new Error(`Missing tool ${id}`); return asset.server.bundle }) },
-        acceptance: provider, environment: { seed, profile }, limits: { ...BUCKYBALL_FRONTEND_CAMPAIGN.task, deadlineAt } })
+        acceptance: provider, environment: { seed, profile }, limits: { ...BUCKYBALL_BALL_CAMPAIGN.task, deadlineAt } })
     }
-    const publicSeed = project.publicSeed === undefined ? undefined : await service.putObject('buckyball:public-seed', await readFile(resolve(prepared, project.publicSeed.archive)))
     const specFor = (input: Ref) => {
-      const spec = buckyballFrontendTaskSpec(input)
+      const spec = buckyballBallTaskSpec(input)
       spec.inputs.push({ id: 'experiment-guide', object: guide, path: 'experiment-guide.json', access: 'copy-to-work' })
       spec.goal.constraints.push(`Project reference documents: ${baseline}/.agents/skills/. Read experiment-guide.json before domain work. These are technical references, not mounted skills; their role assignments, approval rules and workflow gates do not override this Task contract.`)
-      if (publicSeed !== undefined) {
-        spec.inputs.push({ id: 'public-seed', object: publicSeed, path: 'public-seed.tar.gz', access: 'copy-to-work' })
-        spec.goal.constraints.push('Inspect public-seed.tar.gz and its provenance.json before implementation. Reuse applicable references/components and correct recorded failures, then plan the remaining implementation and integration. Pass the authorized seed input to children that need these artifacts. Complete the full frontend goal; prior verdicts do not establish this Run\'s acceptance. Baseline and candidate receive the same frozen seed.')
-      }
       return spec
     }
-    const projectRef = await put('buckyball:project', { ...project, status: 'launched', campaign: { startedAt, deadlineAt }, ppaWeights: PPA_WEIGHTS })
+    const projectRef = await put('buckyball:project', { ...project, status: 'launched', campaign: { startedAt, deadlineAt }, case: { id: 'source', shapes: [[32, 48, 1056], [64, 80, 2048]] } })
     const sourceSpec = specFor(projectRef)
-    // Frozen workload cases specify inputs/goals, never a workflow tree or implementation.
     const definitions = [
-      { id: 'llm-prefill', detail: 'Representative batch=1 LLM prompt prefill of 16 and 64 tokens; preserve Qwen2 grouped-query attention/cache semantics and report representative static PPA conditions.' },
-      { id: 'flow-streaming', detail: 'Representative Flow/DiT streaming chunk boundaries of 16 and 32 frames; preserve conditioning/layout/numerical interfaces and include the rest of the pipeline in the frontend mapping.' },
-      { id: 'hift-boundary', detail: 'Independent validation: HiFT waveform chunk boundary and overlap handling for two small mel chunks; preserve original host reference and the complete frontend mapping.' },
+      { id: 'long-k', shapes: [[1, 32, 4096], [16, 16, 32]], detail: 'Long-K chain and minimal block, different finite E8M0 scales and signed/zero E4M3 codes; repeated calls.' },
+      { id: 'bank-crossing', shapes: [[32, 48, 1056], [16, 32, 960]], detail: 'Operands larger than a bank, K tails aligned to 32; independent decoded-input reference and output guards.' },
+      { id: 'output-tiling', shapes: [[64, 80, 2048], [48, 64, 96]], detail: 'Validation: output exceeds one bank, multi-M/N tiles and K continuation; nonuniform inputs and back-to-back products.' },
     ]
     const cases: { spec: TaskSpec; ref: Ref }[] = []
     for (const definition of definitions) {
-      const input = await put(`buckyball:case-input:${definition.id}`, { ...project, status: 'evaluation-case', case: definition, ppaWeights: PPA_WEIGHTS })
+      const input = await put(`buckyball:case-input:${definition.id}`, { ...project, status: 'evaluation-case', case: definition })
       const spec = specFor(input)
       spec.goal.constraints.push(definition.detail)
       const contract = await contractFor(`buckyball:definition:${definition.id}`, spec, method, 'evaluation', profile)
       cases.push({ spec, ref: await freezeEvaluationCase(service, `buckyball:case:${definition.id}`, evaluationCaseFromContract(contract)) })
     }
-    await writeFile(join(root, 'launch.json'), JSON.stringify({ v: 1, startedAt, deadlineAt, pid: process.pid, sourceSpec, cases, budget: BUCKYBALL_FRONTEND_CAMPAIGN,
-      ppaWeights: PPA_WEIGHTS, prepared, emptyMethod: method, independentReview: provider, compaction: 'native enabled; all llm/stream calls accounted' }, null, 2))
+    await writeFile(join(root, 'launch.json'), JSON.stringify({ v: 1, startedAt, deadlineAt, pid: process.pid, sourceSpec, cases, budget: BUCKYBALL_BALL_CAMPAIGN,
+      prepared, emptyMethod: method, independentReview: provider, compaction: 'native enabled; all llm/stream calls accounted' }, null, 2))
     console.log(JSON.stringify({ event: 'campaign-started', pid: process.pid, root, startedAt, deadlineAt }))
     for (let index = 0; index < 3 && accounting.available(); index += 1) {
       const roundId = `buckyball:round:${String(index + 1)}`, taskId = `${roundId}:source`
       const active = (await service.methodRoundState()).productionHead
       if (active === undefined) throw new Error('Missing active Method')
-      const source = await runTask(await contractFor(taskId, sourceSpec, active, 'work', await put(`${taskId}:request`, { v: 1, purpose: 'autonomous-chip-frontend' })))
+      const source = await runTask(await contractFor(taskId, sourceSpec, active, 'work', await put(`${taskId}:request`, { v: 1, purpose: 'autonomous-ball-implementation' })))
       const trace = await sealPublicTrace({ ctx: spike.ctx, service, actor, rootTaskId: taskId, summaries, acceptsExecutionRecord: () => true })
       if (!accounting.available()) break
       const remaining = Math.max(1, deadlineAt - Date.now())
       const plan = { v: 1 as const, cases: cases.slice(0, 2).map(value => value.ref), validationCases: [cases[2].ref],
-        metric: { name: 'frontend-ppa', weights: PPA_WEIGHTS }, thresholds: { minDelta: 0.01, maxRegression: 0 }, trialsPerCase: 1,
-        proposerBudget: { ...BUCKYBALL_FRONTEND_CAMPAIGN.proposerBudget, maxWallClockMs: remaining }, budget: { ...BUCKYBALL_FRONTEND_CAMPAIGN.evaluationBudget, maxWallClockMs: remaining },
+        metric: { name: 'ball-reported-tokens' }, thresholds: { minDelta: 1000, maxRegression: 0 }, trialsPerCase: 1,
+        proposerBudget: { ...BUCKYBALL_BALL_CAMPAIGN.proposerBudget, maxWallClockMs: remaining }, budget: { ...BUCKYBALL_BALL_CAMPAIGN.evaluationBudget, maxWallClockMs: remaining },
         validation: 'required-by-domain' as const, claim: 'domain-evaluation' as const, comparator: comparatorAsset, sourceSeed: seed, expectedPreviousActiveMethod: active }
       await openRsiRound({ service, actor, roundId, sourceTrace: trace.trace, baseMethod: active, plan, proposerSessionId: `${roundId}:proposer` })
       const workspace = join(root, 'proposers', String(index + 1)); await mkdir(workspace, { recursive: true })
       const proposal = await executeRsiProposer({ ctx: spike.ctx, service, actor, roundId, workspace, agentOptions: options,
-        publicEvaluation: { goal: 'Improve reusable chip frontend workflow, task templates, skills and domain tools from this sealed real execution; keep the implementation artifacts in Task output.',
-          metric: 'Mean geometric PPA improvement (power .30, delay .40, area .30), after every functional criterion passes and independent reports use identical conditions.',
-          thresholds: ['At least 1% mean improvement; no per-case regression. Missing PPA or incomplete hardware is not comparable.'], validationPolicy: 'required-by-domain',
+        publicEvaluation: { goal: 'Improve reusable Ball workflow and Method from sealed execution; implementation belongs in Task output. Public tools are not Method registrations: put-tool before binding its ID in a template.',
+          metric: 'Mean host-accounted reported tokens per complete verified Task subtree, lower is better. Every functional criterion must pass in both arms.',
+          thresholds: ['Save at least 1000 mean reported tokens; no per-case cost regression. Failed functionality or missing usage is not comparable.'], validationPolicy: 'required-by-domain',
           publicCases: definitions.slice(0, 2).map(value => ({ id: value.id, description: value.detail })) } })
       const precheck = proposal.proposalRef === undefined ? undefined : await precheckMethodPatch({ service, actor, roundId })
       const evaluation = precheck?.accepted === true ? await evaluateRsiCandidate({ service, actor, roundId,
-        comparator: { asset: comparatorAsset, describeMetric: () => ({ name: 'frontend-ppa', direction: 'higher-is-better', unit: 'fraction', costObjective: false }), compare: compareFrontendPpa },
+        comparator: { asset: comparatorAsset, describeMetric: () => ({ name: 'ball-reported-tokens', direction: 'lower-is-better', unit: 'reported-tokens', costObjective: true }), compare: compareBallCost },
         async runTask(slot) { const value = cases.find(value => value.ref.id === slot.slot.caseRef.id); if (value === undefined) throw new Error('Missing frozen case'); await runTask(await contractFor(slot.slot.taskId, value.spec, slot.slot.method, 'evaluation', slot.requestRef), slot) },
       }) : undefined
       let activation
       if (evaluation?.comparison.outcome === 'improved') {
         const next = (await service.methodRoundState()).rounds.get(roundId)?.candidateMethod
         if (next === undefined) throw new Error('Missing improved candidate')
-        const approval = await put(`${roundId}:approval`, { v: 1, authorization: 'user-authorized-independent-ppa-winner', expectedPrevious: active, next })
+        const approval = await put(`${roundId}:approval`, { v: 1, authorization: 'user-authorized-verified-ball-cost-winner', expectedPrevious: active, next })
         activation = await activateRoundCandidate({ service, actor, roundId, approval })
       }
       const outcome = { roundId, source: source.root.classification, trace: trace.trace, proposal: proposal.recordRef, precheck,

@@ -164,7 +164,7 @@ void test('S4-B1 prepare delivers a persisted preview and status reconstructs it
     )
     assert.ok(contexts[0]?.includes(S4B1_BINDING))
     assert.ok(contexts[0]?.includes('"join":"probe"'))
-    assert.ok(contexts[0]?.includes('"canDecompose":false'))
+    assert.ok(contexts[0]?.includes('"denialCodes":["READ_SELF_FIRST"]'))
     assert.ok(prompts[0])
     assert.equal(active.composition.platformPrompt, computeDigest('object', { v: 1, text: prompts[0] ?? '' }))
     assert.ok(Buffer.byteLength(JSON.stringify(firstRequest.tools ?? [])) <= 12 * 1024)

@@ -5,7 +5,7 @@ import { canonicalize,seal } from '@singularity/protocol'
 import type { CommandService } from '@singularity/runtime'
 
 import { bbdevDescription,bbdevInstructions,bbdevParameters,checkoutDescription,checkoutParameters } from './buckyball-mcp.ts'
-import { BUCKYBALL_FRONTEND_CAMPAIGN } from './buckyball-frontend-task.ts'
+import { BUCKYBALL_BALL_CAMPAIGN } from './buckyball-ball-task.ts'
 
 /** Freeze the operator-prepared domain tool into the ordinary exploration catalog. */
 export async function freezeBuckyballTools(service: CommandService, baseline: string): Promise<ToolAsset[]> {
@@ -21,9 +21,9 @@ export async function freezeBuckyballTools(service: CommandService, baseline: st
   const manifest = await put('buckyball:mcp:manifest', { serverName: 'buckyball', transport: 'stdio', instructions: bbdevInstructions,
     entrypoint: 'server.ts', limits: { maxBundleBytes: 1024 * 1024 } })
   const config = await put('buckyball:mcp:config', { transport: 'stdio', command: process.execPath, args: ['server.ts'], env: { BUCKYBALL_BASELINE: baseline },
-    toolCallTimeoutMs: BUCKYBALL_FRONTEND_CAMPAIGN.maxWallClockMs, maxInstructionBytes: 8192 })
+    toolCallTimeoutMs: BUCKYBALL_BALL_CAMPAIGN.maxWallClockMs, maxInstructionBytes: 8192 })
   return [{ id: 'buckyball-bbdev', name: 'buckyball', description: 'Existing bbdev CLI with project-local Nix activation.', kind: 'mcp-server',
-    server: { bundle, sourceFiles: bundle, manifest, config, transport: 'stdio', capabilities: ['public-chip-frontend'],
+    server: { bundle, sourceFiles: bundle, manifest, config, transport: 'stdio', capabilities: ['public-ball-development'],
       exposedTools: [{ name: 'checkout', description: checkoutDescription, parameters: checkoutParameters },
         { name: 'bbdev', description: bbdevDescription, parameters: bbdevParameters }] } }]
 }

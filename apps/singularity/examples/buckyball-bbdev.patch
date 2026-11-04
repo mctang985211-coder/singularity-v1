@@ -100,3 +100,21 @@ diff --git a/api/steps/bebop/verilator/02_verilog_api.step.py b/api/steps/bebop/
          )
      try:
          chip = require_chip(body)
+diff --git a/api/steps/bebop/bemu/02_sim_api.step.py b/api/steps/bebop/bemu/02_sim_api.step.py
+index 9f5a1fa..38882b2 100644
+--- a/api/steps/bebop/bemu/02_sim_api.step.py
++++ b/api/steps/bebop/bemu/02_sim_api.step.py
+@@ -31,3 +31,3 @@ async def handler(request: ApiRequest, ctx: FlowContext) -> ApiResponse:
+         )
+-    if body.get("system") and body.get("core_index") is not None:
++    if body.get("system") and body.get("core-index") is not None:
+         return ApiResponse(
+diff --git a/api/steps/bebop/bemu/02_sim_event.step.py b/api/steps/bebop/bemu/02_sim_event.step.py
+index b1881e5..72a946a 100644
+--- a/api/steps/bebop/bemu/02_sim_event.step.py
++++ b/api/steps/bebop/bemu/02_sim_event.step.py
+@@ -201,3 +201,3 @@ async def handler(input_data: dict, ctx: FlowContext) -> None:
+     os.makedirs(run_log, exist_ok=True)
+-    core_index = input_data.get("core_index")
++    core_index = input_data.get("core-index")
+     system = bool(input_data.get("system", False))
