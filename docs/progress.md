@@ -374,3 +374,12 @@ round7 冻结 PPA 报告使用 Yosys/OpenSTA，没有实际 `bbdev dc` 调用；
 验证：根 `pnpm verify` 447/447 通过（protocol 206、runtime 136、app 92、inventory 13），0 fail/skip，project/build/typecheck/lint 通过；日志 `artifacts/ball-repair-verify-20261104.log`。既有 retry fixture 已升级为 root fail → evidence 完整 InputRef → 新 child 准入/真实读取 → parent 集成，确认旧可写 workspace 不被复用；长 findings 分页与 private receipt 不泄露也覆盖。新 campaign fixture 验证空 Method、四项根失败保留具体原因、预算封存、无错误 activation；不能作为模型自主改善证据。最后短 card 措辞同步后另跑定向回归与 project 检查，日志 `ball-repair-final-{targeted,project}-20261104.log`。
 
 相对 `dac8c0e`，整个 apps/packages（含源码、测试、配置和领域补丁）+867/-768，净增 **99 行**；protocol/runtime src 净增 **80 行**；Buckyball 生产文件净减 **41 行**。worker persona/card/exploration **2042/2048 bytes**。旧 frontend 文档已由 Ball 文档替换。仍需下一轮真实模型证明 required 职责没有在分解中丢失、实际 consumer 被实现、完整 findings 被消费及 RSI 获益；独立 LLM review 的语义错误不由新判定器兜底。本次交付代码、测试集、准备副本与可复查证据，不声称这些行为已被修复保证。
+
+
+### round8 MXMM Ball 真实测试启动（2026-11-04）
+
+用户明确要求“启动吧”后，以新根 `artifacts/round8-mxmm-ball-20261104-224941` 启动 MXMM Ball campaign；未续跑归档。冻结生产源码提交 `a55421face45df4708f9f2e4b4883058cf210ec5`，81 个启动源码 hash 一致；该提交独立 CI 已通过。Buckyball 准备副本与真实单 core 预检身份沿前节固定，初始 Method 为空，项目既有 skills 仍只在 root 暴露参考文档路径。
+
+实际开始 `2026-11-04T22:49:42.325000+08:00`，绝对截止 `2026-11-05T10:49:42.325000+08:00`；整轮共享 12 小时、1,000,000,000 reported tokens、4,000 requests，并发 4，不扩大配额。provider `singularity-local`，模型 `deepseek-flash`、reasoning=max、输出上限 40k，原生 context/compaction 配置保持既有冻结版本。operator PID 1206481，只读 monitor PID 1206482，间隔 1,800 秒；记录直属合同、公开 closure/findings、反馈与 RSI 事件，不增加调度、自动重启或恢复路径。
+
+启动核实时间 `2026-11-04T22:51:47.699694+08:00`：已发起 12 请求、结算 12，input 260736 / output 8908 tokens，unknown=0；operator 与 monitor 存活，无启动 failure 或最终结果。证据为该根的 `operator-startup.json`、`execution/launch.json`、`execution/requests.jsonl` 和 `monitor-*.json`。这只证明真实测试已开始，尚不能判定 consumer、职责保真、重试证据消费或 RSI 改善有效。
