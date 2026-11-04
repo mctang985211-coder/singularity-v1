@@ -343,3 +343,5 @@ Buckyball guide 删除重复平台流程，领域就绪仅固定环境、资源�
 通用修订仅更新既有 worker card、探索说明和按需工具参考：先提交初始草图，再读资源细化功能、前提、消费者、证据和预计成本/不确定性；当前仅派发就绪的直属职责，消费前批结果后形成下批合同。叶节点以前提成立和直接可验证结果界定；共享 checkout 不构成依据。前提/合同/计划失去父目标价值时主动 feedback。启动预算明确标注字段和百分号。没有新增 schema、状态、调度器、语义门禁、逐任务时限或固定领域树；沿用现有父子对话机制。
 
 Buckyball 指引删减重复交付/PPA 压力，既有 core/Ball/compiler 作为需要证据的候选；资料区分 elaboration、功能检查和带条件的综合估计。早期综合可验证明确设计假设，最终 PPA 必须对应 workload 实际消费的实现；不规定统一设计阶段顺序。项目旧 skills 继续只在 root 给出参考文档路径，其角色、审批和流程门槛不覆盖 Task 合同；非 root 合同和验收仍由模型编写。root criteria 未变。
+
+新真实轮：`artifacts/round7-workflow-planning-20261104-122838` 于 2026-11-04 12:28:38 +0800 启动，绝对截止 2026-11-05 00:28:38 +0800。冻结提交 `5673c534e3d0868b0e95afb49780d822380e9d6a`，启动记录的 79 个源文件 hash 与当前文件一致；12 小时 / 1,000,000,000 reported tokens / 4,000 requests，maxActive=4，deepseek-flash/reasoning=max，使用全新执行根，不续跑归档 root。operator PID 1341135、只读 monitor PID 1341136；启动约 8 个请求已结算，unknown=0，无启动失败。实时结果只在该根的 SQLite、requests.jsonl 和模型 session 中判断，不把启动或脚本 fixture 当作成功证据。
