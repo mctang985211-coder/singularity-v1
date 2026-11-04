@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–017 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–018 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -501,6 +501,8 @@ MCP servers → { name, exposed tools, manifest digest, bundle digest }
 每个 worker 在第一次领域工作、调用领域工具或准入 child 之前，先提交一份轻量 PlanningSketch。草图的 `level=0` 是当前 Task，`level=1` 是当前 Task 的 direct children，`level=2` 是这些 children 可能组织的 grandchildren；因此视野是“当前层加未来两层”，最多三层。只有 level 1 能转化为本 Run 的 `singularity_decompose` child；level 2 只能是轻量预期，由对应 child 自己决定是否实现。草图不创建 Task、不改变 Method、不成为 Workflow/Graph authority。
 
 初始草图允许记录待确认的假设。worker 随后阅读相关文档、skill 和源码，在持续实现前细化本级职责、产物、接口与检查边界；发现新阶段或原目标过宽时更新草图并组织直属任务。长链工作的独立阶段通过 child 承接，串行阶段通过后续 batch 衔接；分解服务于职责与接口边界，也服务于并行。只有目标已收敛为一个有界、可直接验证的工作单元时才直接作为叶节点完成。每层仍承担必要的本地分析、实现、检查和直属结果集成。此处是模型工作指引，host 不做自然语言复杂度判定、不强制树深或 child 数量。
+
+在既有 purpose/assumptions 中说明本级职责的功能、先决条件、结果消费者、所需证据、预计耗时/成本与不确定性，并保留集成与复验工作。区分已知输入和待验证假设；实际只派发当前已就绪的直属工作，读取并验证前批结果后才形成依赖它的新合同。叶节点须前提已成立、结果可直接验证；同一 checkout 内的一串命令并不足以证明它是叶节点。计划偏离父目标、前提不明或原合同不成立时主动用 feedback 讨论，需改合同则 blocked 交回。时间估计由模型依据资源和实际观察更新，不新增逐 Task 时长门禁、计划执行判定器或 schema 字段。
 
 ~~~ts
 interface PlanningSketch {
@@ -1270,30 +1272,30 @@ children/<taskId>/<outputId>/...
 profile 使用中性身份；worker、summary、proposer、reviewer 在原生 scoped persona section 设置各自角色，composition 使用同一 worker 身份。worker persona 与 card、探索追加合计不超过 2 KiB。下列 worker card 为 V1 规范的完整平台正文。它提供当前目标、可执行动作和下一步；schema、guard 和结算负责协议约束。模板 guidance 和 skill 与该 card 冲突时，平台义务优先。
 
 ~~~text
-Read singularity_read(kind="self"), all pages; singularity_plan before implementation.
-Inspect inputs, source and references; refine responsibilities, dependencies
-and interfaces before implementation.
-Levels: 0=this Task, 1=direct children, 2=possible deeper work. Create only direct
-children; each discovers its workflow. A bounded leaf may finish here.
-Use later batches for stages consuming earlier results. Integrate and verify
-through the actual consumer; a child's pass does not complete this Task.
+Read singularity_read(kind="self"), all pages; singularity_plan an initial sketch.
+Inspect inputs/source/references and refine before implementation: 0=self,
+1=direct children, 2=possible deeper work. In purpose/assumptions state functions,
+dependencies, consumers, evidence and estimated cost/uncertainty, including
+integration and verification. Distinguish established inputs from hypotheses.
+Dispatch ready direct responsibilities; consume prerequisite results before
+forming downstream contracts. Each child organizes its workflow. A leaf has
+settled prerequisites and one directly verifiable result; one checkout alone
+does not make a pipeline a leaf. Do local technical work and integrate through
+actual consumers; local passes establish only their checked scope.
 
-Define each child's input source, output consumer and interface. Author nonempty
-acceptanceCriteria with concrete pass rules and self-contained shell checks,
-with new test code inline. Checks rerun in a FRESH directory
-with ONLY frozen declared inputs and outputs at contract paths; your
-checkout, build files and workspace are absent. Test that setup before dispatch.
-Contracts stay frozen. Copy complete authorized InputRefs unchanged from self
-or direct results; inputs:[] declares no Task artifact dependencies.
-Use contextEpoch and visible bindingIds. Call singularity_decompose
-(action="prepare", bindingId=...) for the example; on a later step commit with
-bindingId, ackPreview=previewRef.digest and task. Commit yields this turn.
-On wake read children/feedback; integrate, check and replan.
+Author nonempty acceptanceCriteria: pass rules and self-contained shell checks with
+new test code inline. Test checks in a FRESH directory with ONLY frozen declared
+inputs/outputs at contract paths; the worker checkout/build/workspace is absent.
+Copy complete authorized InputRefs unchanged from self/direct results;
+inputs:[] declares no Task artifact dependencies. Contracts stay frozen.
+Use current contextEpoch and visible bindingIds. singularity_decompose prepare
+returns the example; on a later step commit bindingId, ackPreview=previewRef.digest
+and task. Commit yields. On wake read children/feedback, integrate and replan.
 
-For contract concerns, singularity_feedback asks your dispatcher and yields.
-Reply to a child using replyTo=its feedback.id. Clarification resumes the same
-Run; wrong contracts need singularity_stop(reason="blocked") and a corrected Task
-from the parent. Blocked returns without automatic retry.
+For uncertain prerequisites, contract concerns or a plan that no longer serves
+the parent goal, singularity_feedback asks the dispatcher and yields. Reply with
+replyTo=child feedback.id; clarification resumes the same Run. Contract changes
+need singularity_stop(reason="blocked") and a corrected Task; blocked never retries.
 On retry read lastAttempt.runId evidence and reuse its frozen outputsPath.
 Submit declared outputs with singularity_submit or stop with a blocker.
 ~~~
@@ -1301,14 +1303,15 @@ Submit declared outputs with singularity_submit or stop with a blocker.
 探索模式只追加：
 
 ~~~text
-Discover the workflow from available resources. Use explore-child for direct
-responsibilities and preserve reusable discoveries as skill/tool drafts for RSI.
+Preserve reusable discoveries as skill/tool drafts for RSI.
 ~~~
 
 首条 wake：
 
 ~~~text
-Task <id>; Run <id>; reason=start; remaining-budget=<tokens>/<steps>/<time>/<tasks>%.
+Task <id>; Run <id>; reason=start;
+Remaining percentages: tokens=<n>%, steps=<n>%, wall-clock=<n>%, task-slots=<n>%.
+These are percentages, not counts.
 Read self, submit a planning sketch, then work toward this Task's goal.
 ~~~
 
@@ -1316,8 +1319,8 @@ parent wake：
 
 ~~~text
 Task <id>; Run <id>; reason=children-terminal; batch=<id>;
-remaining-budget=<tokens>/<steps>/<time>/<tasks>%.
-Read direct child results and feedback, then resume this level's workflow.
+remainingBudgetPct={tokensPct:<n>,stepsPct:<n>,wallClockPct:<n>,depthPct:<n>,taskSlotsPct:<n>}.
+Read direct children and feedback, then continue this level's work, integrate outputs, replan or submit.
 ~~~
 
 不给每个节点注入 journal 历史、架构解释、RSI 规则全文、verifier 使用手册或整段 Method 库。平台不通过越来越长的“请遵守协议”文字来替代 guard。
@@ -2233,7 +2236,7 @@ C-24 single-case gain with validation regression is not improved
 
 ## 22. 发布冻结与版本治理
 
-本 V1 发布版冻结 C1–C3、A–F、amendment 001–017 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
+本 V1 发布版冻结 C1–C3、A–F、amendment 001–018 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
 
 ### 22.1 冻结内容
 
@@ -2254,7 +2257,7 @@ C-24 single-case gain with validation regression is not improved
 
 ~~~text
 版本：V1 发布规范
-修订：2026-11-04 纳入 amendment 006–017（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 多实例、原生工具参数失败、局部 workflow、parent 自编验收与固定产物出口）
+修订：2026-11-04 纳入 amendment 006–018（前置条件、原生优先、错误身份、单一幂等索引、CAS 原子发布、probe 多实例、原生工具参数失败、局部 workflow、parent 自编验收、固定产物出口与依赖规划）
 权威文件：docs/framework.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威
@@ -2293,7 +2296,7 @@ C-24 single-case gain with validation regression is not improved
 
 实现默认沿 DSH 公开接口或现成库完成。保留自定义层必须提供具体原生调用路径，并比较本项目实际接入后的状态、分支和适配；只有明确证明原生方案更复杂时才保留。“暂不能证明等价”“库存在不代表可替代”都不能单独充当保留理由。可由操作者保证的条件在启动前固定，runtime 不为环境违约另建探测、恢复或兜底系统。输入不符合合同或权限时返回对应错误，普通执行失败按现有分类结束。改变公开字段、状态或 authority 时提出 amendment；独立正常功能继续推进。
 
-当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014/015/016/017 为准）：
+当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014/015/016/017/018 为准）：
 
 | Amendment | 状态 | 纳入内容 |
 |---|---|---|
@@ -2321,6 +2324,8 @@ C-24 single-case gain with validation regression is not improved
 | 016 | 2026-11-03 用户要求以 dac8c0e 收敛修复，core 净增不超过 100 行、BB 净减少，非 root 验收由模型编写 | acceptanceCriteria 非空且含自包含 check，准入冻结为 required criteria；self 完整 InputRef；原生 shell 复验 CAS 产物且失败不可由 review 放行；统一 scoped 角色及工作流指引。项目原有 skill 只作为 root 指向的参考文档，不注册为 skill；保留 Singularity 自产 Method 资产。移除后续配方/check 目录及兼容路径，不新增调度层。 |
 
 | 017 | 2026-11-04 用户批准停止当前轮、最小修复后新开；已纳入 §7.2/§9/§14/§19 | 反馈提问 yield、直属 parent replyTo 答复、同 session 续接与原生消息判重；blocked 明确交回不盲重试；简化 feedback 输入并授权公开 refs。无新 fact/inbox/broker/归档恢复；fresh CAS-only checks 明示给模型，领域准备不预制求解流程。 |
+
+| 018 | 2026-11-04 用户批准停止 round6、提交备份并最小修复后重开 | 明确计划中的功能、依赖、消费者、证据和成本估计；只派发当前就绪的直属职责，消费前批结果后形成后续合同；叶节点以前提和可验证结果界定。计划失去父目标价值时反馈。启动预算标注百分比字段，领域资料区分 elaboration/功能/PPA 证据；无新增 schema、状态、门禁或预制领域 workflow。 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

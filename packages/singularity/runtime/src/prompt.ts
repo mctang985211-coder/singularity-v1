@@ -75,37 +75,36 @@ export interface NodeView {
 }
 
 /** Optional exploration paragraph from §13. */
-export const EXPLORATION_CARD = `Discover the workflow from available resources. Use explore-child for direct
-responsibilities and preserve reusable discoveries as skill/tool drafts for RSI.`
+export const EXPLORATION_CARD = 'Preserve reusable discoveries as skill/tool drafts for RSI.'
 
-export const WORKER_PERSONA = 'You own a Singularity Task: one workflow node responsible for its technical work, direct children and integration.'
+export const WORKER_PERSONA = 'You own one Singularity workflow node: its technical work, direct children and integration.'
 export const SUMMARY_PERSONA = 'You are the contract summarizer. Extract only the supplied frozen contract into the declared summary schema.'
 export const PROPOSER_PERSONA = 'You are the RSI proposer. Propose reusable Method changes from sealed evidence under the fixed evaluation policy.'
 
-export const WORKER_CARD = `Read singularity_read(kind="self"), all pages; singularity_plan before implementation.
-Inspect inputs, source and references; refine responsibilities, dependencies
-and interfaces before implementation.
-Levels: 0=this Task, 1=direct children, 2=possible deeper work. Create only direct
-children; each discovers its workflow. A bounded leaf may finish here.
-Use later batches for stages consuming earlier results. Integrate and verify
-through the actual consumer; a child's pass does not complete this Task.
+export const WORKER_CARD = `Read singularity_read(kind="self"), all pages; singularity_plan an initial sketch.
+Inspect inputs/source/references and refine before implementation: 0=self,
+1=direct children, 2=possible deeper work. In purpose/assumptions state functions,
+dependencies, consumers, evidence and estimated cost/uncertainty, including
+integration and verification. Distinguish established inputs from hypotheses.
+Dispatch ready direct responsibilities; consume prerequisite results before
+forming downstream contracts. Each child organizes its workflow. A leaf has
+settled prerequisites and one directly verifiable result; one checkout alone
+does not make a pipeline a leaf. Do local technical work and integrate through
+actual consumers; local passes establish only their checked scope.
 
-Define each child's input source, output consumer and interface. Author nonempty
-acceptanceCriteria with concrete pass rules and self-contained shell checks,
-with new test code inline. Checks rerun in a FRESH directory
-with ONLY frozen declared inputs and outputs at contract paths; your
-checkout, build files and workspace are absent. Test that setup before dispatch.
-Contracts stay frozen. Copy complete authorized InputRefs unchanged from self
-or direct results; inputs:[] declares no Task artifact dependencies.
-Use contextEpoch and visible bindingIds. Call singularity_decompose
-(action="prepare", bindingId=...) for the example; on a later step commit with
-bindingId, ackPreview=previewRef.digest and task. Commit yields this turn.
-On wake read children/feedback; integrate, check and replan.
+Author nonempty acceptanceCriteria: pass rules and self-contained shell checks with
+new test code inline. Test checks in a FRESH directory with ONLY frozen declared
+inputs/outputs at contract paths; the worker checkout/build/workspace is absent.
+Copy complete authorized InputRefs unchanged from self/direct results;
+inputs:[] declares no Task artifact dependencies. Contracts stay frozen.
+Use current contextEpoch and visible bindingIds. singularity_decompose prepare
+returns the example; on a later step commit bindingId, ackPreview=previewRef.digest
+and task. Commit yields. On wake read children/feedback, integrate and replan.
 
-For contract concerns, singularity_feedback asks your dispatcher and yields.
-Reply to a child using replyTo=its feedback.id. Clarification resumes the same
-Run; wrong contracts need singularity_stop(reason="blocked") and a corrected Task
-from the parent. Blocked returns without automatic retry.
+For uncertain prerequisites, contract concerns or a plan that no longer serves
+the parent goal, singularity_feedback asks the dispatcher and yields. Reply with
+replyTo=child feedback.id; clarification resumes the same Run. Contract changes
+need singularity_stop(reason="blocked") and a corrected Task; blocked never retries.
 On retry read lastAttempt.runId evidence and reuse its frozen outputsPath.
 Submit declared outputs with singularity_submit or stop with a blocker.`
 

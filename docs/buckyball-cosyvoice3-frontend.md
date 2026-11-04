@@ -1,6 +1,6 @@
 # Buckyball / CosyVoice3 芯片前端实跑准备
 
-2026-11-04：用户批准停止 round5、修复契约反馈后使用新执行根重开。round5 已归档；当前代码与新轮实际状态见 [进度](progress.md)。历史修复与证据更正见 [Task 修复审计](task-repair-20261103.md)。
+2026-11-04：round5、round6 已按用户要求停止并归档；当前修正通用规划指引和领域证据说明，使用新执行根重开。当前代码与新轮实际状态见 [进度](progress.md)。历史修复与证据更正见 [Task 修复审计](task-repair-20261103.md)。
 
 ## 场景与范围
 
@@ -35,7 +35,7 @@
 初始 Method 的 templates/skills/tools 均为空。公共 exploration catalog 提供下列资源的简述和身份，正文按需读取；Method 演化只能发生在 RSI，不在 Task 执行中改合同。
 
 - 仓库说明、当前 Task 协议、范围覆盖说明和固定资产清单。
-- 项目原有 `.agents/skills/` 仅由 root 合同中的绝对路径作为参考文档暴露，不注册或挂载为 skill；只有 Singularity 自产 Method 资产沿原生 skill 路径使用。
+- 项目原有 `.agents/skills/` 仅由 root 合同中的绝对路径作为技术参考文档暴露；其中角色、审批和流程门槛不覆盖本 Task 合同，不注册或挂载为 skill。只有 Singularity 自产 Method 资产沿原生 skill 路径使用。
 - 标准领域 MCP `mcp__buckyball__checkout(project)` 创建完整准备副本，`mcp__buckyball__bbdev(project,args)`，在各自绝对 checkout 目录执行 `nix develop --command bash -c 'exec bbdev "$@"' -- ...args`；原生 `bash` 用于编辑和独立组件工具。
 - 固定平台 `explore-child`；是否分解、如何分解、是否继续分解由当前模型决定。父节点仍承担自己的技术工作和直属结果整合。
 
@@ -178,4 +178,4 @@ Verdi PLI 预检复现 `libnovas.so` 缺少 `libz.so.1`；verify Nix shell 的 `
 
 worker 在 retry 时以 lastAttempt.runId 调用 singularity_read(kind=evidence)，逐页读取独立验收的真实 criteria/reason。此前只暴露通用 failed 的实现缺口已经修复。旧输出仅从 CAS 冻结提交挂载到 lastAttempt.outputsPath；模型在本轮副本中显式整合后重新提交，不能沿用旧 worker workspace。预算百分比沿原 Task 总额度及首次 Run 时间累计，不因 retry 变回 100%。source 结算后即使整轮已截止也先 seal 只读公开轨迹；无剩余额度时不打开 RSI 或继续买请求。
 
-领域指引要求先利用已有 core/Ball/compiler 建立集成路径，明确各阶段 host/accelerator 归属，再按真实 workload 决定新增 IP。独立 primitive、paper-only mapping 和自报 PASS 不替代 chip/core/compiler/recipe 接线或原始参考比较；验收条件保持原样。
+领域资料说明证据边界：elaboration 证明结构生成，综合估计所选 RTL 在特定约束/存储/活动模型下的 PPA，组件检查证明被测行为。早期综合可以验证明确的设计假设；最终 PPA 必须对应 workload 实际消费的实现。现有 core/Ball/compiler 是待验证候选，拓扑/综合报告不能替代模型映射或功能验证。不预制领域任务树或统一设计流程；root 验收保持原样。

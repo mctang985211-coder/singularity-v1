@@ -161,7 +161,7 @@ void test('fresh retry starts attempt 2 with a new session and workspace and kee
       const retryWire = messageTexts(fixture.requests[1] ?? {}).join('\n')
       assert.ok(retryWire.includes('"tokensPct":80'), 'the retry starts with 80% of the original Task token quota')
       assert.ok(retryWire.includes('"wallClockPct":50'), 'the retry retains the Task time origin')
-      assert.ok(retryWire.includes('remaining-budget=80/100/50/0%.'), 'the start wake uses the same cumulative budget as NodeView')
+      assert.ok(retryWire.includes('Remaining percentages: tokens=80%, steps=100%, wall-clock=50%, task-slots=0%.'), 'the start wake uses the same cumulative budget as NodeView')
       const afterSelf = messageTexts(fixture.requests[2] ?? {}).join('\n')
       assert.ok(afterSelf.includes('"tokensPct":79'), 'the self result includes prior usage and this attempt usage')
       assert.ok(afterSelf.includes('"wallClockPct":50'))

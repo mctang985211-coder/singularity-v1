@@ -25,7 +25,7 @@ export const EXPLORE_BINDING_ID = 'platform:explore-child'
 
 export const EXPLORE_GUIDANCE = {
   v: 1,
-  text: 'Discover the completion path for this Task. Choose direct responsibility scopes with usable interfaces; dependent work uses later batches. Each child plans its own work. Author acceptanceCriteria with concrete pass rules and self-contained shell checks before dispatch. Checks run at the workspace root with declared input/output paths, during work and independently after submission. Use complete frozen InputRefs from self or child results. Deliver under result/. A bounded leaf may finish directly. Integrate direct results and recheck this Task; preserve reusable discoveries as learning drafts.',
+  text: 'Discover the completion path and dependencies; distinguish established inputs from hypotheses. Plan functions, consumers, evidence and estimated costs in purpose/assumptions. Commit ready direct responsibilities; consume prerequisite results before defining downstream contracts. Each child organizes deeper work. A leaf has settled prerequisites and one directly verifiable result. Author acceptanceCriteria with concrete pass rules and self-contained shell checks, using complete frozen InputRefs. Deliver under result/ and verify through the actual consumer. Local checks establish their stated scope; preserve reusable discoveries as learning drafts.',
 } as const
 
 export const EXPLORE_EXAMPLE = {

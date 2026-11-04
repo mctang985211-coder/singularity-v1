@@ -332,3 +332,14 @@ Buckyball guide 删除重复平台流程，领域就绪仅固定环境、资源�
 
 
 新真实轮：`artifacts/round6-contract-feedback-20261104-012235`，2026-11-04 01:22:35 +0800 启动，绝对截止 2026-11-04 13:22:35 +0800。冻结修复提交 `94d39c3`，79 个源文件 hash 与启动快照一致；12 小时 / 1,000,000,000 reported tokens / 4,000 requests，maxActive=4，模型 deepseek-flash/reasoning=max，未扩预算。operator PID 2765833、只读进度 monitor PID 2765834；monitor 每 1,800 秒记录实际 Task、closure 中已索引反馈和 blocked Run，不能据此自动宣称修改有效。启动检查已发生 5 个已结算真实请求，52,398 input + 1,596 output tokens，unknown=0，无启动失败。原 round5 不续跑。后续是否改善须核对新轮真实父子对话、复验与集成轨迹；当前不声称 frontend 完成或 RSI 获益。
+
+
+### 依赖规划与领域证据修订（2026-11-04，amendment 018）
+
+按用户要求，round6 于 12:11:57 +0800 停止；operator、monitor 和本轮三个 DC 综合作业均已退出。归档 `artifacts/round6-contract-feedback-20261104-012235/operator-stop.json` 保存 422 请求全部结算、92,835,597 input + 319,311 output tokens、unknown=0；保留 open facts，不伪造 closure。修改前备份提交 `446ec4f`。
+
+该轮约 10.6 小时仍在 root 的第一批两个直属任务，没有孙节点或父子反馈。参考任务局部通过，芯片任务长时间综合通用 DigitalTop，root 尚未完成 recipe、功能与实现集成。轨迹中 root 曾规划后续实现/验证批次，后来将 PPA 提到首批；芯片 child 曾考虑 config→elaboration→synthesis 的串行职责，最终因共享 checkout 和协调成本选择直接执行。局部合同又提前固定拓扑及字符串检查；局部满足不能证明 workload 实现。root 还多次将启动消息中的 100% steps 理解为 100 steps。不能将根因归为旧 skill 或工具列表：实际没有挂载项目 skill，领域 MCP 只有 checkout/bbdev，旧 ball-align 文档本身已有功能验证先于最终 PPA 的说明；本轮没有做因果消融。
+
+通用修订仅更新既有 worker card、探索说明和按需工具参考：先提交初始草图，再读资源细化功能、前提、消费者、证据和预计成本/不确定性；当前仅派发就绪的直属职责，消费前批结果后形成下批合同。叶节点以前提成立和直接可验证结果界定；共享 checkout 不构成依据。前提/合同/计划失去父目标价值时主动 feedback。启动预算明确标注字段和百分号。没有新增 schema、状态、调度器、语义门禁、逐任务时限或固定领域树；沿用现有父子对话机制。
+
+Buckyball 指引删减重复交付/PPA 压力，既有 core/Ball/compiler 作为需要证据的候选；资料区分 elaboration、功能检查和带条件的综合估计。早期综合可验证明确设计假设，最终 PPA 必须对应 workload 实际消费的实现；不规定统一设计阶段顺序。项目旧 skills 继续只在 root 给出参考文档路径，其角色、审批和流程门槛不覆盖 Task 合同；非 root 合同和验收仍由模型编写。root criteria 未变。

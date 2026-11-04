@@ -9,8 +9,8 @@ export const taskToolExamples: Record<string, JsonValue> = {
   singularity_plan: { sketch: { v: 1, taskId: 'task', runId: 'run', contextEpoch: 'current-epoch',
     sourceContract: `sha256:${'0'.repeat(64)}`, objective: 'Deliver a report from frozen records.',
     levels: [{ level: 0, purpose: 'Integrate aggregation and reporting; check the final report.', likelyChildren: ['platform:explore-child'], expectedInputs: ['records.json'], expectedOutputs: ['validated report'] },
-      { level: 1, purpose: 'Own aggregation, then reporting in a later batch.', likelyChildren: [], expectedInputs: ['frozen records or totals'], expectedOutputs: ['executable stage and consumable output'] }],
-    directPlan: [{ bindingId: 'platform:explore-child', purpose: 'Implement aggregation before dispatching its report consumer.' }], assumptions: [] } },
+      { level: 1, purpose: 'Aggregate known records first; define reporting after inspecting the returned totals and CLI.', likelyChildren: [], expectedInputs: ['frozen records or totals'], expectedOutputs: ['executable stage and consumable output'] }],
+    directPlan: [{ bindingId: 'platform:explore-child', purpose: 'Implement aggregation from ready records; retain report integration and consumer checks here.' }], assumptions: ['Aggregation is bounded by the supplied records and exact sum rule. Estimate execution cost from input size; reserve time for CLI verification and the later report stage.'] } },
   singularity_decompose: { action: 'commit', children: [{ bindingId: 'platform:explore-child',
     ackPreview: `sha256:${'0'.repeat(64)}`, task: { goal: EXPLORE_EXAMPLE.goal,
       inputs: [{ id: 'records', object: { id: 'example:records', digest: `sha256:${'0'.repeat(64)}` }, path: 'records.json', access: 'copy-to-work' }],
@@ -25,7 +25,7 @@ export const taskProtocolReference: JsonValue = {
   v: 1,
   planning: {
     levels: 'Exactly [0,1] or [0,1,2]. Level 0 is the current Task, level 1 its direct children, level 2 possible grandchildren. Levels describe responsibility scopes; dependencies execute in successive batches.',
-    execution: 'Refine the initial sketch after resource discovery. Choose direct responsibility scopes by interfaces and executable checks, using successive batches for sequential stages. Only directPlan and a later decompose commit select direct children; each child organizes deeper work. A sketch creates no Tasks. A leaf goal is one bounded, directly verifiable unit.',
+    execution: 'After discovery, use purpose/assumptions for functions, prerequisites, output consumers, evidence, estimated cost and uncertainty, including integration and verification. Look ahead through the completion path; commit only ready direct responsibilities and consume prerequisite results before defining downstream contracts. Each child organizes deeper work. A leaf has settled prerequisites and one directly verifiable result; sharing a checkout is insufficient. A sketch creates no Tasks; decompose commit admits them.',
     epoch: 'Read the current contextEpoch from NodeView. Resume or native compaction can change it; a child admission alone is not proof of an epoch change.',
     schema: protocolJsonSchema(planningSketchSchema),
   },
@@ -34,7 +34,7 @@ export const taskProtocolReference: JsonValue = {
   handoffExample: [
     'Illustration: the parent owns a final report workflow; the example child owns the complete aggregation stage. Discover the actual stages for your Task.',
     'Read self, plan, prepare explore-child, then commit the aggregation contract with the authorized records InputRef. Replace illustrative identities with actual returned values. Each child discovers its own workflow and may organize direct children.',
-    'After the batch finishes, read children and evidence, following all pages. Inspect the frozen result/aggregate.py and totals output; check the stage through its CLI before planning its consumer.',
+    'After the batch finishes, read children and evidence, following all pages. Inspect the frozen result/aggregate.py and totals output; check the CLI and revise assumptions/cost estimates before defining its consumer. If the result changes the premise, discuss it through feedback and replan.',
     'Prepare a later report batch. Copy the totals output InputRef fields id/object/path/access unchanged into that child inputs. Its goal defines the JSON totals interface and report format; author checks that compare the report with those totals. An access:read input is read with singularity_read(kind="resource", id=...), not a sibling workspace path.',
     'Read the report result, integrate both stages into this Task outputs and test the actual report consumer against the original records and this Task acceptance. Local passes do not replace this integration check. A failed interface leads to corrected work or a new contract through feedback.',
   ],
@@ -45,7 +45,7 @@ export const taskProtocolReference: JsonValue = {
 
 export const planningParameters = {
   sketch: { type: 'json', required: true,
-    description: 'Hierarchy [0,1] or [0,1,2]: self, children, possible grandchildren. Refine after discovery; delegate long-chain stages in direct batches. A bounded verifiable leaf has no children.',
+    description: 'Hierarchy [0,1] or [0,1,2]: self, children, possible grandchildren. In purpose/assumptions explain functions, prerequisites, consumers, evidence and estimated cost/uncertainty. Dispatch ready direct responsibilities; a leaf has settled prerequisites and one directly verifiable result.',
   },
 } as const
 
