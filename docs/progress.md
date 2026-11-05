@@ -403,3 +403,16 @@ round8 于 05:06:38 +0800 自然结束，没有运行中的模型进程。2,062 
 实际开始 `2026-11-05T13:17:34.795+08:00`，绝对截止 `2026-11-06T01:17:34.795+08:00`。整轮共用 12 小时、10 亿 reported tokens、4000 requests、并发 4；provider `singularity-local`、模型 `deepseek-flash`、reasoning=max、40k 输出上限、700k context 与原生 compaction 配置沿既有冻结策略。operator PID 916745，30 分钟只读 monitor PID 916746，无重启或自动恢复。活动入口记录为 `artifacts/mxmm-ball-active-launch.json`。
 
 启动核实 `2026-11-05T13:18:02.029513+08:00`：两个进程存活，8 个请求全部结算，input（含缓存）121806、output 2997、unknown=0；未产生启动 failure 或最终结果。证据在该根 `operator-startup.json`、`source-hashes.json`、`execution/launch.json`、`execution/requests.jsonl` 和 `monitor-*.json`。这是修复后相同 MXMM suite 的真实实验，重点观察合同/反馈消费、重复实现成本、候选装配及完整 RSI comparison；尚未形成改善结论，也不能作为跨算子泛化证据。
+
+
+### 领域边界收缩与 reviewer 无结论分类（2026-11-06，amendment 021）
+
+round9 已按用户要求停止，没有重开付费测试。归档为原工作区 `artifacts/round9-mxmm-rsi-20261105-131734/stop-audit.md`：3,771 请求，585,849,365 input（含缓存）+4,703,044 output，unknown=1；source verified，4 个 evaluation roots verified，最后一个 validation slot 未结束；没有 comparison/winner/activation。source 没分解，评测直属 children 全为 probe，错误合同和 review 消费问题仍需分别判断，不能因本次文件迁移宣称模型已学会责任分解或 RSI 已获益。
+
+用户指出的越界成立：原 Buckyball example 自己创建 Task/Method 状态、驱动 RSI、创建 reviewer、设置预算和通用成本 comparator。仅以 runtime 没有领域分支为由保留这些代码，是错误的职责划分。备份 `80ca509` 后删去领域 campaign/acceptance/重复 guide 和发布后附加工作；通用实验宿主放在 `apps/singularity/src/experiment.ts`，只组合现有 Task/RSI API。reviewer 放在 runtime，复用 CAS 输入物化、原生 MCP 挂载/surface 校验与 DSH lifecycle；通用 token comparator 移入既有 evaluation 模块。Buckyball 只保留目标、根标准、case 数据、参考文档路径和 checkout/bbdev 环境适配，资源构造只得到 CAS writer 类型，不得到 Task/Round writer API。没有固定任务树、非 root 预制验收、新协议事实、重试层、语义检查器或领域补救算法。
+
+同时修正真实通用错误：reviewer 正常结束却没提交 findings，旧领域实现替它生成 fail，导致 worker 被当作领域失败重做。现在返回 invalid 验收，沿现有协议结算；正常独立 fail receipt 仍可重试。取消清理保留原始 signal reason，避免字符串取消原因被包装后误判为宿主故障。验收只依据冻结合同；旧领域 review prompt 中的重复技术标准由现有 root criteria 承担，项目旧 skill 仍只是 root 参考文档。
+
+验证：加入无 verdict 分类断言后，Node 24.22.2、pnpm 11.18.0 下最终完整 `pnpm verify` 448/448（protocol 206、runtime 137、app 92、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过；定向原生 DSH fixture 3/3 也通过。该 fixture 区分两次真实 fail 后各三次新 Run 与第三次无 findings 的 invalid（不重做），并保留预算取消、原始畸形工具参数、项目 skill 不挂载与 root 参考路径断言。全部使用本地 HTTP fixture，零付费请求。最终日志为本工作区 `artifacts/domain-boundary-20261106/verify.log`。当前 suite 仍只有 MXMM 的 shape/data 变化，不证明跨算子泛化、真实模型成本改善或未完成的 comparison。
+
+相对 dac8c0e，全部 apps/packages（含源码、测试、配置与领域补丁）+1195/-1095，净增 100 行；生产 src/examples 净增 43 行；Buckyball examples +79/-423，净减 344 行。通用宿主/reviewer 从 examples 迁入 src 会增加 src 目录单独统计，故按全部文件统计迁移前后，不以目录重命名隐藏增加。此次相对上一提交 0c09c3d 的 apps/packages 净变化为 0 行。同一原工作区出现并行备份提交后，收尾在独立 worktree/分支 codex/buckyball-domain-boundary-20261106 进行，保留原分支与修改。

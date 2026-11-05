@@ -135,15 +135,13 @@ void test('native campaign meter includes auxiliary calls; session projection co
   })
 })
 
-void test('Ball campaign admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 120_000 }, async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'buckyball-campaign-'))
+void test('generic experiment admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 120_000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'singularity-experiment-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const baseline = join(directory, 'baseline'), prepared = join(directory, 'prepared'), root = join(directory, 'execution')
   await mkdir(prepared)
-  for (const name of ['model-port', 'model-optimize', 'chip-designer', 'ip-designer', 'ball-align', 'workload-tests', 'debug-compiler', 'check', 'report']) {
-    await mkdir(join(baseline, '.agents/skills', name), { recursive: true })
-    await writeFile(join(baseline, '.agents/skills', name, 'SKILL.md'), `# ${name}\nRead current domain sources.\n`)
-  }
+  await mkdir(join(baseline, '.agents/skills/legacy-role'), { recursive: true })
+  await writeFile(join(baseline, '.agents/skills/legacy-role/SKILL.md'), '# Legacy role\nReference document only.\n')
   await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: baseline } }))
   const bin = join(directory, 'bin')
   await mkdir(bin)
@@ -159,6 +157,7 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     if (toolSchemaNames(request).includes('singularity_review_submit')) {
       if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: EXPERIMENT_BUDGET.maxReportedTokens,
         completionTokens: 10, totalTokens: EXPERIMENT_BUDGET.maxReportedTokens + 10 } }
+      if (proposers === 2) return { content: 'No review verdict submitted.', usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       if (!toolNames(request).includes('singularity_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
         name: 'singularity_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
@@ -207,9 +206,9 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
   await runExperiment(root, await buckyballDomain(prepared))
   const result = JSON.parse(await readFile(join(root, 'result.json'), 'utf8')) as { failure?: string; outcomes: { source: string; activation?: unknown }[]; usage: { requests: number; completed: number; unknown: number } }
   assert.equal(result.failure, undefined)
-  assert.equal(result.outcomes.length, 3)
-  assert.ok(result.outcomes.every(value => value.source === 'failed' && value.activation === undefined))
-  assert.equal(reviews, 9, 'each failed source uses the three configured fresh attempts')
+  assert.deepEqual(result.outcomes.map(value => value.source), ['failed', 'failed', 'invalid'])
+  assert.ok(result.outcomes.every(value => value.activation === undefined))
+  assert.equal(reviews, 6, 'real failures use fresh attempts; an unsubmitted review never asks the worker to redo work')
   assert.equal(proposers, 3)
   assert.equal(result.usage.requests, fixture.requests.length)
   assert.equal(result.usage.completed, fixture.requests.length)
@@ -228,7 +227,7 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
   const receipts = glob(`${root}/reviews/*/receipt.json`)
   for await (const path of receipts) {
     const receipt = JSON.parse(await readFile(path, 'utf8')) as { criteria: { reason: string }[] }
-    assert.ok(receipt.criteria.every(value => value.reason.includes('Missing actual MXMM consumer')))
+    assert.ok(receipt.criteria.every(value => value.reason.includes('Missing actual MXMM consumer') || value.reason.includes('did not complete')))
   }
   assert.deepEqual((await readFile(join(baseline, 'nix-argv.txt'), 'utf8')).trimEnd().split('\n'),
     [baseline, 'develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', '--help', 'literal;$(false)'])

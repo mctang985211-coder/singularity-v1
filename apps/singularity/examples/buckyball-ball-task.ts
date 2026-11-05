@@ -12,7 +12,7 @@ export function buckyballBallTaskSpec(project: Ref): TaskSpec {
         'Compile and run actual RISC-V ELF on focused BEMU with the MXMM core selected. A JSON schedule, Python-only emulator or existing unrelated test pass is insufficient.',
         'Use independent prepared checkouts and existing bbdev/native tools. Keep baseline, Singularity and verifier unchanged.',
         'Exclude chip/core redesign, full-chip simulation, model porting, synthesis/PPA, FPGA and physical backend. Change RTL/compiler only if a demonstrated Ball-interface defect requires it.',
-        'Non-root contracts, checks and workflow decomposition are yours to author. Report unresolved prerequisites rather than reducing required outcomes.'],
+      ],
     },
     criteria: [
       { id: 'executable-mapping', required: true, statement: 'Patches apply to the pinned checkout. A callable tiling/packing implementation emits and executes real MXMM instructions for supplied matrices, with legal three-bank fields, byte capacities including scales/output base, DMA, K partitions and first/last accumulation. Identify the actual consumer and command; metadata or a mathematical reference alone fails.' },

@@ -14,7 +14,6 @@ import { nativeAccounting } from './accounting.ts'
 const maxWallClockMs = 12 * 60 * 60 * 1000
 const maxReportedTokens = 1_000_000_000
 
-/** All agents share the campaign cap; child budgets do not multiply it. */
 export const EXPERIMENT_BUDGET = {
   maxWallClockMs,
   maxReportedTokens,

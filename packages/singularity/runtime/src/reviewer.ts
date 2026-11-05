@@ -52,7 +52,6 @@ export async function createAgentVerifier(ctx: Context, options: {
     const mcpRoot = servers.some(server => server.transport === 'stdio') ? await createMcpResourceRoot() : undefined
     const failures: unknown[] = []
     let handle: Awaited<ReturnType<typeof ctx.agents.create>> | undefined
-    let disposed = false
     try {
       handle = await ctx.agents.create({ sessionId: `review:${request.operationId}` as SessionId,
         meta: { cwd: workspace }, signal: request.signal, agentOptions: options.agentOptions,
@@ -89,19 +88,19 @@ export async function createAgentVerifier(ctx: Context, options: {
       } finally { request.signal.removeEventListener('abort', cancel) }
     } catch (error) { failures.push(error) }
     finally {
+      try {
+        await handle?.dispose()
+        if (mcpRoot !== undefined) await removeMcpResourceRoot(mcpRoot)
+      } catch (error) { failures.push(error) }
       if (handle !== undefined) {
-        try { await handle.dispose(); disposed = true } catch (error) { failures.push(error) }
         const observed = snapshotSession(handle.agent.session)
         if (observed.failure !== undefined && failures.length === 0) failures.push(new Error(observed.failure))
-      }
-      if (mcpRoot !== undefined && (handle === undefined || disposed)) {
-        try { await removeMcpResourceRoot(mcpRoot) } catch (error) { failures.push(error) }
       }
     }
     if (failures.length === 1) throw failures[0]
     throwCollectedErrors(failures)
     const findings: PublicCriterionResult[] = result?.criteria ?? request.task.spec.criteria.filter(value => value.required)
-      .map(value => ({ id: value.id, verdict: 'fail', reason: 'Independent review did not complete its required findings.' }))
+      .map(value => ({ id: value.id, verdict: 'invalid', reason: 'Independent review did not complete its required findings.' }))
     const receipt = sealPublicReceipt({ v: 1, provider: request.task.acceptance, operationId: request.operationId,
       contractDigest: request.task.digest, inputDigests: request.inputs.map(value => value.digest), outputDigests: request.outputs.map(value => value.digest),
       criteria: findings, exit: { code: 0, signal: null }, timedOut: false })

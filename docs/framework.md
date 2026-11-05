@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–020 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–021 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -55,7 +55,7 @@
 | protocol/core | 业务对象、命令、事实、纯 reducer、guard、视图 | DSH、模型调用、工作目录、领域算法 |
 | DSH adapter | agent 创建/同进程续接、scope、wake、MCP server 挂载、工具门禁、进程和预算协调 | Task 验收权威、Method 内容决策 |
 | Method revision | 模板目录、模板局部指导、skill/tool 内容及绑定 | 平台 system card、scheduler、root 验收规则 |
-| domain package | 文档、基础资源、MCP server、验收器、评测用例 | Task/Round 状态、fact writer、production head |
+| domain package | 目标、参考资料、根评判标准、测试数据与环境资源 | Task/Round 状态、fact writer、Agent 生命周期、production head |
 
 唯一领域写入路径：
 
@@ -2088,7 +2088,9 @@ round outcome 是统计结果；report 只渲染这些事实。report 写入失�
 
 ## 19. 领域 adapter contract
 
-框架不定义 EDA 或仿真参数，但要求领域 adapter 实现以下边界：
+领域包只提供目标、参考资料、根评判标准和可选的同领域测试集；环境资源提供现成工具的访问方式。非 root 合同和检查仍由派发模型编写。领域包不需要实现 RSI 流程、reviewer Agent、预算或重试策略。
+
+以下 DomainAdapter 描述宿主组合边界，不是要求每个领域重新实现的施工清单。Task/Run/Method、RSI 开轮/提案/评测/比较/激活以及通用 reviewer 生命周期由 Singularity 承载；reviewer 正常结束但未提交 findings 时属于 invalid 验收，不代写领域 fail 或触发普通领域重试；领域只提供所需的业务数据和判断。领域特有指标可以提供比较规则；reported-token 等通用成本比较复用宿主实现。通用 reviewer 是操作者显式选择的验收实现，不成为所有 Task 的默认 LLM review。框架不定义 EDA 或仿真参数：
 
 ~~~ts
 interface DomainAdapter {
@@ -2231,7 +2233,7 @@ C-24 single-case gain with validation regression is not improved
 
 ## 22. 发布冻结与版本治理
 
-本 V1 发布版冻结 C1–C3、A–F、amendment 001–020 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
+本 V1 发布版冻结 C1–C3、A–F、amendment 001–021 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
 
 ### 22.1 冻结内容
 
@@ -2323,6 +2325,7 @@ C-24 single-case gain with validation regression is not improved
 | 018 | 2026-11-04 用户批准停止 round6、提交备份并最小修复后重开 | 明确计划中的功能、依赖、消费者、证据和成本估计；只派发当前就绪的直属职责，消费前批结果后形成后续合同；叶节点以前提和可验证结果界定。计划失去父目标价值时反馈。启动预算标注百分比字段，领域资料区分 elaboration/功能/PPA 证据；无新增 schema、状态、门禁或预制领域 workflow。 |
 | 019 | 2026-11-04 用户授权深入修复；已纳入 | 移除重复许可布尔值，保留实际 guard；evidence/children 统一暴露可直接派发的完整 InputRef，重试读取全部 findings 并保留未满足父目标；不加语义门禁或新状态 |
 | 020 | 2026-11-05 用户要求对照 Core 深查 RSI、工具与领域任务，明确不兜底；已纳入 §17 | authoring 按需 schema；非法 skill name 在同 session 提交前纠正；Method 可保存通用可执行实现；candidate-first，明确 schema 超限无请求且无效 slot 停止；宿主异常保持原边界。无领域语义筛查、重试或新状态。 |
+| 021 | 2026-11-06 用户指出 RSI 控制流越过 Buckyball 领域边界；已纳入 §1/§19 | 领域只交付目标、参考资料、根标准、案例和环境资源；Singularity 提供通用实验宿主、reviewer 生命周期及成本比较。删除领域 campaign、reviewer 和重复 guide，不新增事实、门禁、兜底或默认 LLM review。 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

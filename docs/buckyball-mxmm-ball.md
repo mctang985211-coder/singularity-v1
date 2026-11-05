@@ -21,9 +21,9 @@ shape 不是预制答案。reviewer 还须选择合同范围内的额外维度�
 
 ## 领域任务何时准备齐全
 
-准备齐全意味着：固定公开问题和根验收、源码/配置身份、可独立复制的依赖、实测成功与失败的业务工具、预算/deadline，以及 RSI 用的冻结 cases 和 comparator。它不要求操作者预写设计路线、子任务合同、非 root 检查或模型的实现。领域问题规定外部交付，Method 才是在探索中学习的工作方法。
+领域包只需提供目标、参考资料、根评判标准和测试输入；多任务评测再提供同领域案例及各自标准。源码/配置与可用工具属于环境资料。预算、deadline、provider/profile、RSI 控制流和验收执行器由 Singularity 宿主配置，不是领域作者必须实现的接口。操作者负责环境可运行；不得要求领域预写设计路线、子任务合同、非 root 检查或待发现的 Method。领域问题规定外部交付，Method 是在探索中学习的工作方法。
 
-入口是 [buckyballBallTaskSpec](../apps/singularity/examples/buckyball-ball-task.ts) 与 [campaign](../apps/singularity/examples/buckyball-campaign.ts)。初始 Method 的 templates/skills/tools 全空；exploration catalog 提供 checkout/bbdev、领域说明和协议。项目 `.agents/skills/` 仅在 root 合同中给参考文档路径，不注册或挂载。其角色、审批和流程门槛不覆盖本合同。只有 Singularity 自产 Method 资产可走 skill 注册路径。
+领域入口为 [目标和根标准](../apps/singularity/examples/buckyball-ball-task.ts) 与 [案例和资料绑定](../apps/singularity/examples/buckyball.ts)。[通用宿主](../apps/singularity/src/experiment.ts) 拥有 Task/RSI 流程与预算；[通用 reviewer](../packages/singularity/runtime/src/reviewer.ts) 只按冻结合同检查，复用现有 CAS/MCP 能力。旧领域 campaign、reviewer、重复 guide/review prompt 已删除。初始 Method 的 templates/skills/tools 全空；项目 `.agents/skills/` 仅在 root 合同中给参考文档路径，不注册或挂载。其角色、审批和流程门槛不覆盖本合同。只有 Singularity 自产 Method 资产可走 skill 注册路径。
 
 固定 Buckyball 准备副本 `07a85ea2898e59a80d0dfbb30520d8ed5c39390a`；stack `f8af074a28eb83cc58424fe08eda2a67c472b73a`；bbdev `207c4b73998a1d34279d854d7b3f52d86721e86d`（含既有领域工具修复）。本地 `artifacts/buckyball-mxmm-ball-20261104/project.json` 仅提供 Ball 所需来源、环境和预检身份，不带 CosyVoice checkpoint、旧 seed 或整芯片验收。baseline 保持只读，Task/reviewer 各自用独立副本。预装 LLVM 为只读依赖；不共享候选源码和 build 输出。
 
@@ -41,12 +41,12 @@ bbdev(project, ["bebop-bemu", "--sim", "--chip poly --core-index 2 --binary poly
 
 比较指标改为通过完整功能验收的 Task 子树 reported tokens 均值，包含子任务与重试。两边全部 verified 且计量完整才能比较；平均至少节省 1000 tokens，且每 case 不退步。proposer/reviewer 的额外请求仍计入整轮预算，不能把该子树指标说成全 campaign 成本。当前用例只覆盖同一 MXMM 的 shape/data 迁移，不能据此声称跨算子或整个加速器领域泛化；Method 可保存通用可执行实现，实例结果不能作为答案资产。固定 Ball 软件分块不适合强求硬件 PPA 改善，因此删除旧 PPA scorer 和取代失败原因的 PPA 转换，不伪造性能指标。没有放松 root 功能验收来追求进入 RSI。
 
-source 失败也可封存为学习证据并打开 RSI；配额耗尽则只封存，不再购买 proposer。proposer 若将公开工具 ID 绑定进模板，须先用 put-tool 注册进 Method；不放行 dangling binding。source、两公开 case 与独立验证 case 都通过现有冻结评测路径；不同 arm 不共享候选实现。条件满足后沿 trusted expected-head activation，发布后另跑工作验证。
+source 失败也可封存为学习证据并打开 RSI；配额耗尽则只封存，不再购买 proposer。proposer 若将公开工具 ID 绑定进模板，须先用 put-tool 注册进 Method；不放行 dangling binding。source、两公开 case 与独立验证 case 都通过现有冻结评测路径；不同 arm 不共享候选实现。开轮、评测、通用 token 比较及 trusted expected-head activation 均由 Singularity 宿主执行。删除领域脚本附加的发布后再次工作流程。
 
 整个 campaign 共用 12 小时、10 亿 reported tokens、4000 请求、并发 4 的上限；child/重试/RSI 不重置。真实运行使用全新根和 IDs，不续跑归档；启动前固定 provider/model/profile、凭据、绝对 deadline 和源码 hash。启动例：
 
 ```bash
-node apps/singularity/examples/buckyball-campaign.ts /absolute/new-execution-root /absolute/prepared-project-directory
+node apps/singularity/examples/buckyball.ts /absolute/new-execution-root /absolute/prepared-project-directory
 ```
 
 只读操作者每半小时核对实际 consumer、父目标职责、反馈/重派发、root findings 和 RSI，不把树深/工具计数当作行为改善。脚本 fixture、环境预检和真实模型证据分别报告。当前是否启动及已知缺口以进度为准。
