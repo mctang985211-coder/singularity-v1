@@ -395,3 +395,11 @@ round8 于 05:06:38 +0800 自然结束，没有运行中的模型进程。2,062 
 最终使用 upstream Node 24.22.2，根 `pnpm verify` **448/448** 通过（protocol 206、runtime 136、app 93、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过；日志 `artifacts/rsi-repair-20261105/final-verify.log`。S6 原生 fixture 分别验证完整 fail receipt 仍执行四个 slots、candidate 无提交后只执行一个 slot且保留四 slot 分母；非法 skill 名同 session 修正、超限零请求 invalid、MCP surface 漂移仍抛出也通过。round8 真实候选在新根与新 Task/Run/session IDs 中零付费装配：原生 schema 12210/12288 bytes，provider tools 12706 bytes；仅一次本地 fixture 请求、故意无提交，不执行 BEMU 或比较收益，见 `artifacts/rsi-repair-20261105/candidate-composition-4/report.json`。冻结管道报错有独立 Node 捕获流复现。上述证据不证明真实模型合同纠错或领域迁移已改善。
 
 相对 `dac8c0e`，全部 `apps/packages`（源码、测试、配置、领域补丁）+945/-845，净增 **100 行**；Buckyball examples +136/-177，净减 **41 行**，统计包含已删除的旧 frontend 入口。`git diff --check` 通过。当前 suite 仍只验证 MXMM 输入迁移，跨算子领域 suite 未实现/实测；没有用放宽功能验收或伪造 comparison/activation 弥补这一缺口。
+
+### round9 RSI 修复后 MXMM 实测启动（2026-11-05）
+
+用户明确要求“开一轮新的”后，以新根 `artifacts/round9-mxmm-rsi-20261105-131734` 启动；不续跑 round8，不复制旧事实或模型候选，从空 Method 开始。冻结代码为 `e44f109414c2d7c247f2b5ad9b44d1e5e8c781ae`，81 个启动文件 hash 一致。实际宿主使用 upstream Node 24.22.2；新的 `artifacts/buckyball-mxmm-ball-20261105/project.json` 仅更新宿主说明，继续指向已预检的只读 Buckyball 基线、同一 bbdev 和同一真实 MXMM consumer，5 个关键来源 hash 与成功预检一致。项目原有 skills 仍仅作为 root 参考文档路径暴露。
+
+实际开始 `2026-11-05T13:17:34.795+08:00`，绝对截止 `2026-11-06T01:17:34.795+08:00`。整轮共用 12 小时、10 亿 reported tokens、4000 requests、并发 4；provider `singularity-local`、模型 `deepseek-flash`、reasoning=max、40k 输出上限、700k context 与原生 compaction 配置沿既有冻结策略。operator PID 916745，30 分钟只读 monitor PID 916746，无重启或自动恢复。活动入口记录为 `artifacts/mxmm-ball-active-launch.json`。
+
+启动核实 `2026-11-05T13:18:02.029513+08:00`：两个进程存活，8 个请求全部结算，input（含缓存）121806、output 2997、unknown=0；未产生启动 failure 或最终结果。证据在该根 `operator-startup.json`、`source-hashes.json`、`execution/launch.json`、`execution/requests.jsonl` 和 `monitor-*.json`。这是修复后相同 MXMM suite 的真实实验，重点观察合同/反馈消费、重复实现成本、候选装配及完整 RSI comparison；尚未形成改善结论，也不能作为跨算子泛化证据。
