@@ -289,7 +289,7 @@ export class RunToolController {
   private readTool() {
     return defineTool({
       name: 'singularity_read',
-      description: 'Read Task views/resources. evidence + child ID or lastAttempt.runId returns public findings as JSON text; follow nextCursor.',
+      description: 'Read Task views/resources; follow nextCursor. evidence accepts child ID or lastAttempt.runId.',
       parameters: {
         kind: { type: 'string', enum: ['self', 'status', 'resource', 'children', 'evidence', 'ancestor', 'feedback'], required: true, description: 'Authorized Task view.' },
         id: { type: 'string', description: 'Visible resource, child, evidence, lastAttempt.runId, feedback, or ancestor digest.' },
@@ -547,7 +547,7 @@ export class RunToolController {
   private feedbackTool() {
     return defineTool({
       name: 'singularity_feedback',
-      description: 'Ask your dispatcher and yield. Reply with replyTo=child feedback.id. Contracts stay frozen; use stop(blocked) for correction in a new Task.',
+      description: 'Ask dispatcher and yield, or replyTo=child feedback.id. Frozen contract changes need stop(blocked).',
       parameters: {
         kind: { type: 'string', enum: ['needs-replan', 'input-invalid', 'acceptance-concern', 'blocked'], required: true },
         summary: { type: 'string', required: true },

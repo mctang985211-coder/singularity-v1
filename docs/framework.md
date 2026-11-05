@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–019 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–020 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -1116,7 +1116,7 @@ host 分类、exit 与 timeout 的完整规则见 §15.3；本 procedure 只消�
 
 有效 required criterion fail 是领域 failed，可由固定 scoring policy 得出有限失败分；无提交、缺失/invalid trial 没有可比较分数，不能由 comparator 自行填零。
 
-提交后的冻结命令复验使用 DSH 原生 shell，在 fresh 目录仅物化 CAS 合同输入与提交输出，按原相对路径执行 check。check 包含新增测试代码及期望，不能依赖 worker 未提交文件。普通非零退出、signal 或命令超时使该项失败；Task deadline/取消等待原生进程退出后沿既有 invalid/cancelled 结算；宿主异常保留原原因。领域 receipt 先验证原身份，再附原生命令结果至原有 reason；check 失败不可被 review 改为 pass，review fail 也不可被 check 成功改为 pass。继续使用原 PublicReceipt/CAS/Evidence，不新增配方目录、check receipt schema、fact 或账本。
+提交后的冻结命令复验使用 DSH 原生 shell，在 fresh 目录仅物化 CAS 合同输入与提交输出，按原相对路径执行 `bash -e -o pipefail` check，stdout/stderr 是捕获流（不保证可重开为 /dev 文件），模型编写合同时可见相同条件。check 包含新增测试代码及期望，不能依赖 worker 未提交文件。普通非零退出、signal 或命令超时使该项失败；Task deadline/取消等待原生进程退出后沿既有 invalid/cancelled 结算；宿主异常保留原原因。领域 receipt 先验证原身份，再附原生命令结果至原有 reason；check 失败不可被 review 改为 pass，review fail 也不可被 check 成功改为 pass。继续使用原 PublicReceipt/CAS/Evidence，不新增配方目录、check receipt schema、fact 或账本。
 
 ### 11.6 Parent join 与全树结束
 
@@ -1273,17 +1273,16 @@ profile 使用中性身份；worker、summary、proposer、reviewer 在原生 sc
 Read singularity_read(kind="self"), all pages; singularity_plan a sketch.
 Inspect inputs/source/references; refine before implementation: 0=self,
 1=direct children, 2=possible deeper work. Keep each required outcome owned by
-your local work or a child; carry its actual consumer and pass rule into the
-contract. In purpose/assumptions state dependencies, evidence, estimated cost
-and uncertainty; test cost assumptions; preserve required outcomes.
+local work or a child; carry source-backed pass rules and the actual consumer.
+purpose/assumptions: dependencies, evidence, cost/uncertainty; test estimates.
 Dispatch ready responsibilities, then consume results before defining downstream
 contracts. Each child owns its workflow. A leaf has settled prerequisites and
 one verifiable result; a shared checkout does not make a pipeline a leaf.
 Integrate through actual consumers; local passes prove only their checked scope.
 
-Author acceptanceCriteria: pass rules and self-contained shell checks with new
-tests inline. Test in a FRESH directory with ONLY frozen declared
-inputs/outputs at contract paths; the worker checkout/build/workspace is absent.
+Author acceptanceCriteria with inline shell tests. Test the exact checks under
+bash -e -o pipefail, stdout/stderr captured as streams, in a FRESH directory with
+ONLY frozen inputs/outputs at contract paths; worker checkout/build is absent.
 Copy complete InputRefs unchanged from self, children or evidence.outputs;
 inputs:[] declares no artifact dependencies. Contracts stay frozen.
 Use contextEpoch and visible bindingIds. singularity_decompose prepare
@@ -1766,7 +1765,7 @@ trace 对 RSI 是 CAS object，不是一次性巨型 prompt。proposer 首次看
 }
 ~~~
 
-模型按需调用 rsi_read page。source 读取只覆盖本次 root；轮间反馈只提供下述一个公开投影，不开放其他 root、validation 或 private objects。trace index 同时展示已封存的 subtree usage 和至多三个高成本 Run 的公开 usage 排序，base Method index 提供 entry template 的 guidance/example 引用与资产数量；大库正文按页读取。
+模型按需调用 rsi_read page。source 读取只覆盖本次 root；轮间反馈只提供下述一个公开投影，不开放其他 root、validation 或 private objects。trace index 展示已封存的 subtree usage 和章节索引；具体 Run usage 从相关 timeline/evidence 页读取，base Method index 提供 entry template 的 guidance/example 引用与资产数量；大库正文按页读取。
 
 children 章节索引整次 root 的全部 descendants，每个节点均能追到本次各 Run 的公开模型消息、tool call/result 和 acceptance/ExecutionRecord。这里的 transcript 是 DSH 实际持久的公开轨迹，不要求模型供应商提供内部推理。seal 固定 source resource snapshot，后续资源更新不扩大 proposer 权限。
 
@@ -1814,7 +1813,7 @@ proposing / checking / evaluating ─ rsi/round-closed ─▶ closed
 
 checking 是固定 host procedure，不驱动 proposer 追加领域工作。closed outcome 为 improved、no-improvement、insufficient-evidence、rejected 或 cancelled。前两种必须有完整比较证据；rejected 是 proposal 未通过准入，不是假装评测过后输了。
 
-没有 proposal 的正常 turn/end 记 insufficient-evidence/no-proposal；达到 deadline 记 insufficient-evidence；proposer 宿主/provider 失败抛出并终止本轮尝试，不伪造 Round closure；operator 取消记 cancelled。每 round 只提交一个正式 patch；无效工具参数可以在提交前纠正，但不反复购买一系列候选。
+没有 proposal 的正常 turn/end 记 insufficient-evidence/no-proposal；达到 deadline 记 insufficient-evidence；proposer 宿主/provider 失败抛出并终止本轮尝试，不伪造 Round closure；operator 取消记 cancelled。每 round 只提交一个正式 patch；无效工具参数可以在同一 proposer Run 内纠正，但不反复购买一系列候选。SkillDraft 的 `name` 是 DSH kebab-case 机器标识，不是展示标题，并在提交工具边界拒绝非法值。
 
 candidate-ready 同时把生成的冻结 Method 加入只读 revision catalog，并保存 precheck/MCP bundle manifest receipt。不再对同一候选另外写一条 method/registered。method/registered 仅用于初始化或人工导入既有方法。
 
@@ -1834,34 +1833,29 @@ proposer 是 DSH Agent，但不是普通 Task worker：
 固定 RSI system card：
 
 ~~~text
-You improve one pinned Method using one sealed root execution trace.
-Read the pinned Method and the original guidance/example assets you will change.
-Use the source contract, acceptance, subtree usage and relevant trace pages to
-identify an observed bottleneck. Consult the public protocol resource for runtime
-rules. Distinguish domain failures from infrastructure errors and protocol misuse.
-Align one causal hypothesis with the frozen evaluation metric and thresholds.
-If correctness is already saturated, extra correctness prose cannot raise it.
-Read previous-round feedback when present; revise an unsuccessful hypothesis
-using its measured result. Preserve useful assets and choose the smallest
-executable change that addresses the evidence. Children own their local workflow.
-Start with the indexed costliest Runs and read the trace pages that test your
-hypothesis; submit when the evidence supports a concrete change. Keep the patch
-concise: put each reusable instruction in one asset and refer to it from guidance.
-Use short guidance naming operations and their inputs/outputs; keep detailed code
-in one skill or MCP asset. Send one JSON object as the tool arguments.
-Submit one reusable MethodPatch with rsi_submit_patch. Templates, guidance,
-examples, skill/MCP assets and bindings may evolve; host precheck, evaluation
-and activation approval determine the result.
+Improve reusable Method assets from sealed evidence; Task outputs are per-instance results.
+Read authoring, pinned Method/original assets and previous-round feedback with rsi_read.
+Trace the contract, findings, planning and relevant costs; distinguish workflow,
+domain and host failures. Align one hypothesis and the smallest change with the metric.
+Extract reusable algorithms, scripts/tools or workflow rules, scoped by ordinary inputs;
+avoid instructions that rebuild the same code each trial. Children own their workflows.
+Examples illustrate; never dispatch on case/suite IDs or copy solved data/answers.
+Explain unseen-input transfer and risks; source pass is insufficient.
+Skill names are DSH kebab-case machine IDs. Register assets before binding IDs;
+public catalogs are separate. Keep the composed tool surface within 12 KiB; help is a resource.
+Submit one JSON patch with rsi_submit_patch. Correct invalid arguments in this session;
+accepted submission ends the turn. Host precheck/evaluation/activation decide the result.
 ~~~
 
 工具定义：
 
 ~~~text
 rsi_read
-  input: { kind: proposer-view | trace-index | trace-page | method | asset | public-resources | previous-round,
+  input: { kind: proposer-view | trace-index | trace-page | method | asset | public-resources | previous-round | authoring,
            id?, cursor?, page? }
   output: { data, objectRef, nextCursor?, remainingBudgetPct }
   scope: 本次 source trace、base Method、source 中的 drafts、公开能力目录、公开 RoundPlan，以及同 base 最近一个 closed Round 的限定公开反馈
+  authoring 返回提交工具的精确 MethodPatch JSON Schema（按需读取，不在每次请求重复注入）
   proposer-view 不含 validation/holdout 的具体输入、答案、隐藏测试或 private verifier recipe
 
 rsi_submit_patch
@@ -1924,7 +1918,7 @@ type McpServerDraft = Omit<ToolAsset, 'server'> & {
 
 files 仅允许相对 bundle 路径，拒绝绝对路径、..、symlink 和保留宿主文件。SkillDraft 必须有 SKILL.md；McpServerDraft 必须有可解析 manifest、配置、transport、capability 列表和至少一个 exposed tool schema。MCP server 的语言、依赖和实现形式由 bundle 声明，patch 不能自行修改宿主级 transport 或部署权限。
 
-同一 patch 可以同时新增 skill/MCP server/template 并建立引用；所有变更一次应用后再验证最终目录。保留未使用模板合法；悬空引用、重复 ID 和删除后仍被引用的资产拒绝。改变 entry 只影响未来 root 的模板选择，不改变 root 的真实业务合同。
+同一 patch 可以同时新增 skill/MCP server/template 并建立引用；所有变更一次应用后再验证最终目录。保留未使用模板合法；悬空引用、重复 ID 和删除后仍被引用的资产拒绝。改变 entry 只影响未来 root 的模板选择，不改变 root 的真实业务合同。可迁移的 RSI patch 应按普通输入和适用条件工作；不要按 case/suite 身份分派或复制已解输入/答案；shape 可作为实际算法适用条件，不能冒充领域迁移。可复用实现可进入 Skill 脚本或 MCP，而非每次 trial 重新编写。transferPlan 应包含未见输入的可执行检查；泛化声明受冻结领域用例覆盖约束。
 
 set-entry(null) 清除入口，使未来 root 使用平台 exploration 入口；目录中的其他资产可以保留。固定平台 explore-child 不能被同名 Method 资产覆盖。
 
@@ -1960,6 +1954,8 @@ precheck 只执行上述确定性校验。正向 guidance 是作者写作原则�
 ## 18. Evaluation plan 与可重复 Round decision
 
 Round 是一次 `sealed trace → proposal → candidate → evaluation → result` 的协议单位，不是整个 RSI 系统的轮数上限。每次 Round 只产生一个 candidate；外部可以在上一 Round 完成后用新的 sealed root trace 重复调用同一协议。连续 Round 不新增 Campaign authority。
+
+Evaluation slots 先尝试 candidate arm，再尝试 baseline arm。明确的 visible tool schema 12 KiB 超限在首次模型请求前保存 `ExecutionRecord(invalid, UNSUPPORTED_RESOURCES)`，不购买请求，不自动 retry，也不伪造验收。slot 缺失、无效或取消时停止后续 slots，保留完整计划分母并以 `insufficient-evidence` 结算；有完整独立 fail receipt 的领域失败仍是 complete slot，继续评测。MCP 实际 surface 漂移、CAS、provider、会话及原生清理异常仍原样抛出，不写虚假闭合。
 
 ~~~ts
 interface RoundPlan {
@@ -2235,7 +2231,7 @@ C-24 single-case gain with validation regression is not improved
 
 ## 22. 发布冻结与版本治理
 
-本 V1 发布版冻结 C1–C3、A–F、amendment 001–019 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
+本 V1 发布版冻结 C1–C3、A–F、amendment 001–020 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
 
 ### 22.1 冻结内容
 
@@ -2326,6 +2322,7 @@ C-24 single-case gain with validation regression is not improved
 
 | 018 | 2026-11-04 用户批准停止 round6、提交备份并最小修复后重开 | 明确计划中的功能、依赖、消费者、证据和成本估计；只派发当前就绪的直属职责，消费前批结果后形成后续合同；叶节点以前提和可验证结果界定。计划失去父目标价值时反馈。启动预算标注百分比字段，领域资料区分 elaboration/功能/PPA 证据；无新增 schema、状态、门禁或预制领域 workflow。 |
 | 019 | 2026-11-04 用户授权深入修复；已纳入 | 移除重复许可布尔值，保留实际 guard；evidence/children 统一暴露可直接派发的完整 InputRef，重试读取全部 findings 并保留未满足父目标；不加语义门禁或新状态 |
+| 020 | 2026-11-05 用户要求对照 Core 深查 RSI、工具与领域任务，明确不兜底；已纳入 §17 | authoring 按需 schema；非法 skill name 在同 session 提交前纠正；Method 可保存通用可执行实现；candidate-first，明确 schema 超限无请求且无效 slot 停止；宿主异常保持原边界。无领域语义筛查、重试或新状态。 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

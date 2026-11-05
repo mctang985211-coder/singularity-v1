@@ -920,15 +920,17 @@ void test('oversized visible tool schemas are rejected before the first model re
     })
     const taskId = `oversized-tools-${String(Date.now())}`
     const scenario = await makeScenario(storeRoot, spike.ctx, { taskId, baseToolName: 'verbose_fixture' })
-    await assert.rejects(executeSingleRun({
+    const result = await executeSingleRun({
       ctx: spike.ctx, journalRoot: storeRoot, workspace,
       sessionId: `${taskId}:session`, runId: `${taskId}:run`,
       admission: scenario.runAdmission, composition: scenario.composition,
       agentOptions: agentOptions(), maxOutputBytes: 1024,
       verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
-    }), /visible tool schemas/)
+    })
+    assert.ok(result.kind === 'settled' && result.classification === 'invalid')
+    assert.match(result.executionRecord?.reason ?? '', /visible tool schemas/)
 
-    assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 0)
+    assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 1)
     assert.equal(fixture.requests.length, 0)
 
   })

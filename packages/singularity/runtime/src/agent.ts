@@ -18,7 +18,7 @@ createSkillResourceRoot,
 materializeSkills,registerSkills,removeSkillResourceRoot,
 } from './agent-skills.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
-import { assertPromptBudget,renderWorkerCard,WORKER_PERSONA } from './prompt.ts'
+import { renderWorkerCard,WORKER_PERSONA } from './prompt.ts'
 import type { PlatformPromptRenderer } from './resources.ts'
 import {
 METHOD_GUIDANCE_ORDER,
@@ -69,6 +69,8 @@ const zeroUsage: UsageRecord = {
   steps: 0,
   unknownRequests: 0,
 }
+
+class ToolSchemaBudgetError extends Error {}
 
 /** Drives only DSH lifecycle and returns observations for Run settlement. */
 export async function driveAgent(options: DriveAgentOptions): Promise<AgentDriveResult> {
@@ -132,7 +134,10 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
     const toolFailure = options.controller.snapshot().failure
     if (toolFailure !== undefined) throw toolFailure
   } catch (error) {
-    if (!deadline.aborted && error !== budgetExhausted) failures.push(error)
+    if (error instanceof ToolSchemaBudgetError) {
+      agentErrorCode = 'UNSUPPORTED_RESOURCES'
+      agentErrorDetail = error.message
+    } else if (!deadline.aborted && error !== budgetExhausted) failures.push(error)
     else {
       agentErrorCode = 'budget-exhausted'
       agentErrorDetail = errorMessage(error)
@@ -240,7 +245,9 @@ function buildAgentSetup(
       agentCtx.tools.restrict({ deny: globalNames })
     }
     assertMcpSurface(agentCtx, agent, prepared.methodResources.mcpServers)
-    assertPromptBudget(JSON.stringify(agentCtx.tools.schemas(agent)), 12 * 1024, 'visible tool schemas')
+    const schemaBytes = new TextEncoder().encode(JSON.stringify(agentCtx.tools.schemas(agent))).byteLength
+    if (schemaBytes > 12 * 1024) throw new ToolSchemaBudgetError(
+      `visible tool schemas is ${String(schemaBytes)} bytes, above the 12288 byte budget`)
   }
 }
 

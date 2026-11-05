@@ -45,7 +45,7 @@ export const taskProtocolReference: JsonValue = {
 
 export const planningParameters = {
   sketch: { type: 'json', required: true,
-    description: 'Hierarchy [0,1] or [0,1,2]: self, children, possible grandchildren. In purpose/assumptions explain functions, prerequisites, consumers, evidence and estimated cost/uncertainty. Dispatch ready direct responsibilities; a leaf has settled prerequisites and one directly verifiable result.',
+    description: 'Levels [0,1] or [0,1,2]: self, direct children, possible grandchildren. purpose/assumptions: dependencies, consumers, evidence, cost/uncertainty.',
   },
 } as const
 
@@ -60,7 +60,7 @@ export const planningInputSchema: ToolDefinition['parameters'] = {
 export const decomposeParameters = {
   action: { type: 'string', required: true, description: '"prepare" reads an example; "commit" admits a prepared batch.' },
   bindingId: { type: 'string', description: 'NodeView childOptions bindingId for prepare.' },
-  children: { type: 'json', description: 'ackPreview=previewRef.digest. Copy authorized InputRefs unchanged. Nonempty acceptanceCriteria require pass rules and self-contained shell checks, rerun in a fresh directory with ONLY frozen declared inputs/outputs; worker checkout/build/workspace are absent. Inherit required outputs; localOutputs adds supporting files or []. Probe may repeat within/later batches; required once per batch.' },
+  children: { type: 'json', description: 'ackPreview=previewRef.digest; copy InputRefs unchanged. Checks use bash -e -o pipefail with captured stdout/stderr and ONLY frozen inputs/outputs. Required outputs inherited; localOutputs adds files or [].' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)

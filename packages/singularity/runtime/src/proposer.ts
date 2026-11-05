@@ -25,25 +25,18 @@ const encoder = new TextEncoder()
 const patchInputSchema = protocolJsonSchema(closedObject({ patch: methodPatchSchema }))
 delete patchInputSchema.$schema
 
-export const RSI_PROPOSER_CARD = `You improve one pinned Method using one sealed root execution trace.
-Read the pinned Method and the original guidance/example assets you will change.
-Use the source contract, acceptance, subtree usage and relevant trace pages to
-identify an observed bottleneck. Consult the public protocol resource for runtime
-rules. Distinguish domain failures from infrastructure errors and protocol misuse.
-Align one causal hypothesis with the frozen evaluation metric and thresholds.
-If correctness is already saturated, extra correctness prose cannot raise it.
-Read previous-round feedback when present; revise an unsuccessful hypothesis
-using its measured result. Preserve useful assets and choose the smallest
-executable change that addresses the evidence. Children own their local workflow.
-Start with the root receipt's failed criteria. Follow related Task/Run evidence,
-children and planning pages, then examine relevant costliest Runs. Replan from
-the observed failure mechanism; submit when evidence supports a concrete change. Keep the patch
-concise: put each reusable instruction in one asset and refer to it from guidance.
-Use short guidance naming operations and their inputs/outputs; keep detailed code
-in one skill or MCP asset. Send one JSON object as the tool arguments.
-Submit one reusable MethodPatch with rsi_submit_patch. Templates, guidance,
-examples, skill/MCP assets and bindings may evolve; host precheck, evaluation
-and activation approval determine the result.`
+export const RSI_PROPOSER_CARD = `Improve reusable Method assets from sealed evidence; Task outputs are per-instance results.
+Read authoring, pinned Method/original assets and previous-round feedback with rsi_read.
+Trace the contract, findings, planning and relevant costs; distinguish workflow,
+domain and host failures. Align one hypothesis and the smallest change with the metric.
+Extract reusable algorithms, scripts/tools or workflow rules, scoped by ordinary inputs;
+avoid instructions that rebuild the same code each trial. Children own their workflows.
+Examples illustrate; never dispatch on case/suite IDs or copy solved data/answers.
+Explain unseen-input transfer and risks; source pass is insufficient.
+Skill names are DSH kebab-case machine IDs. Register assets before binding IDs;
+public catalogs are separate. Keep the composed tool surface within 12 KiB; help is a resource.
+Submit one JSON patch with rsi_submit_patch. Correct invalid arguments in this session;
+accepted submission ends the turn. Host precheck/evaluation/activation decide the result.`
 
 export interface PublicEvaluationView {
   readonly goal: string
@@ -81,14 +74,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
   if (service.facts().some(fact => (fact.type === 'rsi/proposal-submitted' || fact.type === 'rsi/round-closed') && fact.data.roundId === roundId)) throw new Error('Proposer Round is no longer proposing')
   const trace = await readPublicTrace(service, opened.data.sourceTrace)
   if (canonicalize(trace.rootTask.method) !== canonicalize(opened.data.baseMethod)) throw new Error('Sealed trace does not use the pinned proposer Method')
-  const sourceSessions = new Set(trace.sessionCuts.map(cut => cut.sessionId))
-  const sourceRunIds = new Set(service.facts().flatMap(fact => fact.type === 'run/opened' && sourceSessions.has(fact.data.sessionId) ? [fact.data.runId] : []))
-  const costliestRuns = service.facts().flatMap(fact => fact.type === 'run/closed' && sourceRunIds.has(fact.data.runId)
-    ? [{ runId: fact.data.runId, classification: fact.data.classification, steps: fact.data.usage.steps,
-      reportedTokens: fact.data.usage.inputTokens + fact.data.usage.outputTokens
-        + (fact.data.usage.summary?.inputTokens ?? 0) + (fact.data.usage.summary?.outputTokens ?? 0) }] : [])
-    .sort((left, right) => right.reportedTokens - left.reportedTokens).slice(0, 3)
-  const index = { ...traceIndex(trace), costliestRuns }
+  const index = { traceId: trace.traceId, rootTask: trace.rootTask, usage: trace.usage, chapters: trace.chapters }
   const plan = await readRoundPlan(service, opened.data.plan)
   if (request.publicEvaluation.validationPolicy !== plan.validation) throw new Error('Public validation policy differs from the frozen RoundPlan')
   const method = parseProtocolValue(methodRevisionSchema, await readRoundObject(service, opened.data.baseMethod, 'method'))
@@ -135,7 +121,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
     ...(previousRound === undefined ? {} : { previousRound: { roundId: previousRound.roundId, outcome: previousRound.outcome,
       readKind: 'previous-round' } }),
     remainingBudgetPct: percentages(),
-    readPolicy: { kinds: ['proposer-view', 'trace-index', 'trace-page', 'method', 'asset', 'public-resources', 'previous-round'], pageMode: 'bounded-paged' },
+    readPolicy: { kinds: ['proposer-view', 'trace-index', 'trace-page', 'method', 'asset', 'public-resources', 'previous-round', 'authoring'], pageMode: 'bounded-paged' },
   })
   const cancel = () => agent?.cancel({ kind: 'hook', reason: 'proposer deadline' })
   deadline.addEventListener('abort', cancel, { once: true })
@@ -168,7 +154,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
       register(withToolExample(defineTool({
         name: 'rsi_read', description: 'Read the proposer view, sealed trace chapters, pinned Method and authorized public source assets by bounded pages.',
         parameters: {
-          kind: { type: 'string', required: true, enum: ['proposer-view', 'trace-index', 'trace-page', 'method', 'asset', 'public-resources', 'previous-round'], description: 'Use {kind:"trace-index"} to list chapters. Read a chapter with {kind:"trace-page",id:"contract",page:0}. Read method for templates, then asset for original guidance/example refs. public-resources lists frozen documents including a task protocol reference when supplied. previous-round gives the latest same-base closed Round public feedback. Omit id except for trace-page and asset.' },
+          kind: { type: 'string', required: true, enum: ['proposer-view', 'trace-index', 'trace-page', 'method', 'asset', 'public-resources', 'previous-round', 'authoring'], description: 'authoring returns the exact MethodPatch schema. Use {kind:"trace-index"} to list chapters. Read a chapter with {kind:"trace-page",id:"contract",page:0}. Read method for templates, then asset for original guidance/example refs. public-resources lists frozen documents including a task protocol reference when supplied. previous-round gives the latest same-base closed Round public feedback. Omit id except for trace-page and asset.' },
           id: { type: 'string', description: 'For trace-page use chapters[].id (for example contract), as listed in the trace index. For asset use an authorized public asset ID or digest.' },
           cursor: { type: 'string', description: 'nextCursor from the previous page.' },
           page: { type: 'integer', description: 'Nonnegative page number, starting at 0.' },
@@ -179,9 +165,9 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
           const page = args.cursor === undefined ? args.page ?? 0 : Number(args.cursor)
           if (!Number.isSafeInteger(page) || page < 0) throw new DecomposeError('INVALID_ARGUMENT', 'Read cursor must identify a nonnegative page')
           let result: unknown
-          if (args.kind === 'proposer-view' || args.kind === 'trace-index') {
+          if (args.kind === 'authoring' || args.kind === 'proposer-view' || args.kind === 'trace-index') {
             if (page !== 0 || args.id !== undefined) throw new DecomposeError('INVALID_ARGUMENT', 'Omit id and use page 0 for this single-page read kind')
-            const data = args.kind === 'proposer-view' ? view() : index
+            const data = args.kind === 'authoring' ? patchInputSchema : args.kind === 'proposer-view' ? view() : index
             const objectRef = await putJson(service, `round:${roundId}:${args.kind}`, data)
             result = { data, objectRef }
           } else if (args.kind === 'previous-round') {
@@ -204,7 +190,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
         },
       }), { kind: 'trace-index' }))
       const submit = defineTool({
-        name: 'rsi_submit_patch', description: 'Submit one reusable MethodPatch. guidance is inline text; example uses illustrative exampleText inputs. files maps relative paths to UTF-8 contents; a skill requires SKILL.md. acceptancePolicy reuses an authorized source/base Ref. set-entry selects a template, or null removes the entry. The host creates refs and digests.',
+        name: 'rsi_submit_patch', description: 'Submit one reusable MethodPatch with exactly {v:1,base,hypothesis,changes,predictedRisks,transferPlan}. Skill drafts use a DSH kebab-case machine name (not a display title) and must include SKILL.md; files are relative UTF-8 contents. Template acceptancePolicy must be an authorized source/base Ref; set-entry selects a template or null removes it. The host creates refs and digests.',
         parameters: { patch: { type: 'json', required: true } },
         output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: canonicalize(value) }] },
         execute: async (args, exec) => {
@@ -214,7 +200,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
           return { submitted: true, proposalRef, remainingBudgetPct: percentages() } as unknown as JsonValue
         },
       })
-      register(withToolExample({ ...submit, parameters: patchInputSchema }, { patch: { v: 1, base: opened.data.baseMethod,
+      register(withToolExample(submit, { patch: { v: 1, base: opened.data.baseMethod,
         hypothesis: 'Describe the reusable improvement.', changes: [], predictedRisks: [], transferPlan: 'Evaluate the changed workflow.' } }))
       const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
       if (globalNames.length > 0) ctx.tools.restrict({ deny: globalNames })
@@ -253,11 +239,6 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
   }
   return { roundId, usage, sessionCut, recordRef, ...(proposalRef === undefined ? {} : { proposalRef }),
     ...(failure === undefined ? {} : { failure }) }
-}
-
-function traceIndex(trace: PublicTrace) {
-  return { traceId: trace.traceId, rootTask: trace.rootTask, usage: trace.usage, chapters: trace.chapters,
-    readPolicy: { pageMode: 'bounded-paged', allow: trace.chapters.map(chapter => chapter.id) } }
 }
 
 /** One projection from facts closed before this Round opened; embedded refs grant no additional reads. */

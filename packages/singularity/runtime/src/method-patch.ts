@@ -1,6 +1,7 @@
 import type {
 FactActor,JsonValue,MethodPatch,MethodRevision,Ref,TaskTemplate,
 } from '@singularity/protocol'
+import { isSkillName } from '@deepseek-ai/dsh-skill'
 import {
 assertTaskTemplateInterface,
 canonicalize,
@@ -42,7 +43,6 @@ export type PatchPrecheckResult =
   | { readonly accepted: true; readonly candidate: MethodRevision; readonly candidateMethod: Ref; readonly precheckReceipt: Ref }
   | { readonly accepted: false; readonly reason: string; readonly precheckReceipt: Ref }
 
-/** Freeze the single formal proposal. Invalid arguments do not consume the Round proposal. */
 export async function submitMethodPatch(request: {
   readonly service: CommandService
   readonly actor: FactActor
@@ -50,6 +50,8 @@ export async function submitMethodPatch(request: {
   readonly value: unknown
 }): Promise<Ref> {
   const patch = parseMethodPatch(request.value)
+  for (const change of patch.changes) if (change.op === 'put-skill' && !isSkillName(change.skill.name))
+    throw new MethodPatchRejection(`skill name ${JSON.stringify(change.skill.name)} is not DSH kebab-case`)
   const opened = request.service.facts().find(fact => fact.type === 'rsi/round-opened' && fact.data.roundId === request.roundId)
   if (opened?.type !== 'rsi/round-opened') throw new Error('Round is not open')
   if (!sameRef(patch.base, opened.data.baseMethod)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')

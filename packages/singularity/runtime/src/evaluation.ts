@@ -43,7 +43,7 @@ export function frozenEvaluationSlots(roundId: string, plan: RoundPlan, base: Re
     const cases = partition === 'evaluation' ? plan.cases : plan.validationCases
     for (const caseRef of cases) {
       for (let repetition = 0; repetition < plan.trialsPerCase; repetition += 1) {
-        for (const arm of ['baseline', 'candidate'] as const) {
+        for (const arm of ['candidate', 'baseline'] as const) {
           const digest = computeDigest('object', { roundId, partition, caseRef, repetition, arm })
           const id = `${roundId}:slot:${digest.slice('sha256:'.length)}`
           slots.push({ id, roundId, taskId: `${id}:task`, partition, caseRef, arm, repetition, method: arm === 'baseline' ? base : candidate })
@@ -339,6 +339,7 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
       },
       canOpenRun: () => reportedEvaluationUsage(service, slots).runCount < plan.budget.maxRuns,
     })
+    if ((await readEvaluationManifest(service, [slot])).slots[0]?.status !== 'complete') break
   }
   const state = await service.taskRunState([])
   await assertPairedContracts(service, state, slots, plan)

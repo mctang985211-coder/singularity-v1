@@ -4,7 +4,7 @@
 
 - `docs/framework.md` 是协议唯一权威；`spec-lock.json` 固定其 digest。`AGENTS.md` 只写施工约束，`docs/progress.md` 写当前状态、证据和缺口。调研 artifact 不替代规范，不另建平行任务卡和交接规范。
 - 开始或恢复工作时阅读相关规范、进度和实际消费者；保留工作区已有未提交成果。旧 Singularity 仓库不提供本仓库兼容要求。
-- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011/012/013/014/015/016/017/018/019 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
+- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011/012/013/014/015/016/017/018/019/020 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
 
 ## 启动条件先于执行
 
@@ -30,7 +30,7 @@
 
 - 默认使用现成库和 DSH 公开插件。保留自定义层必须列出可用原生调用路径，比较本项目接入后的状态、分支和适配成本，明确证明原生方案更复杂；“暂不能证明等价”不构成保留理由。可由操作者固定的环境条件写在启动约定，不添加运行期兜底。内部文件拆分由消费者决定，不设行数/文件数指标，不把临时 owner 表当永久架构。
 - 边界验证真实输入，内部复用已解析类型和结果。相对路径共用 schema；DSH defineTool 已校验参数的部分不再手写 exact-key/类型检查。产物冻结使用原生递归 readdir、leaf no-follow 和最终 hash；不恢复 ancestor walker。路径隔离是部署前置条件，可信本地 fixture 不冒充私有/不可信部署。Zod 单源定义协议结构，Ajv 处理模板提供的动态 JSON Schema；不用手写 JSON parser/schema interpreter，不在每次解析时做 canonical JSON 往返。协议 schema 不使用 transform/default/coercion，由源码门禁约束。
-- 只有模型可修正的参数、计划、提交和协议拒绝返回模型。宿主 CAS、provider、会话、资源、原生清理等未知异常保留原始原因，原生 cancel/dispose 后抛出，不写虚假 invalid/Evidence/闭合 fact。Summary、Proposer、precheck 与 Task 工具遵守同一边界。清理须尝试完成；多重失败保留全部原因，不吞错误。
+- 只有模型可修正的参数、计划、提交和协议拒绝返回模型。明确的 visible tool schema 超限是 Method 组合上限拒绝：首次请求前以现有 ExecutionRecord(invalid) 结算，不自动 retry；MCP surface 漂移等其它资源异常仍抛出。宿主 CAS、provider、会话、资源、原生清理等未知异常保留原始原因，原生 cancel/dispose 后抛出，不写虚假 invalid/Evidence/闭合 fact。Summary、Proposer、precheck 与 Task 工具遵守同一边界。清理须尝试完成；多重失败保留全部原因，不吞错误。
 - 完成的非法工具参数走 DSH 原生解析/校验；Singularity 工具保留原始失败并附 failed 与完整极简格式用例。用例按需展示，不堆进 system prompt；不修补 JSON、不匹配自然语言错误、不建立参数恢复或 provider 重购机制。原始畸形参数须经过真实 provider adapter 的无付费回归，不能只用 JSON.stringify fixture 证明该路径。
 - 预算/截止、领域失败和无效验收仍按协议结算。verifier 转发 AbortSignal 并等待自己拥有的工作退出，不能丢弃 Promise 冒充停止。任意不合作进程内代码不在强停保证内。
 - retry 通过既有 evidence 读取最近 closed Run 的公开逐项验收，复用其 CAS 冻结输出；不读取旧 workspace/transcript。start/batch/tool 预算共用当前 Task 投影，retry 不重置 token/time 百分比。

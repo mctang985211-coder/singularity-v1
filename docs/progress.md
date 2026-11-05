@@ -1,6 +1,6 @@
 # Singularity V1 进度
 
-更新：2026-11-02。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
+更新：2026-11-05。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
 
 用户已授权核实架构审计并联动修改规范、约束、源代码和测试，作为 amendment 006/007/008 纳入框架与 spec-lock。随后授权 deepseek-flash 真实全流程验证、prompt 优化及 PR/合并；amendment 009 澄清 probe 后续批次复用。接手时的 S4–S7 成果保留，没有重置工作区。
 
@@ -383,3 +383,15 @@ round7 冻结 PPA 报告使用 Yosys/OpenSTA，没有实际 `bbdev dc` 调用；
 实际开始 `2026-11-04T22:49:42.325000+08:00`，绝对截止 `2026-11-05T10:49:42.325000+08:00`；整轮共享 12 小时、1,000,000,000 reported tokens、4,000 requests，并发 4，不扩大配额。provider `singularity-local`，模型 `deepseek-flash`、reasoning=max、输出上限 40k，原生 context/compaction 配置保持既有冻结版本。operator PID 1206481，只读 monitor PID 1206482，间隔 1,800 秒；记录直属合同、公开 closure/findings、反馈与 RSI 事件，不增加调度、自动重启或恢复路径。
 
 启动核实时间 `2026-11-04T22:51:47.699694+08:00`：已发起 12 请求、结算 12，input 260736 / output 8908 tokens，unknown=0；operator 与 monitor 存活，无启动 failure 或最终结果。证据为该根的 `operator-startup.json`、`execution/launch.json`、`execution/requests.jsonl` 和 `monitor-*.json`。这只证明真实测试已开始，尚不能判定 consumer、职责保真、重试证据消费或 RSI 改善有效。
+
+### round8 RSI 失败边界审计与修复（2026-11-05）
+
+round8 于 05:06:38 +0800 自然结束，没有运行中的模型进程。2,062 requests，reported input `354,364,047`、output `2,685,399`、unknown=0。worker/children 985 请求、184,417,195 tokens；reviewer 1,053 请求、171,614,631 tokens；proposer 24 请求、1,017,620 tokens。此前把首轮累计约 84.2M input 归给 proposer、把 blocked tiler probe 称为 required、把源码装配异常写作已完成子树取消，均不准确，已删除。
+
+两个 source 均 verified；首轮 rejected 是 Skill.name display title；第二轮 baseline long-k 已 verified，candidate 在首次请求前因 visible tool schema 12607 > 12288 bytes 崩溃。约 3.57 亿 tokens 没有完整 candidate comparison、无 winner、无 activation。归因、Core 对照、过拟合样本与测试集覆盖局限见 [round8 审计](round8-rsi-audit-20261105.md)。
+
+当前修复：authoring schema 按需读；非法 skill name 在提交前可同 session 修正；RSI 提炼输入驱动的通用算法/脚本/工具，实例答案仍属 Task；压缩重复工具说明；candidate-first；明确 schema 超限保存零请求 invalid record，无效/取消 slot 不继续购买后续 slots，普通完整 fail receipt 继续评测。worker 明确 source-backed pass rule、真实 bash/pipefail、捕获流与 CAS-only 条件。MCP surface 漂移、CAS/provider/会话/清理异常继续原样抛出。没有领域检查器、恢复会话、自动重试、固定任务树或人工算法资产。修改前备份 `a570302`，新真实模型 campaign 尚未启动。
+
+最终使用 upstream Node 24.22.2，根 `pnpm verify` **448/448** 通过（protocol 206、runtime 136、app 93、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过；日志 `artifacts/rsi-repair-20261105/final-verify.log`。S6 原生 fixture 分别验证完整 fail receipt 仍执行四个 slots、candidate 无提交后只执行一个 slot且保留四 slot 分母；非法 skill 名同 session 修正、超限零请求 invalid、MCP surface 漂移仍抛出也通过。round8 真实候选在新根与新 Task/Run/session IDs 中零付费装配：原生 schema 12210/12288 bytes，provider tools 12706 bytes；仅一次本地 fixture 请求、故意无提交，不执行 BEMU 或比较收益，见 `artifacts/rsi-repair-20261105/candidate-composition-4/report.json`。冻结管道报错有独立 Node 捕获流复现。上述证据不证明真实模型合同纠错或领域迁移已改善。
+
+相对 `dac8c0e`，全部 `apps/packages`（源码、测试、配置、领域补丁）+945/-845，净增 **100 行**；Buckyball examples +136/-177，净减 **41 行**，统计包含已删除的旧 frontend 入口。`git diff --check` 通过。当前 suite 仍只验证 MXMM 输入迁移，跨算子领域 suite 未实现/实测；没有用放宽功能验收或伪造 comparison/activation 弥补这一缺口。

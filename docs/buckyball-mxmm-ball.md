@@ -39,7 +39,7 @@ bbdev(project, ["bebop-bemu", "--sim", "--chip poly --core-index 2 --binary poly
 
 ## RSI 与证据
 
-比较指标改为通过完整功能验收的 Task 子树 reported tokens 均值，包含子任务与重试。两边全部 verified 且计量完整才能比较；平均至少节省 1000 tokens，且每 case 不退步。proposer/reviewer 的额外请求仍计入整轮预算，不能把该子树指标说成全 campaign 成本。固定 Ball 软件分块不适合强求硬件 PPA 改善，因此删除旧 PPA scorer 和取代失败原因的 PPA 转换，不伪造性能指标。没有放松 root 功能验收来追求进入 RSI。
+比较指标改为通过完整功能验收的 Task 子树 reported tokens 均值，包含子任务与重试。两边全部 verified 且计量完整才能比较；平均至少节省 1000 tokens，且每 case 不退步。proposer/reviewer 的额外请求仍计入整轮预算，不能把该子树指标说成全 campaign 成本。当前用例只覆盖同一 MXMM 的 shape/data 迁移，不能据此声称跨算子或整个加速器领域泛化；Method 可保存通用可执行实现，实例结果不能作为答案资产。固定 Ball 软件分块不适合强求硬件 PPA 改善，因此删除旧 PPA scorer 和取代失败原因的 PPA 转换，不伪造性能指标。没有放松 root 功能验收来追求进入 RSI。
 
 source 失败也可封存为学习证据并打开 RSI；配额耗尽则只封存，不再购买 proposer。proposer 若将公开工具 ID 绑定进模板，须先用 put-tool 注册进 Method；不放行 dangling binding。source、两公开 case 与独立验证 case 都通过现有冻结评测路径；不同 arm 不共享候选实现。条件满足后沿 trusted expected-head activation，发布后另跑工作验证。
 

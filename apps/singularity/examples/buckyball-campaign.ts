@@ -126,7 +126,7 @@ export async function runBuckyballCampaign(root: string, prepared: string) {
       await openRsiRound({ service, actor, roundId, sourceTrace: trace.trace, baseMethod: active, plan, proposerSessionId: `${roundId}:proposer` })
       const workspace = join(root, 'proposers', String(index + 1)); await mkdir(workspace, { recursive: true })
       const proposal = await executeRsiProposer({ ctx: spike.ctx, service, actor, roundId, workspace, agentOptions: options,
-        publicEvaluation: { goal: 'Improve reusable Ball workflow and Method from sealed execution; implementation belongs in Task output. Public tools are not Method registrations: put-tool before binding its ID in a template.',
+        publicEvaluation: { goal: 'Improve reusable Ball algorithms, tools and workflow from sealed execution for unseen dimensions/data. Instance results stay in Task outputs; reusable executable assets may enter Method. Register Method assets before binding IDs; public tools are a separate catalog.',
           metric: 'Mean host-accounted reported tokens per complete verified Task subtree, lower is better. Every functional criterion must pass in both arms.',
           thresholds: ['Save at least 1000 mean reported tokens; no per-case cost regression. Failed functionality or missing usage is not comparable.'], validationPolicy: 'required-by-domain',
           publicCases: definitions.slice(0, 2).map(value => ({ id: value.id, description: value.detail })) } })

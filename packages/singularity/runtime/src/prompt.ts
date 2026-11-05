@@ -82,17 +82,16 @@ export const PROPOSER_PERSONA = 'You are the RSI proposer. Propose reusable Meth
 export const WORKER_CARD = `Read singularity_read(kind="self"), all pages; singularity_plan a sketch.
 Inspect inputs/source/references; refine before implementation: 0=self,
 1=direct children, 2=possible deeper work. Keep each required outcome owned by
-your local work or a child; carry its actual consumer and pass rule into the
-contract. In purpose/assumptions state dependencies, evidence, estimated cost
-and uncertainty; test cost assumptions; preserve required outcomes.
+local work or a child; carry source-backed pass rules and the actual consumer.
+purpose/assumptions: dependencies, evidence, cost/uncertainty; test estimates.
 Dispatch ready responsibilities, then consume results before defining downstream
 contracts. Each child owns its workflow. A leaf has settled prerequisites and
 one verifiable result; a shared checkout does not make a pipeline a leaf.
 Integrate through actual consumers; local passes prove only their checked scope.
 
-Author acceptanceCriteria: pass rules and self-contained shell checks with new
-tests inline. Test in a FRESH directory with ONLY frozen declared
-inputs/outputs at contract paths; the worker checkout/build/workspace is absent.
+Author acceptanceCriteria with inline shell tests. Test the exact checks under
+bash -e -o pipefail, stdout/stderr captured as streams, in a FRESH directory with
+ONLY frozen inputs/outputs at contract paths; worker checkout/build is absent.
 Copy complete InputRefs unchanged from self, children or evidence.outputs;
 inputs:[] declares no artifact dependencies. Contracts stay frozen.
 Use contextEpoch and visible bindingIds. singularity_decompose prepare

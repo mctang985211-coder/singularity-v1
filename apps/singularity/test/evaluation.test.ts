@@ -13,12 +13,13 @@ import { contractPayload, methodPayload, planReply, submitReply, withHarness, wr
 import { agentOptions, fixtureUsage, FROZEN_OUTPUT, jsonBytes, makeScenario, OUTPUT_PATH } from './task-fixture.ts'
 import type { Scenario } from './task-fixture.ts'
 
-void test('S6 ordinary DSH Task trees execute every multi-case arm, independently compare, close and replay without new requests', { timeout: 240_000 }, async () => {
+for (const incomplete of [false, true]) void test(`S6 ${incomplete ? 'incomplete candidate stops without buying baseline' : 'complete failed receipts preserve subsequent paired slots'}`, { timeout: 240_000 }, async () => {
   const taskId = `task-evaluation-${String(process.pid)}-${String(Date.now())}`
   let current: Scenario | undefined
   let currentRunId = `${taskId}:run`
   await withHarness((request, index) => {
     assert.ok(current)
+    if (incomplete && index === 4) return { content: 'End without a submission.', usage: fixtureUsage(index) }
     const step = index % 4
     if (step === 0) return {
       toolCalls: [{ id: `eval-read-${String(index)}`, name: 'singularity_read', arguments: JSON.stringify({ kind: 'self' }) }], usage: fixtureUsage(index),
@@ -45,7 +46,7 @@ void test('S6 ordinary DSH Task trees execute every multi-case arm, independentl
         return sealPublicReceipt({
           v: 1, provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,
           inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
-          criteria: contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Fixture exact byte check.', metric: { name: 'output-bytes', unit: 'bytes', value: bytes.length } })),
+          criteria: contract.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: contract.method.id.endsWith(':candidate') ? 'fail' : 'pass', reason: 'Fixture business verdict after byte check.', metric: { name: 'output-bytes', unit: 'bytes', value: bytes.length } })),
           exit: { code: 0, signal: null }, timedOut: false,
         })
       },
@@ -111,7 +112,7 @@ void test('S6 ordinary DSH Task trees execute every multi-case arm, independentl
             const value = (arm: 'baseline' | 'candidate') => {
               const item = evidence.find(item => item.caseRef.id === caseRef.id && item.arm === arm)
               assert.ok(item)
-              assert.equal(item.verdict, 'verified')
+              assert.equal(item.verdict, arm === 'candidate' ? 'failed' : 'verified')
               return item.receipt.criteria[0]?.metric?.value ?? Number.NaN
             }
             return { caseRef, baseline: value('baseline'), candidate: value('candidate'), verdict: 'Exact frozen output bytes.' }
@@ -130,18 +131,18 @@ void test('S6 ordinary DSH Task trees execute every multi-case arm, independentl
             method: slotRequest.slot.method, template: { id: source.contract.template.id, digest: slotRequest.slot.method.digest },
           })
           const tree = await run(contract, join(workspace, slotRequest.slot.id.slice(-64)), slotRequest.checkReportedBudget, slotRequest.canOpenRun)
-          assert.equal(tree.root.classification, 'verified', tree.root.executionRecord?.reason)
+          assert.equal(tree.root.classification, slotRequest.slot.arm === 'candidate' ? 'failed' : 'verified', tree.root.executionRecord?.reason)
         },
       })
       comparisonRef = result.comparisonRef
-      assert.equal(result.comparison.outcome, 'no-improvement')
-      assert.equal(result.comparison.complete, true)
-      assert.equal(result.comparison.completeCases, 2)
+      assert.equal(result.comparison.outcome, incomplete ? 'insufficient-evidence' : 'no-improvement')
+      assert.equal(result.comparison.complete, !incomplete)
+      assert.equal(result.comparison.completeCases, incomplete ? 0 : 2)
       assert.equal(result.comparison.slots.length, 4)
       assert.equal(result.comparison.usage.unknownRequests, 0)
-      assert.equal(verified.length, 5)
-      assert.equal(fixture.requests.length, 20)
-      assert.equal((await service.methodRoundState()).rounds.get(roundId)?.closed?.outcome, 'no-improvement')
+      assert.equal(verified.length, incomplete ? 1 : 5)
+      assert.equal(fixture.requests.length, incomplete ? 5 : 20)
+      assert.equal((await service.methodRoundState()).rounds.get(roundId)?.closed?.outcome, result.comparison.outcome)
     } finally {
       await service.close()
     }
@@ -149,9 +150,9 @@ void test('S6 ordinary DSH Task trees execute every multi-case arm, independentl
     try {
       const result = await evaluateRsiCandidate({ service: replay, actor, roundId, runTask: () => { throw new Error('closed replay must not start another Task') } })
       assert.deepEqual(result.comparisonRef, comparisonRef)
-      assert.equal(result.comparison.outcome, 'no-improvement')
-      assert.equal(fixture.requests.length, 20)
-      assert.equal((await replay.taskRunState([])).tasks.size, 5)
+      assert.equal(result.comparison.outcome, incomplete ? 'insufficient-evidence' : 'no-improvement')
+      assert.equal(fixture.requests.length, incomplete ? 5 : 20)
+      assert.equal((await replay.taskRunState([])).tasks.size, incomplete ? 2 : 5)
     } finally {
       await replay.close()
     }

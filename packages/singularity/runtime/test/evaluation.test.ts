@@ -76,7 +76,7 @@ void test('slots deterministically include both fresh arms, repetitions and held
   assert.equal(slots.length, 12)
   assert.equal(new Set(slots.map(slot => slot.id)).size, slots.length)
   assert.deepEqual(slots, frozenEvaluationSlots('round', plan, base, candidate))
-  assert.deepEqual(slots.slice(0, 4).map(slot => [slot.arm, slot.repetition]), [['baseline', 0], ['candidate', 0], ['baseline', 1], ['candidate', 1]])
+  assert.deepEqual(slots.slice(0, 4).map(slot => [slot.arm, slot.repetition]), [['candidate', 0], ['baseline', 0], ['candidate', 1], ['baseline', 1]])
   assert.equal(slots.filter(slot => slot.partition === 'validation').length, 4)
   assert.ok(slots.every(slot => slot.method.id === (slot.arm === 'baseline' ? base.id : candidate.id)))
 })

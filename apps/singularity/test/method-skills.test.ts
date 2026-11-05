@@ -23,6 +23,7 @@ S4A2_SKILL_DESCRIPTION,
 S4A2_SKILL_NAME,
 s4a2SecondSkill,
 s4a2Skill,
+s4a3Server,withS4a3Tmp,
 } from './method-fixture.ts'
 import {
 captureAgentContexts,
@@ -36,7 +37,7 @@ fixtureUsage,
 makeScenario
 } from './task-fixture.ts'
 
-void test('S4-A2 create discovers the bound Method skill and reads it without touching the system prompt', { timeout: 240_000 }, async () => {
+void test('S4-A2 skill, native jobs and MCP compose within budget and scoped discovery reads the skill', { timeout: 240_000 }, async () => {
   const taskId = `task-s4a2-create-${String(process.pid)}-${String(Date.now())}`
   const sessionId = `${taskId}-session`
   const runId = `${taskId}-run`
@@ -63,10 +64,13 @@ void test('S4-A2 create discovers the bound Method skill and reads it without to
     assert.equal(statSync(join(path, 'refs/notes.txt')).mode & 0o222, 0)
     return { content: 'The frozen skill reference was read without submitting.', usage: fixtureUsage(index) }
   }, async ({ spike, fixture, workspace, home, storeRoot }) => {
+    await spike.ctx.plugin(await import('@deepseek-ai/dsh-tool-jobs'))
     const scenario = await makeScenario(storeRoot, spike.ctx, {
       taskId,
       maxRuns: 1,
       skills: [skill],
+      baseToolNames: ['bash', 'job_output', 'job_list', 'job_kill'],
+      mcpServers: [await s4a3Server(join(storeRoot, 'skill-mcp.log'))],
     })
     assert.equal(scenario.composition.skills.length, 1)
     const prompts: string[] = []
@@ -82,7 +86,7 @@ void test('S4-A2 create discovers the bound Method skill and reads it without to
     })
     let result
     try {
-      result = await executeSingleRun({
+      result = await withS4a3Tmp(() => executeSingleRun({
         ctx: spike.ctx,
         journalRoot: storeRoot,
         workspace,
@@ -97,7 +101,7 @@ void test('S4-A2 create discovers the bound Method skill and reads it without to
           verify() { throw new Error('S4-A2 create must not verify without submission') },
         },
         transientInvalidReasons: [],
-      })
+      }))
     } finally {
       disposePrompts()
       disposeContexts()
