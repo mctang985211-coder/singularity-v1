@@ -100,7 +100,7 @@ export interface McpDispatchPlan {
 export async function readMcpServers(
   reader: CasObjectReader,
   method: Pick<MethodRevision, 'tools'>,
-  template: TaskTemplate,
+  template: Pick<TaskTemplate, 'tools'>,
   contractRefs: readonly Ref[],
 ): Promise<readonly FrozenMcpServer[]> {
   const catalog = await readToolCatalog(reader, method.tools)

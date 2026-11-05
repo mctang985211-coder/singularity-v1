@@ -10,14 +10,11 @@ import { CompactionId } from '@deepseek-ai/dsh-compaction'
 import * as mcpClient from '@deepseek-ai/dsh-mcp-client'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId,SessionSeq } from '@deepseek-ai/dsh-session'
-import type { RoundPlan } from '@singularity/protocol'
-import type { PublicEvaluationEvidence } from '@singularity/runtime'
 import { createWakeMessage,snapshotSession } from '@singularity/runtime'
 
-import { runBuckyballCampaign } from '../examples/buckyball-campaign.ts'
-import { compareBallCost } from '../examples/buckyball-acceptance.ts'
-import { BUCKYBALL_BALL_CAMPAIGN } from '../examples/buckyball-ball-task.ts'
-import { nativeAccounting } from '../examples/native-accounting.ts'
+import { buckyballDomain } from '../examples/buckyball.ts'
+import { EXPERIMENT_BUDGET,runExperiment } from '../src/experiment.ts'
+import { nativeAccounting } from '../src/accounting.ts'
 import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
 import { withHarness } from './run-fixture.ts'
 import { agentOptions } from './task-fixture.ts'
@@ -138,20 +135,6 @@ void test('native campaign meter includes auxiliary calls; session projection co
   })
 })
 
-void test('Ball comparator counts whole-subtree cost only after complete functional acceptance', () => {
-  const caseRef = { id: 'ball-case', digest: `sha256:${'a'.repeat(64)}` }
-  const plan = { cases: [caseRef], validationCases: [], trialsPerCase: 1 } as unknown as RoundPlan
-  const trial = (arm: 'baseline' | 'candidate', tokens: number) => ({ caseRef, arm, verdict: 'verified',
-    usage: { inputTokens: tokens, outputTokens: 10, complete: true } }) as PublicEvaluationEvidence
-  const before = trial('baseline', 2000), after = trial('candidate', 900)
-  const good = compareBallCost(plan, [before, after])
-  assert.equal(good.comparable, true)
-  assert.equal(good.aggregateDelta, 1100)
-  assert.equal(compareBallCost(plan, [before, { ...after, verdict: 'failed' }]).comparable, false)
-  assert.equal(compareBallCost(plan, [before, { ...after, usage: { ...after.usage, complete: false } }]).comparable, false)
-  assert.equal(compareBallCost(plan, [before]).comparable, false)
-})
-
 void test('Ball campaign admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'buckyball-campaign-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -173,14 +156,14 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
   const fixture = await startChatCompletionsFixture((request, index) => {
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `ball-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
       usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
-    if (toolSchemaNames(request).includes('buckyball_review_submit')) {
-      if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: BUCKYBALL_BALL_CAMPAIGN.maxReportedTokens,
-        completionTokens: 10, totalTokens: BUCKYBALL_BALL_CAMPAIGN.maxReportedTokens + 10 } }
-      if (!toolNames(request).includes('buckyball_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
-        name: 'buckyball_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
+    if (toolSchemaNames(request).includes('singularity_review_submit')) {
+      if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: EXPERIMENT_BUDGET.maxReportedTokens,
+        completionTokens: 10, totalTokens: EXPERIMENT_BUDGET.maxReportedTokens + 10 } }
+      if (!toolNames(request).includes('singularity_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
+        name: 'singularity_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
       reviews += 1
-      return call('buckyball_review_submit', { result: { criteria: ['executable-mapping', 'target-correctness', 'regression', 'delivery']
+      return call('singularity_review_submit', { result: { criteria: ['executable-mapping', 'target-correctness', 'regression', 'delivery']
         .map(id => ({ id, verdict: 'fail', reason: 'Missing actual MXMM consumer: fixture failure must remain actionable.' })) } })
     }
     if (toolSchemaNames(request).includes('rsi_submit_patch')) {
@@ -221,7 +204,7 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     if (oldKey === undefined) delete process.env.SINGULARITY_SPIKE_API_KEY
     else process.env.SINGULARITY_SPIKE_API_KEY = oldKey
   })
-  await runBuckyballCampaign(root, prepared)
+  await runExperiment(root, await buckyballDomain(prepared))
   const result = JSON.parse(await readFile(join(root, 'result.json'), 'utf8')) as { failure?: string; outcomes: { source: string; activation?: unknown }[]; usage: { requests: number; completed: number; unknown: number } }
   assert.equal(result.failure, undefined)
   assert.equal(result.outcomes.length, 3)
@@ -236,11 +219,11 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     cases: { spec: { inputs: { id: string; object: { digest: string } }[]; goal: { constraints: string[] } } }[]
   }
   assert.ok(launch.sourceSpec.goal.constraints.some(value => value.includes(`${baseline}/.agents/skills/`)))
-  assert.deepEqual(launch.sourceSpec.inputs.map(value => value.id), ['project', 'experiment-guide'])
+  assert.deepEqual(launch.sourceSpec.inputs.map(value => value.id), ['project'])
   assert.equal(launch.cases.length, 3)
   for (const { spec } of launch.cases) {
     assert.ok(spec.goal.constraints.some(value => value.includes(`${baseline}/.agents/skills/`)))
-    assert.deepEqual(spec.inputs.map(value => value.id), ['project', 'experiment-guide'])
+    assert.deepEqual(spec.inputs.map(value => value.id), ['project'])
   }
   const receipts = glob(`${root}/reviews/*/receipt.json`)
   for await (const path of receipts) {
@@ -251,7 +234,7 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     [baseline, 'develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', '--help', 'literal;$(false)'])
   exhaustReview = true
   const exhausted = join(directory, 'budget-exhausted')
-  await runBuckyballCampaign(exhausted, prepared)
+  await runExperiment(exhausted, await buckyballDomain(prepared))
   const stopped = JSON.parse(await readFile(join(exhausted, 'result.json'), 'utf8')) as { failure?: string; outcomes: unknown[]; usage: { unknown: number } }
   assert.equal(stopped.failure, undefined, 'a budget cancellation seals its terminal ExecutionRecord without a host failure')
   assert.deepEqual(stopped.outcomes, [])

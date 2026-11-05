@@ -1,22 +1,4 @@
-import type { Ref,RoundPlan,TaskLimits,TaskSpec } from '@singularity/protocol'
-
-const maxWallClockMs = 12 * 60 * 60 * 1000
-const maxReportedTokens = 1_000_000_000
-
-/** All agents share the campaign cap; child budgets do not multiply it. */
-export const BUCKYBALL_BALL_CAMPAIGN = {
-  maxWallClockMs,
-  maxReportedTokens,
-  maxRequests: 4000,
-  maxActive: 4,
-  maxOutputBytes: 256 * 1024 * 1024,
-  task: { maxRuns: 3, maxStepsPerRun: 4096, maxTokens: maxReportedTokens,
-    maxDepth: 8, maxTasks: 256, maxBatchChildren: 8 } satisfies Omit<TaskLimits, 'deadlineAt'>,
-  proposerBudget: { maxSteps: 4096, maxTokens: maxReportedTokens,
-    maxWallClockMs } satisfies RoundPlan['proposerBudget'],
-  evaluationBudget: { maxRuns: 6 * 256 * 3, maxTokens: maxReportedTokens,
-    maxWallClockMs, maxActiveRuns: 4 } satisfies RoundPlan['budget'],
-} as const
+import type { Ref,TaskSpec } from '@singularity/protocol'
 
 export function buckyballBallTaskSpec(project: Ref): TaskSpec {
   return {

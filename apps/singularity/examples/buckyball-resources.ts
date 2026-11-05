@@ -2,13 +2,12 @@ import { readFile } from 'node:fs/promises'
 
 import type { Ref,ToolAsset } from '@singularity/protocol'
 import { canonicalize,seal } from '@singularity/protocol'
-import type { CommandService } from '@singularity/runtime'
+import type { CasObjectWriter } from '@singularity/runtime'
 
 import { bbdevDescription,bbdevInstructions,bbdevParameters,checkoutDescription,checkoutParameters } from './buckyball-mcp.ts'
-import { BUCKYBALL_BALL_CAMPAIGN } from './buckyball-ball-task.ts'
 
 /** Freeze the operator-prepared domain tool into the ordinary exploration catalog. */
-export async function freezeBuckyballTools(service: CommandService, baseline: string): Promise<ToolAsset[]> {
+export async function freezeBuckyballTools(service: CasObjectWriter, baseline: string, toolCallTimeoutMs = 12 * 60 * 60 * 1000): Promise<ToolAsset[]> {
   const put = (id: string, value: unknown) => service.putObject(id, new TextEncoder().encode(canonicalize(value)))
   let source = await readFile(new URL('./buckyball-mcp.ts', import.meta.url), 'utf8')
   for (const name of ['@modelcontextprotocol/server', '@modelcontextprotocol/server/stdio']) {
@@ -21,7 +20,7 @@ export async function freezeBuckyballTools(service: CommandService, baseline: st
   const manifest = await put('buckyball:mcp:manifest', { serverName: 'buckyball', transport: 'stdio', instructions: bbdevInstructions,
     entrypoint: 'server.ts', limits: { maxBundleBytes: 1024 * 1024 } })
   const config = await put('buckyball:mcp:config', { transport: 'stdio', command: process.execPath, args: ['server.ts'], env: { BUCKYBALL_BASELINE: baseline },
-    toolCallTimeoutMs: BUCKYBALL_BALL_CAMPAIGN.maxWallClockMs, maxInstructionBytes: 8192 })
+    toolCallTimeoutMs: toolCallTimeoutMs, maxInstructionBytes: 8192 })
   return [{ id: 'buckyball-bbdev', name: 'buckyball', description: 'Existing bbdev CLI with project-local Nix activation.', kind: 'mcp-server',
     server: { bundle, sourceFiles: bundle, manifest, config, transport: 'stdio', capabilities: ['public-ball-development'],
       exposedTools: [{ name: 'checkout', description: checkoutDescription, parameters: checkoutParameters },

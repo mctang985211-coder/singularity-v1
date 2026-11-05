@@ -16,11 +16,11 @@
     maxTimeoutMs: 10800000
 
 - insert:
-    - id: ball-shell-env
+    - id: experiment-shell-env
       name: '@deepseek-ai/dsh-shell-env'
-    - id: ball-bash
+    - id: experiment-bash
       name: '@deepseek-ai/dsh-tool-bash'
-    - id: ball-jobs
+    - id: experiment-jobs
       name: '@deepseek-ai/dsh-tool-jobs'
       config:
         completionDelivery: quiet

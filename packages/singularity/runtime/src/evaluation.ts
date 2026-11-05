@@ -430,3 +430,19 @@ function tokenCount(usage: Pick<UsageRecord, 'inputTokens' | 'outputTokens'>): n
 function same(left: Ref, right: Ref): boolean {
   return left.id === right.id && left.digest === right.digest
 }
+
+/** Compare complete, functionally verified Task subtrees using host-accounted usage. */
+export function compareReportedTokens(plan: RoundPlan, evidence: readonly PublicEvaluationEvidence[]) {
+  if (evidence.some(value => value.verdict !== 'verified')) return { comparable: false as const, reason: 'functional-acceptance-required' }
+  const cases = []
+  for (const caseRef of [...plan.cases, ...plan.validationCases]) {
+    const arm = (name: 'baseline' | 'candidate') => evidence.filter(value => value.caseRef.digest === caseRef.digest && value.caseRef.id === caseRef.id && value.arm === name)
+    const baseline = arm('baseline'), candidate = arm('candidate')
+    if (baseline.length !== plan.trialsPerCase || candidate.length !== plan.trialsPerCase) return { comparable: false as const, reason: 'missing-cost-trial' }
+    if ([...baseline, ...candidate].some(value => !value.usage.complete)) return { comparable: false as const, reason: 'missing-cost' }
+    const mean = (values: typeof baseline) => values.reduce((sum, value) => sum + value.usage.inputTokens + value.usage.outputTokens, 0) / values.length
+    const before = mean(baseline), after = mean(candidate)
+    cases.push({ caseRef, baseline: before, candidate: after, verdict: after < before ? 'improved' : after > before ? 'regression' : 'equal' })
+  }
+  return { comparable: true as const, cases, aggregateDelta: cases.reduce((sum, value) => sum + value.baseline - value.candidate, 0) / cases.length }
+}

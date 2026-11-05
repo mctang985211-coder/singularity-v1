@@ -7,7 +7,7 @@ import test from 'node:test'
 import { canonicalize, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type { Ref, RoundPlan, TaskRunState, TaskState } from '@singularity/protocol'
 
-import { compareEvaluation, frozenEvaluationSlots, readEvaluationManifest } from '../src/evaluation.ts'
+import { compareEvaluation, compareReportedTokens, frozenEvaluationSlots, readEvaluationManifest } from '../src/evaluation.ts'
 import type { EvaluationComparator, EvaluationManifest, EvaluationSlotResult, EvaluationUsage } from '../src/evaluation.ts'
 import { CommandService } from '../src/service.ts'
 
@@ -162,4 +162,12 @@ void test('slot accounting includes failed attempts, descendants and owned summa
   assert.equal(result.runCount, 3)
   assert.deepEqual(result.usage, { inputTokens: 33, outputTokens: 7, steps: 4, unknownRequests: 1, complete: true })
   assert.equal(result.slots[0].publicEvidence, undefined)
+})
+
+void test('reported-token comparison requires complete verified pairs for every case and repetition', () => {
+  const evidence = manifest().slots.flatMap(slot => slot.publicEvidence === undefined ? [] : [slot.publicEvidence])
+  assert.equal(compareReportedTokens(plan, evidence).aggregateDelta, 0)
+  assert.equal(compareReportedTokens(plan, evidence.slice(1)).comparable, false)
+  assert.equal(compareReportedTokens(plan, evidence.map(value => ({ ...value, verdict: 'failed' }))).comparable, false)
+  assert.equal(compareReportedTokens(plan, evidence.map(value => ({ ...value, usage: { ...value.usage, complete: false } }))).comparable, false)
 })
