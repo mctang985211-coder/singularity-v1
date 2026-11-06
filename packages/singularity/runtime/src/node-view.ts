@@ -18,6 +18,7 @@ export interface NodeViewCatalogInput {
   readonly template: TaskTemplate
   readonly skills: readonly FrozenSkillResource[]
   readonly mcpServers: readonly FrozenMcpServer[]
+  readonly mcpResources?: boolean
   readonly budget: RemainingBudgetPct
   readonly lastAttempt: NodeView['lastAttempt']
   readonly asOf: number
@@ -37,7 +38,7 @@ interface ProjectionInput extends NodeViewCatalogInput {
 function projectNodeView(input: ProjectionInput): NodeView {
   const toolNames = [...input.baseToolNames]
   if (input.skills.length > 0 && !toolNames.includes('skill')) toolNames.push('skill')
-  const mcpPlan = mcpDispatchPlan(input.mcpServers)
+  const mcpPlan = mcpDispatchPlan(input.mcpServers, input.mcpResources !== false)
   for (const name of [...mcpPlan.publicToolNames, ...mcpPlan.resourceToolNames]) {
     if (!toolNames.includes(name)) toolNames.push(name)
   }

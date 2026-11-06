@@ -54,6 +54,11 @@ export const planningSketchSchema = closedObject({
   v: z.literal(1),
   taskId: z.string(),
   runId: z.string(),
+  // Context epochs are opaque host identities. The planning tool additionally
+  // accepts `current` as a host-resolved shorthand; persisted sketches always
+  // contain the actual epoch. Keep this field opaque rather than imposing the
+  // digest shape used by sourceContract: protocol fixtures and DSH adapters
+  // may use non-digest epoch identities.
   contextEpoch: z.string(),
   objective: z.string(),
   levels: planningSketchLevelsSchema,

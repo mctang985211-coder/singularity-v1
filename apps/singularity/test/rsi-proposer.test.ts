@@ -42,6 +42,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       assert.ok(context.includes(canonicalize(scenario.method.templates[0].guidance)))
       assert.ok(context.includes(canonicalize(scenario.method.templates[0].example)))
       assert.ok(Buffer.byteLength(JSON.stringify(request.tools)) < 4096, 'authoring schema is read on demand')
+      assert.equal(messageTexts(request).some(text => text.includes('Track every background job') || text.includes('Check the [exit code:')), false)
       return { toolCalls: ['public-resources', 'authoring'].map(kind => ({ id: `read-${kind}`, name: 'rsi_read', arguments: JSON.stringify({ kind }) })), usage: fixtureUsage(index) }
     }
     if (index === 5) {

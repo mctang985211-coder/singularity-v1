@@ -16,6 +16,15 @@ pnpm verify
 - `apps/singularity`: DSH profile and host composition.
 - `packages/domains/inventory`: public example domain, verifier and comparator.
 - `apps/singularity/examples/inventory-validation.ts`: optional bounded model exercise.
+- `domain-tasks/template`: standalone JSON/data domain authoring example; no host imports or required domain TypeScript.
+- `domain-tasks/buckyball`: external MXMM task, frozen cases and standard MCP assets.
+
+Raw materials can be prepared by an ordinary DSH env-builder session, then loaded as data by a fresh execution. The builder has no Task, RSI or Method write authority and does not hot-update a live run:
+
+```bash
+node apps/singularity/src/env-builder.ts <materials-directory> <fresh-preparation-root>
+node apps/singularity/src/domain.ts <fresh-execution-root> <fresh-preparation-root/domain>
+```
 
 An execution root belongs to one live process. Exit archives it; start new work with a new root. Configure trusted assets, provider, budgets, deadline and deployment permissions before launch. Private fixtures and untrusted code require a real OS/container/broker boundary supplied by the deployment. Local public fixtures do not establish that boundary.
 

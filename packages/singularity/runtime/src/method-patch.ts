@@ -239,11 +239,22 @@ async function effectiveContent(service: CommandService, method: MethodRevision)
     return bundle.manifest.files.map(file => ({ path: file.path,
       digest: computeDigestBytes('object', bundle.contents.get(file.path) ?? new Uint8Array()) }))
   }
+  const catalog = new Map(method.templates.map(template => [template.id, template]))
+  const reachable = new Set<string>()
+  const pending = method.entryTemplateId === undefined ? [] : [method.entryTemplateId]
+  for (const id of pending) {
+    if (reachable.has(id)) continue
+    reachable.add(id)
+    pending.push(...catalog.get(id)?.children.map(binding => binding.templateId) ?? [])
+  }
+  const templates = method.templates.filter(template => reachable.has(template.id))
+  const skillIds = new Set(templates.flatMap(template => template.skills))
+  const toolIds = new Set(templates.flatMap(template => template.tools))
   return {
     entry: method.entryTemplateId ?? null,
-    templates: method.templates.map(template => ({ ...template, guidance: template.guidance.digest, example: template.example.digest })),
-    skills: await Promise.all(method.skills.map(async skill => ({ ...skill, bundle: await tree(skill.bundle) }))),
-    tools: await Promise.all(method.tools.map(async tool => ({ ...tool, server: {
+    templates: templates.map(template => ({ ...template, guidance: template.guidance.digest, example: template.example.digest })),
+    skills: await Promise.all(method.skills.filter(skill => skillIds.has(skill.id)).map(async skill => ({ ...skill, bundle: await tree(skill.bundle) }))),
+    tools: await Promise.all(method.tools.filter(tool => toolIds.has(tool.id)).map(async tool => ({ ...tool, server: {
       ...tool.server, bundle: await tree(tool.server.bundle), sourceFiles: await tree(tool.server.sourceFiles),
       manifest: tool.server.manifest.digest, config: tool.server.config.digest,
     } }))),

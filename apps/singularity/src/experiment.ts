@@ -3,24 +3,25 @@ import { join } from 'node:path'
 
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { GlobalResourceSnapshot,JsonValue,Ref,RoundPlan,TaskContract,TaskLimits,TaskSpec,ToolAsset } from '@singularity/protocol'
+import type { GlobalResourceSnapshot,JsonValue,Ref,RoundPlan,TaskContract,TaskLimits,TaskSpec } from '@singularity/protocol'
 import { admitRootTask,canonicalize,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseProtocolValue,resolveTemplateView,sealMethodRevision } from '@singularity/protocol'
-import type { CasObjectWriter,EvaluationTaskRequest } from '@singularity/runtime'
+import type { EvaluationTaskRequest } from '@singularity/runtime'
 import { activateRoundCandidate,AGENT_REVIEW_POLICY,createAgentVerifier,compareReportedTokens,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
 
 import { bootSpikeProfile,buildSingleRunComposition } from './host-composition.ts'
 import { nativeAccounting } from './accounting.ts'
+import type { ExperimentDomain } from './domain.ts'
 
 const maxWallClockMs = 12 * 60 * 60 * 1000
 const maxReportedTokens = 1_000_000_000
 
-/** All agents share the campaign cap; child budgets do not multiply it. */
 export const EXPERIMENT_BUDGET = {
   maxWallClockMs,
   maxReportedTokens,
   maxRequests: 4000,
   rounds: 3,
   maxActive: 4,
+  reviewMaxSteps: 128,
   maxOutputBytes: 256 * 1024 * 1024,
   task: { maxRuns: 3, maxStepsPerRun: 4096, maxTokens: maxReportedTokens,
     maxDepth: 8, maxTasks: 256, maxBatchChildren: 8 } satisfies Omit<TaskLimits, 'deadlineAt'>,
@@ -30,15 +31,8 @@ export const EXPERIMENT_BUDGET = {
     maxWallClockMs, maxActiveRuns: 4 } satisfies RoundPlan['budget'],
 }
 
-export interface ExperimentDomain {
-  readonly id: string
-  readonly source: JsonValue
-  readonly cases: readonly { readonly id: string; readonly input: JsonValue; readonly description: string; readonly validation?: boolean; readonly task?: (input: Ref) => TaskSpec }[]
-  task(input: Ref): TaskSpec
-  tools(writer: CasObjectWriter): Promise<ToolAsset[]>
-}
 const actor = { kind: 'runtime', id: 'singularity-experiment' } as const
-const bytes = (value: unknown) => new TextEncoder().encode(canonicalize(value))
+const bytes = (value: unknown) => value instanceof Uint8Array ? value : new TextEncoder().encode(typeof value === 'string' ? value : canonicalize(value))
 /** Operator host for any public domain package; domains own no Task or Round state. */
 export async function runExperiment(root: string, domain: ExperimentDomain, budget = EXPERIMENT_BUDGET) {
   const startedAt = Date.now(), deadlineAt = startedAt + budget.maxWallClockMs
@@ -60,11 +54,12 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
     const provider = await put('experiment:acceptance', { v: 1, kind: 'independent-contract-review', policy: AGENT_REVIEW_POLICY })
+    const checkProvider = await put('experiment:frozen-check-acceptance', { v: 1, kind: 'frozen-contract-checks' })
     const comparatorAsset = await put('experiment:comparator', { v: 1, metric: 'reported-tokens' })
     const baseTools = await Promise.all(['bash', 'job_output', 'job_list', 'job_kill'].map(name => put(`base-tool:${name}`, { v: 1, name })))
     const protocol = await put('experiment:task-protocol', taskProtocolReference)
     const tools = await domain.tools(service)
-    const snapshotValue: GlobalResourceSnapshot = { v: 1, skills: [], tools, baseTools, fallbackAcceptance: provider, fallbackJoin: 'probe',
+    const snapshotValue: GlobalResourceSnapshot = { v: 1, skills: [], tools, baseTools, fallbackAcceptance: checkProvider, fallbackJoin: 'probe',
       documents: [{ id: 'task-protocol', description: 'Task planning, decomposition, schemas and resource usage.', object: protocol }] }
     const snapshot = await freezeGlobalResources(service, 'experiment:global-resources', snapshotValue)
     const seed = await put('experiment:seed', { v: 1, name: domain.id })
@@ -73,19 +68,21 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
     await commit('method/registered', { revision: method }, 'experiment:register-empty')
     await commit('method/activated', { next: method, approval: await put('experiment:initial-approval', { v: 1, purpose: 'empty-initialization' }) }, 'experiment:activate-empty')
     const summaries = new ContractSummaryService({ ctx: spike.ctx, writer: service, agentOptions: options })
-    const verify = await createAgentVerifier(spike.ctx, { root: join(root, 'reviews'), reader: service, tools, agentOptions: options, maxOutputBytes: budget.maxOutputBytes })
+    const verify = await createAgentVerifier(spike.ctx, { root: join(root, 'reviews'), reader: service, tools, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, maxSteps: budget.reviewMaxSteps })
+    const verifierFor = (contract: TaskContract) => contract.acceptance.id === checkProvider.id && contract.acceptance.digest === checkProvider.digest
+      ? { provider: checkProvider, checksOnly: true } as const : { provider: contract.acceptance, verify }
     const runTask = async (contract: TaskContract, slot?: EvaluationTaskRequest) => {
       const runId = `${contract.taskId}:run:1`, sessionId = `${runId}:session`
       const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract, agentOptions: options, base: { v: 1, seed } })
       return executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace: join(root, 'workspaces', Buffer.from(contract.taskId).toString('hex')),
         runId, sessionId, admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt } },
-        composition, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: { provider, verify }, actor,
+        composition, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: verifierFor(contract), actor,
         maxActive: slot?.maxActive ?? budget.maxActive, workspaceRoot: join(root, 'runs'), summaries,
         signal: slot === undefined ? cancellation.signal : AbortSignal.any([cancellation.signal, slot.signal]),
         checkReportedBudget: value => accounting.available() && (slot?.checkReportedBudget(value) ?? true),
         ...(slot === undefined ? {} : { canOpenRun: slot.canOpenRun }),
         async resolveRun(input) { return { composition: await buildSingleRunComposition(spike.ctx, { store: service, id: input.runId, contract: input.contract, agentOptions: options, base: { v: 1, seed } }),
-          agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: { provider: input.contract.acceptance, verify } } },
+          agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: verifierFor(input.contract) } },
       }, service)
     }
     const contractFor = async (taskId: string, spec: TaskSpec, pinned: Ref, purpose: 'work' | 'evaluation', requestRef: Ref) => {
@@ -97,17 +94,20 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
         resources: { baseTools, exploration: snapshot,
           skills: view.skills.map(id => { const asset = revision.skills.find(value => value.id === id); if (asset === undefined) throw new Error(`Missing skill ${id}`); return asset.bundle }),
           mcpServers: view.tools.map(id => { const asset = [...revision.tools, ...tools].find(value => value.id === id); if (asset === undefined) throw new Error(`Missing tool ${id}`); return asset.server.bundle }) },
-        acceptance: provider, environment: { seed, profile }, limits: { ...budget.task, deadlineAt } })
+        acceptance: domain.acceptance === 'checks' ? checkProvider : provider, environment: { seed, profile }, limits: { ...budget.task, deadlineAt } })
     }
-    const sourceSpec = domain.task(await put('experiment:source-input', domain.source))
+    const bindSpec = async (id: string, inputs: Readonly<Record<string, unknown>>) => domain.task(Object.fromEntries(await Promise.all(
+      Object.entries(inputs).map(async ([inputId, value]) => [inputId, await put(`${id}:${inputId}`, value)] as const),
+    )))
+    const sourceSpec = await bindSpec('experiment:source-input', domain.source)
     const cases: { spec: TaskSpec; ref: Ref; validation?: boolean }[] = []
     for (const definition of domain.cases) {
-      const spec = (definition.task ?? domain.task)(await put(`experiment:case-input:${definition.id}`, definition.input))
+      const spec = await bindSpec(`experiment:case-input:${definition.id}`, definition.input)
       const contract = await contractFor(`experiment:definition:${definition.id}`, spec, method, 'evaluation', profile)
       cases.push({ spec, validation: definition.validation, ref: await freezeEvaluationCase(service, `experiment:case:${definition.id}`, evaluationCaseFromContract(contract)) })
     }
     await writeFile(join(root, 'launch.json'), JSON.stringify({ v: 1, startedAt, deadlineAt, pid: process.pid, sourceSpec, cases, budget,
-      domain: domain.id, emptyMethod: method, independentReview: provider, compaction: 'native enabled; all llm/stream calls accounted' }, null, 2))
+      domain: domain.id, emptyMethod: method, independentReview: provider, checkAcceptance: checkProvider, compaction: 'native enabled; all llm/stream calls accounted' }, null, 2))
     console.log(JSON.stringify({ event: 'campaign-started', pid: process.pid, root, startedAt, deadlineAt }))
     for (let index = 0; index < budget.rounds && accounting.available(); index += 1) {
       const roundId = `experiment:round:${String(index + 1)}`, taskId = `${roundId}:source`

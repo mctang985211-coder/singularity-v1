@@ -448,6 +448,7 @@ async function drivePreparedRun(
       skills: prepared.methodResources.skills,
       ...(usesExploration(prepared.methodResources) ? { exploration: prepared.methodResources.exploration } : {}),
       mcpServers: prepared.methodResources.mcpServers,
+      mcpResources: request.ctx.get('mcpResources', false) !== undefined,
       budget: budget(),
       lastAttempt: runtime.lastAttempt,
       asOf: runtime.clock(),

@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "id": "buckyball-mxmm",
+  "task": "task.json",
+  "acceptance": "review",
+  "source": {
+    "project": "cases/source.json"
+  },
+  "cases": [
+    {
+      "id": "long-k",
+      "description": "Long-K chain and minimal block; deterministic finite scales, signed/zero codes and repeated calls.",
+      "inputs": {
+        "project": "cases/long-k.json"
+      }
+    },
+    {
+      "id": "output-tiling",
+      "description": "Output exceeds a bank; M/N tiles, K continuation, deterministic nonuniform inputs and consecutive products.",
+      "inputs": {
+        "project": "cases/output-tiling.json"
+      },
+      "validation": true
+    }
+  ],
+  "tools": "environment/tools.json"
+}

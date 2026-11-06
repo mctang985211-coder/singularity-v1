@@ -10,6 +10,9 @@
 - id: persistent-bash
   disabled: true
 
+- id: mcp-resources
+  disabled: true
+
 - id: task-check-shell
   config:
     timeoutMs: 60000

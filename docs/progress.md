@@ -144,7 +144,7 @@ bbdev 现在作为标准冻结 ToolAsset 进入公共 exploration catalog，空 
 
 上一轮 `buckyball-cosyvoice3-live-20261101-213725` 在 source 提交后卡在 review 的 config install；3 小时截止时共 182 次请求、32,302,520 reported tokens，没有完成验收/RSI。独立重现证明候选 cosy 配置缺少 `[main_tile]`，config queue handler 抛 `ValueError` 而未写 failure；CLI 因此等待原有 24 小时轮询。review 手工 clone 也丢失 `.venv`/子模块准备资产。此前 help smoke 和 fake nix fixture 没有证明真实队列终态。
 
-领域 example 增加标准 `checkout(project)`，原生 cp 复制操作者准备副本并安装本地 configs；worker/reviewer 使用同一工具。bbdev 领域补丁只修实际故障：config 异常沿现有 failure 结果返回，TOML 库失败不退出 worker，SIGTERM 进入已有 finally。补丁见 `apps/singularity/examples/buckyball-bbdev.patch`，准备副本的 bbdev 为 `a9bd1cb4c4b9948b29ac6323b63a450fbfbb1d4a`，Buckyball 为 `7510fbaa6c4d8dc435b9b39e645055fe415bed09`；原用户仓库和旧 trace 未修改。新 `.venv` 使用 uv relocatable，复制后实际从各自副本加载。Singularity 未添加恢复状态、watchdog 或领域进程管理器；仅压缩 Task 工具描述以遵守原 prompt 预算。app 在 source 结算后检查整轮预算，截止即结束，不再尝试为预算终止 source 打开 RSI。
+领域 example 增加标准 `checkout(project)`，原生 cp 复制操作者准备副本并安装本地 configs；worker/reviewer 使用同一工具。bbdev 领域补丁只修实际故障：config 异常沿现有 failure 结果返回，TOML 库失败不退出 worker，SIGTERM 进入已有 finally。补丁见 `domain-tasks/buckyball/patches/bbdev.patch`，准备副本的 bbdev 为 `a9bd1cb4c4b9948b29ac6323b63a450fbfbb1d4a`，Buckyball 为 `7510fbaa6c4d8dc435b9b39e645055fe415bed09`；原用户仓库和旧 trace 未修改。新 `.venv` 使用 uv relocatable，复制后实际从各自副本加载。Singularity 未添加恢复状态、watchdog 或领域进程管理器；仅压缩 Task 工具描述以遵守原 prompt 预算。app 在 source 结算后检查整轮预算，截止即结束，不再尝试为预算终止 source 打开 RSI。
 
 真实 DSH MCP 预检（无模型请求）：全部两个工具实际调用；19 个 CLI/帮助入口成功；上一轮原始坏配置和缺失 TOML 都约 10 秒返回失败，移除后 config 安装成功；AXIS arbiter 完成真实 elaboration、VCS 编译和 UVM，`UVM_ERROR=0`、`UVM_FATAL=0`；长服务调用在 25 秒被原生 AbortSignal 取消，8 秒后该副本 bbdev/iii/motia 残留进程为零。未运行全芯片仿真、P2E 或物理后端；没有把组件 smoke 视为 CosyVoice3/PPA 验收。
 
@@ -403,3 +403,77 @@ round8 于 05:06:38 +0800 自然结束，没有运行中的模型进程。2,062 
 实际开始 `2026-11-05T13:17:34.795+08:00`，绝对截止 `2026-11-06T01:17:34.795+08:00`。整轮共用 12 小时、10 亿 reported tokens、4000 requests、并发 4；provider `singularity-local`、模型 `deepseek-flash`、reasoning=max、40k 输出上限、700k context 与原生 compaction 配置沿既有冻结策略。operator PID 916745，30 分钟只读 monitor PID 916746，无重启或自动恢复。活动入口记录为 `artifacts/mxmm-ball-active-launch.json`。
 
 启动核实 `2026-11-05T13:18:02.029513+08:00`：两个进程存活，8 个请求全部结算，input（含缓存）121806、output 2997、unknown=0；未产生启动 failure 或最终结果。证据在该根 `operator-startup.json`、`source-hashes.json`、`execution/launch.json`、`execution/requests.jsonl` 和 `monitor-*.json`。这是修复后相同 MXMM suite 的真实实验，重点观察合同/反馈消费、重复实现成本、候选装配及完整 RSI comparison；尚未形成改善结论，也不能作为跨算子泛化证据。
+
+### round9 根因复核与入口可达修复（2026-11-06，amendment 021/022）
+
+round9 已停止且没有重开付费测试。归档 `artifacts/round9-mxmm-rsi-20261105-131734/stop-audit.md` 记录 3,771 请求、585,849,365 input（含缓存）+4,703,044 output、unknown=1；source verified、4 个 evaluation roots verified，最后一个 validation slot 活动时停止，没有 `result.json`、comparison、winner 或 activation。reviewer 共消耗 1,925 请求。source 未分解但独立完成并通过全部根验收，说明当前 MXMM 任务并非环境上不可完成；评测 children 全为 probe、部分模型合同错误及高复核成本仍是真实问题，但不足以解释候选必然没有收益。
+
+直接读取归档 MethodPatch、MethodRevision 和每次 run/opened Composition 找到决定性的组成缺陷：候选新增 `mxmm-capacity-tiling` 与 `mxmm-target-verify` 两个 Skill，却保持 `templates=[]` 且没有 `entryTemplateId`。空入口只绑定全局 snapshot，所有候选 Composition 的实际 `skills=[]`，与 baseline 完全相同。因此这轮继续执行的候选树不可能消费 proposer 写出的参数化算法，已有 verified 也不能成为 RSI 改善证据。这不是靠增加 worker prompt、强制树深或改写 Buckyball 验收可以修复的问题。
+
+现有 no-op precheck 改为只比较 entry 可达的模板闭包及其 Skill/MCP 内容；目录可保留未使用资产，但只增加不可达资产的 patch 不再进入付费对照。proposer card 同步明确 put-template/set-entry 的绑定责任，没有自动绑定、添加新事实或猜测模型意图。有效 Skill/MCP 绑定路径保留直接回归。probe/required 语义不变：把唯一 fallback 改成 required 会破坏同批平行探索，当前证据不支持这种粗暴替换；错误冻结合同仍由模型反馈/blocked 和独立验收暴露，不增加自然语言或 shell 语义门禁。
+
+reviewer 正常结束却未提交 findings 时，不再伪造领域 fail 让 worker 重试，而是返回 invalid 验收并沿既有非 transient policy 结算。Agent dispose 与 MCP 资源清理分别尝试并保留错误。amendment 021 的领域职责收缩保留：通用实验宿主、reviewer 生命周期和 token comparator 归宿主，Buckyball 只提供目标、根标准、案例、资料与 checkout/bbdev 环境；旧 campaign 路径及发布后附加工作不恢复，根验收没有放宽。
+
+验证使用 Node 24.22.2、pnpm 11.18.0：`pnpm install --frozen-lockfile` 与根 `pnpm verify` 全部通过，**449/449**（protocol 206、runtime 138、app 92、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过。定向 precheck 10/10 覆盖 round9 的不可达 Skill 拒绝、可达 Skill/MCP 接受及原 CAS 异常；通用实验 fixture 区分两个真实 failed source 的三次 fresh attempts 与第三个无 findings source 的一次 invalid，不重做 worker。相对 `c5a070d`，生产 src/examples 净增 **12 行**，低于用户 80 行上限；`git diff --check` 通过。此次没有新增真实模型请求、完整 comparison 或 RSI 收益证据；当前 suite 仍只证明 MXMM shape/data 迁移，不证明跨算子泛化。
+
+### 模型可见流程与文本审计（2026-11-06）
+
+按实际 DSH 装配路径复核了 worker persona/card、探索 guidance/example、NodeView 与 start/batch wake、Task read/plan/decompose/feedback/submit/stop 的 schema 和错误提示、Summary、独立 reviewer、RSI proposer、原生 skill/MCP 及 Buckyball root/工具说明。没有修改 DSH 自带 prompt 或领域验收，也没有通过增加新的“请遵守”段落解决文本问题。
+
+修正了四处实际缺陷：Summary card 删除了 schema 不存在的 next-use description，避免诱导额外字段；reviewer 明确 pass=已复现满足、fail=未满足、invalid=无法评价，避免把验收失败和领域失败混淆；proposer 只在 previousRound 存在时读取反馈，并大幅压缩 rsi_read/rsi_submit_patch 的重复描述；Task 的 page、result Ref、stop 与预算 nextAction 改为符合真实接口的正向动作。Buckyball 明确先 checkout 新绝对路径、args 必须是 argv 数组，不再在 MCP 说明中重复整段领域排除项；root 参考路径从整个 `.agents/skills/` 缩到 debug-bemu/debug-compiler 两份技术文档，避免无关角色、审批和严格阶段门禁干扰当前 Task。
+
+worker 保留 self/plan、职责归属、冻结核验、真实 consumer、反馈/retry 等必要约束，压缩重复规划文字并保留 cost/uncertainty 与估计验证；探索 guidance 不再重复 worker card。实测 worker persona+card+探索追加为 **1914/2048 bytes**，探索 guidance 为 198 bytes。协议中的 worker/Summary/RSI cards 与实现同步，taskProtocolReference 也明确 entry-reachable 绑定规则。
+
+定向原生测试 19/19 通过：worker/NodeView、Summary 实际请求、RSI proposer、Buckyball 通用实验、探索和 host composition；Summary 请求额外断言不再出现 next-use。最终根 `pnpm verify` **449/449**（protocol 206、runtime 138、app 92、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过。本轮文本审计后，相对 `c5a070d` 的生产 src/examples 累计净增 **10 行**，仍低于 80 行；没有新增付费请求或真实行为改善声明。
+
+### 领域任务缩编与 round10 真实测试启动（2026-11-06，amendment 023）
+
+按用户要求删除新增改动中越界的工具/内部排除表述，形成[统一领域任务编写框架](framework.md#190-领域任务编写框架)：root 只写外部目标、验收、少量 cases、参考资料和环境资源，不规定 Singularity/RSI 可修改的资产、workflow 或解法。worker 可修改独立 checkout 中的领域源码并交付补丁/drafts；算法、脚本、bbdev CLI 与 MCP 统一经 `put-skill`、`put-mcp-server`、`put-template` 和 entry 绑定演化，不修改 live host 或共享 baseline。
+
+round9 正式 patch 只有 `put-skill`，没有 `put-mcp-server`，其假设把成本归为重复算法和验证代码构建；当时 bbdev 已能真实执行 BEMU，没有证据表明它“必须”被改。通用 proposer 现在明确可提炼 algorithms、scripts、MCP/CLI tools 或 workflow rules，但不强迫工具改造，也不再把候选不可见误当工具演化失败。
+
+Buckyball root 合同只保留数值语义、真实 ELF/BEMU、独立复现和交付要求，删除 Singularity 内部排除、工具选择限制和非必要 redesign 禁令。source 已覆盖 bank-crossing，删除重复公共 case，仅保留 long-k 公共迁移与 output-tiling 独立 validation，每轮对照 roots 从 6 缩为 4；四项 required 验收语义未放宽。相对 `c5a070d`，生产 src/examples 累计净增 **7 行**。冻结依赖检查与根 `pnpm verify` **449/449**（protocol 206、runtime 138、app 92、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过。
+
+新真实轮 `artifacts/round10-mxmm-rsi-20261106-021813` 于 02:18:54.905 +08 启动，绝对截止 14:18:54.905 +08；新执行根、空 Method、82 个生产/配置文件的 worktree hash `076e9eeaaa1325e5fb3e7e21c8dfa88157c85bac0a42d54989876d973633b4c9`，不续跑 round9。provider 为 `https://api.agicto.cn/v1`，deepseek-flash/reasoning=max、700k context、40k 输出上限；整轮 12 小时、10 亿 reported tokens、4000 requests、并发 4。campaign PID 1442702，只读半小时 monitor PID 1447066，无自动重启。启动记录见该根 `operator-process.json`、`source-hashes.json` 与 `execution/launch.json`，凭据未写入文件。
+
+02:20:51 启动快照已有 19 次请求全部结算，input（含缓存）703,439、output 13,185、unknown=0；只有 method registered/activated、root admitted/opened 四条事实，尚无 child、提交、验收或 RSI 结果，也没有启动 failure。证据为该根 `operator-startup.json` 与 `monitor-20261105T182051089Z.json`。启动成功只证明新合同和路由可用，不能提前声称 workflow、工具演化或 RSI 收益。
+
+### round10 children 分页中断与修复（2026-11-06）
+
+round10 于 05:19 因宿主异常退出，并非截止、预算耗尽或 RSI 结果。`execution/result.json` 记录 1,860 次请求全部结算，input（含缓存）177,816,626、output 2,678,569、unknown=0，原始错误为 `Task read page is 16591 bytes, above the 16384 byte budget`。最终 94 条事实含 22 个 Run、19 个 closed Task，已有真实多层探索和组件验收，但 root 尚未验收，未进入 RSI；`operator-final-projection.json` 已保存，只读监控已停止，未自动重启。
+
+原生 session 将失败精确定位到 parent 的 `singularity_read({kind:"children",page:5})`。默认五条 child 记录合计 16,591 bytes，证明条数分页与 16 KiB 完整响应上限互相矛盾，不是模型滥用参数。修复在现有 read 路径按实际字节装配 children 页，必要时减少当页条目并以 nextCursor 续接；单条过大返回可改正的工具拒绝并指引改读 evidence，不提高上限、不新增状态或自动重试。
+
+只读 `DomainStore.replay()` 加纯 reducer 重放同一 parent 的五条真实记录，现分为两页、最大 11,856 bytes，五条全部返回且无重复。新增回归逐页检查 16 KiB、顺序与完整性。相对 `c5a070d`，生产 src/examples 累计净增 **16 行**，仍低于 80 行。根 `pnpm verify` **450/450**（protocol 206、runtime 139、app 92、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过。该修复证明原中断场景已消除，不证明 round10 的 workflow 或 RSI 有效；是否重开下一轮由用户授权决定。
+
+### round10 责任链与验收减量修复（2026-11-06，amendment 024）
+
+对 round10 的 SQLite、requests 与模型可见合同复核发现，分页只是直接中断点，更大的失败是递归元工作：19 个 exploration children 的全部 required criteria 都已有 shell check，却仍产生 771 次 reviewer 请求；18 个 child verified 后，工作继续膨胀为复核复核结果、冷审冷审结果和重复重建。reviewer 占全部请求的 41%，worker 侧也持续新增审计树。parent 的 children 读取又只有 ID/状态/Ref，没有该 child 的目标和交付物，长运行或压缩后无法从授权视图恢复职责映射。以上结论来自实际轨迹，不是对模型意图的猜测。
+
+修复沿既有 AcceptanceRef 组合替换重复路径：exploration fallback 改用 `experiment:frozen-check-acceptance`，原生 shell 直接对 CAS 输入/输出逐项结算；缺任何 required check 时在执行 shell 前报 composition mismatch。root 保留独立语义 review，单次上限 128 步，不放宽四项根验收。children 分页返回冻结合同已有的 goalSummary/deliverable，保留此前的实际字节分页。worker/探索/RSI 指引改为生产本层会消费的结果，host 负责提交后验收，不再把 review/audit/reproduction 链当成可无限分解的工作；persona+card+探索追加为 1722/2048 bytes。没有新增 fact、状态、语义判定器、兼容入口或默认 LLM review。
+
+领域 case 不再只冻结 shape 并由 worker/reviewer 各自选题，改为冻结 seed 与 dataRule，精确重建全部 codes/scales；source 也覆盖长 K 和最小块。paired arms 因此消费同一实际输入，独立 reviewer 仍须重建、解码参考、运行 ELF/BEMU 与回归。通用 proposer 指引保留参数化实现和 consumer checks，删除对源特定审核链的学习激励。
+
+验证：相关原生/协议回归 **14/14**；随后 `pnpm install --frozen-lockfile` 与根 `pnpm verify` 全部通过，**453/453**（protocol 206、runtime 139、app 95、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过。完整 DSH fixture 实际完成 root→child→parent 集成→一次 root review→trace seal→proposer，child acceptance 为 frozen-check provider 且没有 child review 请求；缺 check、check pass/fail、职责视图和确定性 case 均有直接断言。没有启动新付费 campaign、执行新 BEMU 或宣称真实模型/RSI 已改善；这些仍须下一轮新根实测，尤其要检查是否还出现审核树、候选入口可达性及完整 comparison。
+
+### 模型可见面与工具消费审计（2026-11-06，amendment 025）
+
+逐类读取 round8/9/10 的原生 system message、`request/header.tools` 和 tool/call 后，确认不能按“未使用”删除 `status/feedback/jobs/children/evidence/resource/RSI/checkout`：它们均有真实消费者。round10 的 Buckyball 只有 `resources:[]`，但仍有 7 次空列表调用；round9 有 26 次空 resource 调用。`mcp__buckyball__bbdev` 在 round10 虽实际出现在 schema 中却零调用，模型只用 checkout，再在 bash 脚本中手工执行 `nix develop`，说明它不是不可见，而是直接入口引导不足。ancestor 的实际调用只得到 pending 或非直属 ID 拒绝，Summary 生成后没有再次读取。`read(self)` 还在单页返回对象、分页返回字符串，并重复展示 criteria；Summary 只有 summary_submit，却仍看到 bash/jobs 指南。
+
+完成以下替换而非新增平行功能：experiment 关闭无实际资源的原生 mcp-resources 服务，profile、NodeView、dispatch guard 与 prompt digest 同步省略三项 resource 工具和 server 提示；每个 worker/reviewer 的工具 schema 因此少 1,013 bytes，通用 Method MCP resource 能力及测试保留。`self` 的所有页统一为可拼接 JSON 文本，criteria 只出现一次，provider 独立为 acceptanceProvider。Summary/Proposer 清空无 bash/jobs 能力角色的对应 DSH 提示。`SUMMARY_PENDING` 增加后续模型步重读 nextAction，不阻塞 owner Run 生命周期。探索 guidance 只保留公共资源和 result/ 交付信息，bbdev 明确直接 MCP argv 入口及 Nix 已激活事实。删除一个未消费 verifier 常量和过时 compaction 注释。
+
+验证：受影响回归 **17/17** 后，`pnpm install --frozen-lockfile` 与根 `pnpm verify` 全部通过，**453/453**（protocol 206、runtime 139、app 95、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过。实际 fixture 断言 worker/reviewer 不再看到空 MCP resource 工具，Summary/Proposer 不再看到 bash/jobs 指南，bbdev 新说明进入真实 schema，Summary 首次 pending 含后续动作且缓存可读，库存 native skill/MCP 演化、评测、activation 与发布后消费仍通过。没有新增付费模型请求，因此上述结论证明模型可见面和协议流程已修正，不声称下一轮真实模型一定采用 bbdev 或产生 RSI 收益。
+
+### 独立领域构造样板与 env-builder（2026-11-06）
+
+将领域构造从宿主静态 import 改为数据边界：`domain-tasks/template/` 提供独立的根合同、公开确定性验收、source/transfer/validation 冻结输入和填写说明；`domain-tasks/buckyball/` 以 JSON 保留原根目标和四项语义验收，以外部 CJS MCP 资产承载 checkout/bbdev。删除 `apps/singularity/examples/` 中四个 Buckyball 任务/装配模块，并将两个领域补丁移到 `domain-tasks/buckyball/patches/`，不把领域启动器放入 `src`。宿主只保留通用声明式装载，解析输入文件并复用既有 TaskSpec、CAS、ToolAsset 与 DSH MCP surface，不增加领域分支。
+
+原始资料可由普通 env-builder DSH session 整合成独立目录。该会话只使用实际消费的 bash 准备公开根合同、冻结案例、验收与预装 MCP 环境，不展示未使用的 jobs 提示，不创建 Task、不写 Method、不开 RSI、不改变运行中的合同；后续新执行读取并冻结结果，不提供热更新。app schema 组合复用 protocol 同版 Zod，删除 app 未消费的 zod 4.6.7 直接依赖。此变更只建立可装载、可调试的领域边界，不证明 builder 的语义判断、真实模型工作流或 RSI 改善。
+
+验证：`pnpm install --frozen-lockfile` 和根 `pnpm verify` 全部通过，**455/455**（protocol 206、runtime 139、app 97、inventory 13），0 fail/skip，project/build/typecheck/lint 全通过。真实 DSH fixture 以普通 builder session 的 bash 从原始资料生成独立目录，随后新执行装载并实际提交，root 经 CAS-only check 得到 verified，没有 reviewer 请求。Buckyball 外部 CJS MCP 实测 checkout、bbdev 业务调用、参数失败与取消退出；独立 lockfile 通过 `--frozen-lockfile` 安装检查。最小样板的三个冻结输入都通过公开验收，错误报告和非整数数值均被拒绝。没有新付费 campaign、真实 BEMU 或真实模型自主构造领域的证据，不能据此声称 bbdev 将在下一轮被采用或 RSI 已改善。
+
+### 领域边界规范清理（2026-11-06）
+
+复核当前数据装载实现后，删除 §19.0 中已经失真的 `DomainAdapter` 伪接口及其 `validateChild`、`resolveAcceptance`、`mountMcpServers`、`seedFor` 等方法描述，改为声明式 `domain.json`/`task.json`/`cases`/`environment` 边界。宿主仍拥有 acceptance 装载、Task/Run/RSI、reviewer 与比较生命周期；领域目录只提供根合同、冻结输入、环境资产和可选评判资料。同步更新 `AcceptanceRef`、发布边界和 `spec-lock`，没有新增运行时 authority 或 helper。
+
+清理后 `pnpm verify` **455/455** 通过，`git diff --check` 通过。该项只消除规范对领域作者的错误引导，不改变当前真实模型证据：仍没有新的付费 campaign、完整 Buckyball comparison 或 RSI 收益结论。

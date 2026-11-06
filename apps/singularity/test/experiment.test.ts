@@ -12,10 +12,12 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId,SessionSeq } from '@deepseek-ai/dsh-session'
 import { createWakeMessage,snapshotSession } from '@singularity/runtime'
 
-import { buckyballDomain } from '../examples/buckyball.ts'
+import { prepareBuckyballDomain } from './fixtures/buckyball-domain.ts'
 import { EXPERIMENT_BUDGET,runExperiment } from '../src/experiment.ts'
+import type { ExperimentDomain } from '../src/domain.ts'
 import { nativeAccounting } from '../src/accounting.ts'
-import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
+import { contextEpochFrom,messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
+import { previewDigestFrom } from './method-fixture.ts'
 import { withHarness } from './run-fixture.ts'
 import { agentOptions } from './task-fixture.ts'
 
@@ -47,8 +49,8 @@ else:
       setup: async scope => {
         scope.tools.restrict({ allow: [] })
         await scope.plugin(mcpClient, { transport: 'stdio', serverName: 'buckyball', command: process.execPath,
-          args: [fileURLToPath(new URL('../examples/buckyball-mcp.ts', import.meta.url))],
-          env: { BUCKYBALL_BASELINE: baseline, PATH: `${bin}:${process.env.PATH ?? ''}` },
+          args: [fileURLToPath(new URL('../../../domain-tasks/buckyball/environment/server.cjs', import.meta.url))],
+          env: { BUCKYBALL_BASELINE: baseline, BUCKYBALL_MCP_ROOT: fileURLToPath(new URL('../', import.meta.url)), PATH: `${bin}:${process.env.PATH ?? ''}` },
           failOnStartupError: true, reconnect: { enabled: false } })
       } })
     let sequence = 0
@@ -135,15 +137,13 @@ void test('native campaign meter includes auxiliary calls; session projection co
   })
 })
 
-void test('Ball campaign admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 120_000 }, async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'buckyball-campaign-'))
+void test('generic experiment admits empty Method, independently reviews frozen outputs and preserves failed/no-proposal outcomes', { timeout: 120_000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'singularity-experiment-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const baseline = join(directory, 'baseline'), prepared = join(directory, 'prepared'), root = join(directory, 'execution')
   await mkdir(prepared)
-  for (const name of ['model-port', 'model-optimize', 'chip-designer', 'ip-designer', 'ball-align', 'workload-tests', 'debug-compiler', 'check', 'report']) {
-    await mkdir(join(baseline, '.agents/skills', name), { recursive: true })
-    await writeFile(join(baseline, '.agents/skills', name, 'SKILL.md'), `# ${name}\nRead current domain sources.\n`)
-  }
+  await mkdir(join(baseline, '.agents/skills/legacy-role'), { recursive: true })
+  await writeFile(join(baseline, '.agents/skills/legacy-role/SKILL.md'), '# Legacy role\nReference document only.\n')
   await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: baseline } }))
   const bin = join(directory, 'bin')
   await mkdir(bin)
@@ -157,8 +157,10 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `ball-fixture-${String(index)}`, name, arguments: JSON.stringify(args) }],
       usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
     if (toolSchemaNames(request).includes('singularity_review_submit')) {
+      assert.equal(toolSchemaNames(request).some(name => ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'].includes(name)), false)
       if (exhaustReview) return { ...call('job_list', {}), usage: { promptTokens: EXPERIMENT_BUDGET.maxReportedTokens,
         completionTokens: 10, totalTokens: EXPERIMENT_BUDGET.maxReportedTokens + 10 } }
+      if (proposers === 2) return { content: 'No review verdict submitted.', usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       if (!toolNames(request).includes('singularity_review_submit')) return { toolCalls: [{ id: `bad-review-${String(index)}`,
         name: 'singularity_review_submit', arguments: '{"result":' }], usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
       assert.match(messageTexts(request).join('\n'), /"status":"failed"/)
@@ -177,6 +179,7 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     }
     const calls = toolNames(request)
     assert.equal(toolSchemaNames(request).includes('skill'), false, 'project reference documents are never mounted as skills')
+    assert.equal(toolSchemaNames(request).some(name => ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'].includes(name)), false, 'empty MCP resources stay outside the model surface')
     if (calls.length === 0) return call('singularity_read', { kind: 'self' })
     const pages = (request.messages ?? []).filter(value => value.role === 'tool').map(value => wireText(value.content)).filter(value => value.startsWith('{')).map(value => JSON.parse(value) as { data?: string; nextCursor?: string; contextEpoch: string })
       .filter(value => typeof value.data === 'string')
@@ -187,6 +190,7 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     if (!calls.includes('singularity_plan')) return call('singularity_plan', { sketch: { v: 1, taskId: data.taskId, runId: data.runId, sourceContract: data.contractDigest, contextEpoch: last.contextEpoch,
       objective: 'Deliver the incomplete fixture honestly.', levels: [0, 1].map(level => ({ level, purpose: 'Inspect local output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })), directPlan: [], assumptions: [] } })
     assert.ok(toolSchemaNames(request).includes('mcp__buckyball__bbdev'), 'the frozen domain MCP is available in each fresh Run')
+    assert.match(JSON.stringify(request.tools), /Nix is already activated/)
     if (!calls.includes('mcp__buckyball__bbdev')) return call('mcp__buckyball__bbdev', { project: baseline, args: ['--help', 'literal;$(false)'] })
     if (!calls.includes('bash')) {
       assert.match(messageTexts(request).join('\n'), /ball/)
@@ -204,12 +208,16 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     if (oldKey === undefined) delete process.env.SINGULARITY_SPIKE_API_KEY
     else process.env.SINGULARITY_SPIKE_API_KEY = oldKey
   })
-  await runExperiment(root, await buckyballDomain(prepared))
+  const domain = await prepareBuckyballDomain(prepared)
+  const projectInput = JSON.parse(new TextDecoder().decode(domain.source.project as Uint8Array)) as { source: { destination: string }; technicalReferences: string[] }
+  assert.equal(projectInput.source.destination, baseline)
+  assert.ok(projectInput.technicalReferences.every(path => path.startsWith('.agents/skills/')))
+  await runExperiment(root, domain)
   const result = JSON.parse(await readFile(join(root, 'result.json'), 'utf8')) as { failure?: string; outcomes: { source: string; activation?: unknown }[]; usage: { requests: number; completed: number; unknown: number } }
   assert.equal(result.failure, undefined)
-  assert.equal(result.outcomes.length, 3)
-  assert.ok(result.outcomes.every(value => value.source === 'failed' && value.activation === undefined))
-  assert.equal(reviews, 9, 'each failed source uses the three configured fresh attempts')
+  assert.deepEqual(result.outcomes.map(value => value.source), ['failed', 'failed', 'invalid'])
+  assert.ok(result.outcomes.every(value => value.activation === undefined))
+  assert.equal(reviews, 6, 'real failures use fresh attempts; an unsubmitted review never asks the worker to redo work')
   assert.equal(proposers, 3)
   assert.equal(result.usage.requests, fixture.requests.length)
   assert.equal(result.usage.completed, fixture.requests.length)
@@ -218,23 +226,24 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     sourceSpec: { inputs: { id: string; object: { digest: string } }[]; goal: { constraints: string[] } }
     cases: { spec: { inputs: { id: string; object: { digest: string } }[]; goal: { constraints: string[] } } }[]
   }
-  assert.ok(launch.sourceSpec.goal.constraints.some(value => value.includes(`${baseline}/.agents/skills/`)))
+  assert.ok(launch.sourceSpec.goal.constraints.some(value => value.includes('project.json')))
+  assert.equal(launch.sourceSpec.goal.constraints.some(value => value.includes('Singularity')), false)
   assert.deepEqual(launch.sourceSpec.inputs.map(value => value.id), ['project'])
-  assert.equal(launch.cases.length, 3)
+  assert.equal(launch.cases.length, 2)
   for (const { spec } of launch.cases) {
-    assert.ok(spec.goal.constraints.some(value => value.includes(`${baseline}/.agents/skills/`)))
+    assert.ok(spec.goal.constraints.some(value => value.includes('project.json')))
     assert.deepEqual(spec.inputs.map(value => value.id), ['project'])
   }
   const receipts = glob(`${root}/reviews/*/receipt.json`)
   for await (const path of receipts) {
     const receipt = JSON.parse(await readFile(path, 'utf8')) as { criteria: { reason: string }[] }
-    assert.ok(receipt.criteria.every(value => value.reason.includes('Missing actual MXMM consumer')))
+    assert.ok(receipt.criteria.every(value => value.reason.includes('Missing actual MXMM consumer') || value.reason.includes('did not complete')))
   }
   assert.deepEqual((await readFile(join(baseline, 'nix-argv.txt'), 'utf8')).trimEnd().split('\n'),
     [baseline, 'develop', '--command', 'bash', '-c', 'exec bbdev "$@"', '--', '--help', 'literal;$(false)'])
   exhaustReview = true
   const exhausted = join(directory, 'budget-exhausted')
-  await runExperiment(exhausted, await buckyballDomain(prepared))
+  await runExperiment(exhausted, domain)
   const stopped = JSON.parse(await readFile(join(exhausted, 'result.json'), 'utf8')) as { failure?: string; outcomes: unknown[]; usage: { unknown: number } }
   assert.equal(stopped.failure, undefined, 'a budget cancellation seals its terminal ExecutionRecord without a host failure')
   assert.deepEqual(stopped.outcomes, [])
@@ -247,5 +256,124 @@ void test('Ball campaign admits empty Method, independently reviews frozen outpu
     assert.equal(facts.filter(value => value.type === 'rsi/trace-sealed').length, 1)
     assert.ok(facts.some(value => value.type === 'task/closed' && value.data.scope === 'subtree'))
     assert.equal(facts.some(value => value.type === 'rsi/round-opened'), false)
+  } finally { db.close() }
+})
+
+void test('Buckyball cases freeze deterministic input data for paired acceptance', async t => {
+  const prepared = await mkdtemp(join(tmpdir(), 'singularity-frozen-cases-'))
+  t.after(() => rm(prepared, { recursive: true, force: true }))
+  await writeFile(join(prepared, 'project.json'), JSON.stringify({ source: { destination: '/unused-fixture-baseline' } }))
+  const domain = await prepareBuckyballDomain(prepared)
+  const decode = (value: unknown) => JSON.parse(new TextDecoder().decode(value as Uint8Array)) as { case: { seed: number; dataRule: string; shapes: number[][] } }
+  const source = decode(domain.source.project).case
+  assert.equal(source.seed, 17)
+  assert.equal(source.shapes.length, 4)
+  assert.match(source.dataRule, /73\*i/)
+  assert.match(source.dataRule, /11\*i\+seed/)
+  const cases = domain.cases.map(value => ({ ...value, data: decode(value.input.project).case }))
+  assert.deepEqual(cases.map(value => value.data.seed), [29, 43])
+  assert.deepEqual(cases.map(value => value.validation ?? false), [false, true])
+  assert.ok(cases.every(value => value.data.dataRule === source.dataRule))
+  const spec = domain.task({ project: { id: 'project', digest: `sha256:${'0'.repeat(64)}` } })
+  assert.equal(spec.criteria.find(value => value.id === 'target-correctness')?.statement.includes('reviewer-selected'), false)
+  assert.match(spec.criteria.find(value => value.id === 'target-correctness')?.statement ?? '', /frozen case seed and dataRule/)
+})
+
+void test('experiment settles exploration children by shell and reviews only the root', { timeout: 120_000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'singularity-check-only-flow-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const root = join(directory, 'execution')
+  let reviews = 0, proposers = 0, workerStep = 0
+  const fixture = await startChatCompletionsFixture((request, index) => {
+    const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `check-flow-${String(index)}`, name, arguments: JSON.stringify(args) }],
+      usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } })
+    if (toolSchemaNames(request).includes('singularity_review_submit')) {
+      reviews += 1
+      return call('singularity_review_submit', { result: { criteria: [{ id: 'root-result', verdict: 'fail', reason: 'Root semantic review remains independent.' }] } })
+    }
+    if (toolSchemaNames(request).includes('rsi_submit_patch')) {
+      proposers += 1
+      return { content: 'No reusable patch from this protocol fixture.', usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } }
+    }
+    const step = workerStep++
+    if (step === 0 || step === 4 || step === 8) return call('singularity_read', { kind: 'self' })
+    if (step === 1 || step === 5 || step === 9) {
+      const texts = messageTexts(request)
+      const identity = texts.map(text => /"task":\{"id":"([^"]+)"(?:,"parentId":"[^"]+")?,"runId":"([^"]+)"/.exec(text)).find(Boolean)
+      const digest = texts.map(text => /"contractDigest":"(sha256:[0-9a-f]{64})"/.exec(text)).find(Boolean)
+      const contextEpoch = contextEpochFrom({ ...request, messages: [...(request.messages ?? [])].reverse() })
+      assert.ok(identity && digest && contextEpoch)
+      return call('singularity_plan', { sketch: { v: 1, taskId: identity[1], runId: identity[2], sourceContract: digest[1], contextEpoch,
+        objective: 'Produce and integrate one consumable result.', levels: [0, 1].map(level => ({ level, purpose: 'Produce or integrate output.', likelyChildren: [], expectedInputs: [], expectedOutputs: ['result/value.txt'] })),
+        directPlan: [], assumptions: [] } })
+    }
+    if (step === 2) return call('singularity_decompose', { action: 'prepare', bindingId: 'platform:explore-child' })
+    if (step === 3) {
+      const ackPreview = previewDigestFrom(request)
+      assert.ok(ackPreview)
+      return call('singularity_decompose', { action: 'commit', children: [{ bindingId: 'platform:explore-child', ackPreview,
+        task: { goal: { summary: 'Produce reusable child bytes.', deliverable: 'result/value.txt containing reusable.', scope: [], constraints: [] },
+          acceptanceCriteria: [{ id: 'child-result', statement: 'The child output has the required bytes.', check: 'test "$(cat result/value.txt)" = reusable' }], inputs: [] } }] })
+    }
+    if (step === 6) return call('bash', { description: 'Produce or integrate the frozen result.', command: 'mkdir -p result && printf reusable > result/value.txt' })
+    if (step === 7) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
+    if (step === 10) return call('singularity_read', { kind: 'children' })
+    if (step === 11) {
+      const text = messageTexts(request).join('\n')
+      assert.match(text, /"goalSummary":"Produce reusable child bytes\."/)
+      assert.match(text, /"deliverable":"result\/value\.txt containing reusable\."/)
+      return call('bash', { description: 'Produce or integrate the frozen result.', command: 'mkdir -p result && cp children/*/result/value.txt result/value.txt' })
+    }
+    if (step === 12) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
+    throw new Error(`Unexpected check-only flow step ${String(step)}`)
+  })
+  t.after(() => fixture.close())
+  const oldUrl = process.env.SINGULARITY_SPIKE_BASE_URL, oldKey = process.env.SINGULARITY_SPIKE_API_KEY
+  process.env.SINGULARITY_SPIKE_BASE_URL = fixture.baseURL
+  process.env.SINGULARITY_SPIKE_API_KEY = 'fixture-key'
+  t.after(() => {
+    if (oldUrl === undefined) delete process.env.SINGULARITY_SPIKE_BASE_URL
+    else process.env.SINGULARITY_SPIKE_BASE_URL = oldUrl
+    if (oldKey === undefined) delete process.env.SINGULARITY_SPIKE_API_KEY
+    else process.env.SINGULARITY_SPIKE_API_KEY = oldKey
+  })
+  const domain: ExperimentDomain = {
+    id: 'check-only-flow', source: {}, cases: [
+      { id: 'fixture-case', input: {}, description: 'Frozen protocol case.' },
+      { id: 'fixture-validation', input: {}, description: 'Frozen validation case.', validation: true },
+    ],
+    task: () => ({
+      goal: { summary: 'Integrate one child result.', deliverable: 'result/value.txt', scope: [], constraints: [] },
+      criteria: [{ id: 'root-result', statement: 'Root integration is independently reviewed.', required: true }],
+      inputs: [], outputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
+    }),
+    tools: () => Promise.resolve([]),
+  }
+  await runExperiment(root, domain, { ...EXPERIMENT_BUDGET,
+    rounds: 1, maxActive: 1, reviewMaxSteps: 8, maxRequests: 100, maxWallClockMs: 60_000, maxReportedTokens: 1_000_000, maxOutputBytes: 1024 * 1024,
+    task: { ...EXPERIMENT_BUDGET.task, maxRuns: 1, maxStepsPerRun: 20, maxTokens: 1_000_000, maxDepth: 2, maxTasks: 2, maxBatchChildren: 1 },
+    proposerBudget: { maxSteps: 4, maxTokens: 100_000, maxWallClockMs: 60_000 },
+    evaluationBudget: { ...EXPERIMENT_BUDGET.evaluationBudget, maxWallClockMs: 60_000 } })
+  const result = JSON.parse(await readFile(join(root, 'result.json'), 'utf8')) as { failure?: string; outcomes: { source: string }[] }
+  assert.equal(result.failure, undefined)
+  assert.deepEqual(result.outcomes.map(value => value.source), ['failed'])
+  assert.equal(reviews, 1, 'the exploration child never purchases an LLM review')
+  assert.equal(proposers, 1)
+  assert.equal(workerStep, 13)
+  const launch = JSON.parse(await readFile(join(root, 'launch.json'), 'utf8')) as { checkAcceptance: { id: string } }
+  assert.equal(launch.checkAcceptance.id, 'experiment:frozen-check-acceptance')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(join(root, 'domain/domain.sqlite'), { readOnly: true })
+  try {
+    const facts = db.prepare('SELECT payload FROM events ORDER BY seq').all().map(row => JSON.parse(row.payload as string) as {
+      type: string; data: { runId?: string; classification?: string; children?: { contract: { taskId: string; acceptance: { id: string } } }[] }
+    })
+    const admission = facts.find(fact => fact.type === 'task/children-admitted')
+    const child = admission?.data.children?.[0]?.contract
+    assert.ok(child)
+    assert.equal(child.acceptance.id, 'experiment:frozen-check-acceptance')
+    const closure = facts.find(fact => fact.type === 'run/closed' && fact.data.runId === `${child.taskId}:run:1`)
+    assert.equal(closure?.data.classification, 'verified')
+    assert.equal(facts.filter(fact => fact.type === 'rsi/trace-sealed').length, 1)
   } finally { db.close() }
 })

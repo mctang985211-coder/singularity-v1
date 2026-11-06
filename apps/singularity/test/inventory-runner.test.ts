@@ -53,10 +53,11 @@ void test('example runs empty Method, evolves native skill/MCP bindings, evaluat
     }
     if (calls.length === 0) return call('singularity_read', { kind: 'self' })
     const selfText = (request.messages ?? []).filter(message => message.role === 'tool').map(message => wireText(message.content))
-      .find(text => text.includes('"contractDigest"'))
+      .find(text => text.includes('"data":'))
     assert.ok(selfText)
-    const { data } = JSON.parse(selfText) as { data: { taskId: string; runId: string; contractDigest: string; contextEpoch: string; acceptance: { provider: Ref } } }
-    provider = data.acceptance.provider
+    const { data: text } = JSON.parse(selfText) as { data: string }
+    const data = JSON.parse(text) as { taskId: string; runId: string; contractDigest: string; contextEpoch: string; acceptanceProvider: Ref }
+    provider = data.acceptanceProvider
     if (calls.length === 1) return call('singularity_plan', { sketch: { v: 1, taskId: data.taskId, runId: data.runId,
       sourceContract: data.contractDigest, contextEpoch: data.contextEpoch, objective: 'Produce the exact report.',
       levels: [0, 1].map(level => ({ level, purpose: 'Compute this report.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),

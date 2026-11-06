@@ -683,6 +683,26 @@ void test('tool dispatch uses the exact host budget check while preserving read 
       levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
       directPlan: [], assumptions: [],
     } }, execution('singularity_plan'))
+    const currentPlan = await planTool.execute({ sketch: {
+      v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch: 'current',
+      objective: 'replan current task', sourceContract: contract.digest,
+      levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+      directPlan: [], assumptions: [],
+    } }, execution('singularity_plan')) as { readonly planningSketchRef: Ref }
+    const persistedPlan = JSON.parse(new TextDecoder().decode(
+      (await store.readObject(currentPlan.planningSketchRef, 'object')).bytes,
+    )) as { readonly contextEpoch: string }
+    assert.equal(persistedPlan.contextEpoch, contextEpoch)
+    assert.notEqual(persistedPlan.contextEpoch, 'current')
+    await assert.rejects(
+      planTool.execute({ sketch: {
+        v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch: 'stale-epoch',
+        objective: 'stale replan', sourceContract: contract.digest,
+        levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+        directPlan: [], assumptions: [],
+      } }, execution('singularity_plan')),
+      /PLAN_FIRST/,
+    )
     assertSubmissionGate(undefined)
     assert.equal(controller.checkGuard(execution('bash')), undefined)
     allowed = false

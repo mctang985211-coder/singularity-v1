@@ -158,15 +158,26 @@ export async function readChildData(
       || !Number.isSafeInteger(size) || size < 1 || size > 20) {
       throw new DecomposeError('INVALID_ARGUMENT', 'invalid direct child page')
     }
-    const rows = children.results.slice(offset, offset + size).map(result => ({
-      taskId: result.task.taskId, parentRunId: result.task.parentRunId ?? '',
-      batchId: result.task.batchId ?? '', bindingId: result.task.bindingId ?? '',
-      join: result.task.join ?? 'probe', outcome: result.task.closed?.outcome ?? null,
-      reason: result.task.closed?.reason ?? null, outputs: inputRefs(result),
-      ...(result.evidenceRef === undefined ? {} : { evidenceRef: result.evidenceRef }),
-      ...(result.executionRecordRef === undefined ? {} : { executionRecordRef: result.executionRecordRef }),
-    }))
-    const next = offset + rows.length
+    const rows = []
+    let next = offset
+    for (; next < children.results.length && rows.length < size; next += 1) {
+      const result = children.results[next]
+      const row = {
+        taskId: result.task.taskId, parentRunId: result.task.parentRunId ?? '',
+        goalSummary: result.task.contract.spec.goal.summary,
+        deliverable: result.task.contract.spec.goal.deliverable,
+        batchId: result.task.batchId ?? '', bindingId: result.task.bindingId ?? '',
+        join: result.task.join ?? 'probe', outcome: result.task.closed?.outcome ?? null,
+        reason: result.task.closed?.reason ?? null, outputs: inputRefs(result),
+        ...(result.evidenceRef === undefined ? {} : { evidenceRef: result.evidenceRef }),
+        ...(result.executionRecordRef === undefined ? {} : { executionRecordRef: result.executionRecordRef }),
+      }
+      if (Buffer.byteLength(JSON.stringify([...rows, row])) > 12 * 1024) {
+        if (rows.length > 0) break
+        throw new DecomposeError('INVALID_ARGUMENT', 'one child record exceeds the read budget; read its evidence by ID instead')
+      }
+      rows.push(row)
+    }
     return { data: rows as unknown as JsonValue,
       ...(next < children.results.length ? { nextCursor: String(next) } : {}) }
   }

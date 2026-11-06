@@ -6,7 +6,7 @@ import type { JsonValue } from '@singularity/protocol'
 /** Syntax-only examples; current identities and objectives come from the Task view. */
 export const taskToolExamples: Record<string, JsonValue> = {
   singularity_read: { kind: 'self' },
-  singularity_plan: { sketch: { v: 1, taskId: 'task', runId: 'run', contextEpoch: 'current-epoch',
+  singularity_plan: { sketch: { v: 1, taskId: 'task', runId: 'run', contextEpoch: 'current',
     sourceContract: `sha256:${'0'.repeat(64)}`, objective: 'Deliver a report from frozen records.',
     levels: [{ level: 0, purpose: 'Integrate aggregation and reporting; check the final report.', likelyChildren: ['platform:explore-child'], expectedInputs: ['records.json'], expectedOutputs: ['validated report'] },
       { level: 1, purpose: 'Aggregate known records first; define reporting after inspecting the returned totals and CLI.', likelyChildren: [], expectedInputs: ['frozen records or totals'], expectedOutputs: ['executable stage and consumable output'] }],
@@ -25,8 +25,8 @@ export const taskProtocolReference: JsonValue = {
   v: 1,
   planning: {
     levels: 'Exactly [0,1] or [0,1,2]. Level 0 is the current Task, level 1 its direct children, level 2 possible grandchildren. Levels describe responsibility scopes; dependencies execute in successive batches.',
-    execution: 'After discovery, use purpose/assumptions for functions, prerequisites, output consumers, evidence, estimated cost and uncertainty, including integration and verification. Look ahead through the completion path; commit only ready direct responsibilities and consume prerequisite results before defining downstream contracts. Each child organizes deeper work. A leaf has settled prerequisites and one directly verifiable result; sharing a checkout is insufficient. A sketch creates no Tasks; decompose commit admits them.',
-    epoch: 'Read the current contextEpoch from NodeView. Resume or native compaction can change it; a child admission alone is not proof of an epoch change.',
+    execution: 'Use purpose/assumptions for prerequisites, output consumers, evidence and cost/uncertainty. Commit ready implementation responsibilities whose frozen outputs this level will consume; host verification is not a child responsibility. Consume prerequisite results before downstream contracts. Each child organizes deeper work; a sketch creates no Tasks.',
+    epoch: 'Read self/NodeView first. Use its exact contextEpoch, or use contextEpoch:"current"; the host resolves that shorthand to the current epoch. Resume or native compaction can change it; a child admission alone is not proof of an epoch change.',
     schema: protocolJsonSchema(planningSketchSchema),
   },
   decompose: protocolJsonSchema(decomposeCommitSchema),
@@ -38,9 +38,9 @@ export const taskProtocolReference: JsonValue = {
     'Prepare a later report batch. Copy the totals output InputRef fields id/object/path/access unchanged into that child inputs. Its goal defines the JSON totals interface and report format; author checks that compare the report with those totals. An access:read input is read with singularity_read(kind="resource", id=...), not a sibling workspace path.',
     'Read the report result, integrate both stages into this Task outputs and test the actual report consumer against the original records and this Task acceptance. Local passes do not replace this integration check. A failed interface leads to corrected work or a new contract through feedback.',
   ],
-  method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Register skill/MCP assets in the Method before binding their IDs; public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
+  method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Bind changed assets into entry-reachable templates; unreachable additions are no-ops. Public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
   skills: 'Bound skills use native DSH discovery; directory resources include frozen relative files. Use the path returned by the skill tool for bundled scripts.',
-  results: 'Read evidence with a direct child ID or lastAttempt.runId. Join ALL data pages to parse {outputs,result,publicReceipt?}; outputs gives complete authorized InputRefs to copy unchanged into child contracts. publicReceipt.criteria contains independent findings, including gaps in passing verdicts. Correct those gaps before resubmitting; preserve the parent goal. Prior transcripts and private receipts are not exposed.',
+  results: 'Children pages include goalSummary/deliverable for integration. Read evidence by child/result Ref or lastAttempt.runId and join ALL data pages into {outputs,result,publicReceipt?}; outputs are complete InputRefs. Resolve remaining contract findings without creating another review layer. Prior transcripts and private receipts are not exposed.',
 }
 
 export const planningParameters = {
@@ -60,7 +60,7 @@ export const planningInputSchema: ToolDefinition['parameters'] = {
 export const decomposeParameters = {
   action: { type: 'string', required: true, description: '"prepare" reads an example; "commit" admits a prepared batch.' },
   bindingId: { type: 'string', description: 'NodeView childOptions bindingId for prepare.' },
-  children: { type: 'json', description: 'ackPreview=previewRef.digest; copy InputRefs unchanged. Checks use bash -e -o pipefail with captured stdout/stderr and ONLY frozen inputs/outputs. Required outputs inherited; localOutputs adds files or [].' },
+  children: { type: 'json', description: 'ackPreview=previewRef.digest; copy InputRefs unchanged. Checks use bash -e -o pipefail with captured streams and only frozen inputs/outputs. Required outputs are inherited; localOutputs adds supporting files/trees or is omitted/[].' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)

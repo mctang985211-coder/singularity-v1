@@ -33,7 +33,6 @@ import { prepareWorkspace } from './workspace.ts'
 import type { CasObjectReader,CasObjectWriter } from './workspace.ts'
 
 /** Stable closure reasons used by the fixed retry policy. */
-export const VERIFIER_ERROR_REASON = 'verifier-error'
 export const VERIFIER_TIMEOUT_REASON = 'verifier-timeout'
 export const VERIFIER_SIGNAL_REASON = 'verifier-signal'
 export const VERIFIER_INVALID_REASON = 'verifier-invalid'
@@ -64,10 +63,14 @@ export interface VerifierRequest extends VerifyRequest {
 }
 
 /** Independent domain verifier from docs/framework.md §19. */
-export interface RunVerifier {
+export type RunVerifier = {
   /** This host uses the frozen acceptance object itself as provider identity. */
   readonly provider: Ref
+  readonly checksOnly?: false
   verify(request: VerifierRequest): Promise<PublicReceipt>
+} | {
+  readonly provider: Ref
+  readonly checksOnly: true
 }
 
 /** Worker, trace and comparator views never expose the opaque private receipt. */
@@ -132,19 +135,30 @@ export async function verifyRunSubmission(
   try {
     signal.throwIfAborted()
     if (remaining <= 0) throw timeout
+    if (input.verifier.checksOnly === true
+      && input.contract.spec.criteria.some(criterion => criterion.required && criterion.check === undefined)) {
+      throw new SingleRunError('COMPOSITION_MISMATCH', 'check-only acceptance requires one frozen check per required criterion')
+    }
     const checks = await rerunChecks(input, signal)
-    // Await the domain operation itself; a timer must not abandon a live verifier.
-    receipt = await input.verifier.verify({
-      operationId,
-      task: input.contract,
-      inputs: input.inputs,
-      outputs: input.outputs,
-      signal,
-      readObject: (ref, domain) => input.reader.readObject(ref, domain),
-    })
+    if (input.verifier.checksOnly === true) {
+      receipt = sealPublicReceipt({ v: 1, provider: input.contract.acceptance, operationId,
+        contractDigest: input.contract.digest, inputDigests: input.inputs.map(ref => ref.digest), outputDigests: input.outputs.map(ref => ref.digest),
+        criteria: [...checks].map(([id, check]) => ({ id,
+          verdict: check.exitCode === 0 && !check.timedOut && check.signal === null ? 'pass' : 'fail',
+          reason: `Frozen check: ${JSON.stringify(check)}` })), exit: { code: 0, signal: null }, timedOut: false })
+    } else {
+      receipt = await input.verifier.verify({
+        operationId,
+        task: input.contract,
+        inputs: input.inputs,
+        outputs: input.outputs,
+        signal,
+        readObject: (ref, domain) => input.reader.readObject(ref, domain),
+      })
+    }
     signal.throwIfAborted()
     if (clock() >= input.contract.limits.deadlineAt) throw timeout
-    if (checks.size > 0 && validatePublicReceipt(receipt, {
+    if (checks.size > 0 && input.verifier.checksOnly !== true && validatePublicReceipt(receipt, {
       provider: input.contract.acceptance, operationId, contractDigest: input.contract.digest,
       inputDigests: input.inputs.map(ref => ref.digest), outputDigests: input.outputs.map(ref => ref.digest), requiredCriteria,
     }).verdict !== 'invalid') {

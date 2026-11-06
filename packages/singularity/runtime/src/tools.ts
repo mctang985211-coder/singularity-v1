@@ -41,7 +41,7 @@ class TaskToolRefusal extends Error {}
 const TOOL_ERROR_NEXT_ACTIONS: Readonly<Record<string, string>> = {
   INVALID_ARGUMENT: 'Fix the tool arguments and retry with declared fields only.',
   READ_SELF_FIRST: 'Call singularity_read(kind="self") and follow nextCursor through the complete contract, then continue.',
-  PLAN_FIRST: 'Call singularity_plan with the current contextEpoch, then continue.',
+  PLAN_FIRST: 'Call singularity_plan with the current task/run/sourceContract and contextEpoch:"current", then continue.',
   BINDING_FIXED: 'Use a bindingId from the current NodeView childOptions, then continue.',
   PREVIEW_REQUIRED: 'Call singularity_decompose with action="prepare" for a visible child binding first.',
   PREVIEW_STALE: 'Read the current self contract and prepare the child example again in this context epoch.',
@@ -52,7 +52,7 @@ const TOOL_ERROR_NEXT_ACTIONS: Readonly<Record<string, string>> = {
   IDEMPOTENCY_CONFLICT: 'Use a fresh tool call; the original command identity already has a different payload.',
   ALREADY_SUBMITTED: 'The submission is already frozen; stop calling tools.',
   RUN_CLOSED: 'This Run is already settling; stop calling tools.',
-  LIMIT_EXCEEDED: 'Reduce the requested scope or stop with a concrete blocker.',
+  LIMIT_EXCEEDED: 'Replan the remaining required work within current limits, or stop with a concrete blocker.',
 }
 
 const textEncoder = new TextEncoder()
@@ -289,12 +289,12 @@ export class RunToolController {
   private readTool() {
     return defineTool({
       name: 'singularity_read',
-      description: 'Read Task views/resources; follow nextCursor. evidence accepts child ID or lastAttempt.runId.',
+      description: 'Read authorized Task views/resources; follow nextCursor. evidence accepts child/result Ref IDs or lastAttempt.runId.',
       parameters: {
         kind: { type: 'string', enum: ['self', 'status', 'resource', 'children', 'evidence', 'ancestor', 'feedback'], required: true, description: 'Authorized Task view.' },
-        id: { type: 'string', description: 'Visible resource, child, evidence, lastAttempt.runId, feedback, or ancestor digest.' },
+        id: { type: 'string', description: 'Visible resource, child, result Ref, lastAttempt.runId, feedback, or ancestor digest.' },
         cursor: { type: 'string', description: 'nextCursor from the same read object.' },
-        page: { type: 'integer', description: 'List page size.' },
+        page: { type: 'integer', description: 'Optional page size for children/feedback lists.' },
       },
       output: {
         schema: {
@@ -386,10 +386,7 @@ export class RunToolController {
           criteria: contract.spec.criteria,
           inputs: contract.spec.inputs,
           outputs: contract.spec.outputs,
-          acceptance: {
-            provider: contract.acceptance,
-            criteria: contract.spec.criteria.filter(criterion => criterion.required),
-          },
+          acceptanceProvider: contract.acceptance,
           workspace: this.options.workspace,
           contextEpoch: this.state.epoch,
         }
@@ -403,7 +400,7 @@ export class RunToolController {
         }
         const end = Math.min(text.length, offset + SELF_PAGE_CHARS)
         const response = {
-          data: text.length > SELF_PAGE_CHARS ? text.slice(offset, end) : data,
+          data: text.slice(offset, end),
           objectRef: { id: contract.taskId, digest: contract.digest },
           ...(end < text.length ? { nextCursor: `${prefix}${String(end)}` } : {}),
           asOf,
@@ -442,14 +439,17 @@ export class RunToolController {
         } catch (error) {
           throw this.toolError('INVALID_ARGUMENT', errorMessage(error, 'unknown error'))
         }
-        if (sketch.taskId !== this.options.contract.taskId
-          || sketch.runId !== this.options.runId
-          || sketch.contextEpoch !== this.state.epoch
-          || sketch.sourceContract !== this.options.contract.digest) {
+        const normalized = sketch.contextEpoch === 'current'
+          ? { ...sketch, contextEpoch: this.state.epoch }
+          : sketch
+        if (normalized.taskId !== this.options.contract.taskId
+          || normalized.runId !== this.options.runId
+          || normalized.contextEpoch !== this.state.epoch
+          || normalized.sourceContract !== this.options.contract.digest) {
           throw this.toolError('PLAN_FIRST', 'sketch does not match the current task/run/epoch/contract')
         }
         const visibleBindings = new Set(this.childBindingIds)
-        for (const entry of sketch.directPlan) {
+        for (const entry of normalized.directPlan) {
           if (!visibleBindings.has(entry.bindingId)) {
             throw this.toolError(
               'BINDING_FIXED',
@@ -457,7 +457,7 @@ export class RunToolController {
             )
           }
         }
-        const bytes = textEncoder.encode(canonicalize(sketch as unknown as JsonValue))
+        const bytes = textEncoder.encode(canonicalize(normalized as unknown as JsonValue))
         const planningSketchRef = await this.options.writer.putObject(
           `${this.options.runId}:planning-sketch`,
           bytes,
@@ -637,7 +637,7 @@ export class RunToolController {
   private stopTool() {
     return defineTool({
       name: 'singularity_stop',
-      description: 'End this Run with its blocker for settlement.',
+      description: 'Return blocked or unsolved with a concrete reason for settlement.',
       parameters: {
         reason: { type: 'string', enum: ['blocked', 'unsolved'], required: true, description: 'Stable stop category.' },
         message: { type: 'string', required: true, description: 'Concrete blocker or reason.' },

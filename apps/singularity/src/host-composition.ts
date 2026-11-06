@@ -111,7 +111,8 @@ export async function buildSingleRunComposition(
       config: entry.fiber?.effectiveConfig,
     }))
   const mcpOrder = ctx.systemPrompt.getSectionOrder('MCP_SERVERS')
-  const mcpSections = mcpPromptSections(methodResources.mcpServers, mcpOrder)
+  const nativeMcpResources = ctx.get('mcpResources', false) !== undefined
+  const mcpSections = mcpPromptSections(methodResources.mcpServers, mcpOrder, nativeMcpResources)
   const resourceText = mcpSections.find(section => section.name === 'mcp-resource-servers')?.text ?? ''
   const disposers: (() => void)[] = []
   let assembly
@@ -130,7 +131,7 @@ export async function buildSingleRunComposition(
   } finally {
     for (const dispose of disposers.reverse()) dispose()
   }
-  if (methodResources.mcpServers.length > 0
+  if (nativeMcpResources && methodResources.mcpServers.length > 0
     && !assembly.sections.some(section => section.name === 'mcp-resource-servers')) {
     throw new MethodResourceError(
       'method',

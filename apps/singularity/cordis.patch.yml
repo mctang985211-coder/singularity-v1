@@ -15,7 +15,6 @@
 - id: llm-deepseek
   disabled: true
 
-# Native compaction requests are not yet included in request/usage accounting.
 - id: compaction-basic
   config:
     auto: false
@@ -32,6 +31,10 @@
             api: openai-completions
             baseURL: !!js ctx.get('launchEnvironment')?.get('SINGULARITY_SPIKE_BASE_URL')?.value
             reasoning: max
+            # The configured OpenAI-compatible endpoint can take >10s before
+            # the first continuation chunk after a tool result.
+            timeoutMs: 600000
+            streamIdleTimeoutMs: 600000
             retryPolicy:
               mode: normal
               maxRetries: 0

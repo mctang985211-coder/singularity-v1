@@ -1,0 +1,11 @@
+{
+  "transport": "stdio",
+  "command": "node",
+  "args": ["server.cjs"],
+  "env": {
+    "BUCKYBALL_BASELINE": "/absolute/prepared/buckyball",
+    "BUCKYBALL_MCP_ROOT": "/absolute/prepared/mcp-dependencies"
+  },
+  "toolCallTimeoutMs": 43200000,
+  "maxInstructionBytes": 8192
+}

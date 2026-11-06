@@ -25,7 +25,7 @@ export const EXPLORE_BINDING_ID = 'platform:explore-child'
 
 export const EXPLORE_GUIDANCE = {
   v: 1,
-  text: 'Discover the completion path and dependencies; distinguish established inputs from hypotheses. Plan functions, consumers, evidence and estimated costs in purpose/assumptions. Commit ready direct responsibilities; consume prerequisite results before defining downstream contracts. Each child organizes deeper work. A leaf has settled prerequisites and one directly verifiable result. Author acceptanceCriteria with concrete pass rules and self-contained shell checks, using complete frozen InputRefs. Deliver under result/ and verify through the actual consumer. Local checks establish their stated scope; preserve reusable discoveries as learning drafts.',
+  text: 'Use frozen public resources for the current goal and deliver consumable files under result/.',
 } as const
 
 export const EXPLORE_EXAMPLE = {

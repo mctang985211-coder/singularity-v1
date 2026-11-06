@@ -11,7 +11,7 @@ import { buildSingleRunComposition } from '../src/host-composition.ts'
 import { contextEpochFrom, messageTexts } from './fixtures/chat-completions.ts'
 import { previewDigestFrom, s4b2Example } from './method-fixture.ts'
 import { contractPayload, methodPayload, planReply, submitReply, withHarness } from './run-fixture.ts'
-import { agentOptions, fixtureUsage, FROZEN_OUTPUT, jsonBytes, makeScenario } from './task-fixture.ts'
+import { agentOptions, fixtureUsage, FROZEN_OUTPUT, jsonBytes, makeScenario, OUTPUT_PATH } from './task-fixture.ts'
 import type { Scenario, ScriptedReply, WireRequest } from './task-fixture.ts'
 
 function call(index: number, name: string, args: unknown): ScriptedReply {
@@ -70,6 +70,30 @@ void test('frozen checks consume CAS inputs and outputs, preserve review failure
         assert.equal(result.verdict, expected)
         if (result.verdict !== 'invalid') assert.match(result.receipt.criteria[0].reason, /Frozen check:/)
       }
+    } finally { await service.close() }
+  })
+})
+
+void test('check-only acceptance uses native CAS checks without a domain reviewer', async () => {
+  await withHarness(() => { throw new Error('check-only acceptance must not request a model') }, async ({ spike, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, { taskId: 'check-only-verifier', maxRuns: 1 })
+    const service = await CommandService.open({ root: storeRoot, actor: { kind: 'runtime', id: 'check-only-fixture' }, clock: Date.now })
+    try {
+      const output = await service.putObject('check-only:output:result', new TextEncoder().encode(FROZEN_OUTPUT))
+      for (const [command, expected] of [[`test "$(cat ${OUTPUT_PATH})" = '${FROZEN_OUTPUT}'`, 'verified'], ['false', 'failed']] as const) {
+        const contract = sealTaskContract({ ...contractPayload(scenario.contract), spec: { ...scenario.contract.spec,
+          criteria: [{ id: 'check', statement: 'The frozen output has the exact bytes.', required: true, check: command }] } })
+        const result = await verifyRunSubmission({ shell: spike.ctx.shell, contract, runId: `check-only-${expected}`,
+          inputs: contract.spec.inputs.map(input => input.object), outputs: [output], reader: service, writer: service,
+          verifier: { provider: contract.acceptance, checksOnly: true } })
+        assert.equal(result.verdict, expected)
+        assert.match(result.receipt.criteria[0].reason, /Frozen check:/)
+      }
+      const partial = sealTaskContract({ ...contractPayload(scenario.contract), spec: { ...scenario.contract.spec,
+        criteria: [{ id: 'check', statement: 'Checked.', required: true, check: 'true' }, { id: 'semantic', statement: 'Not checked.', required: true }] } })
+      await assert.rejects(verifyRunSubmission({ shell: spike.ctx.shell, contract: partial, runId: 'check-only-partial',
+        inputs: partial.spec.inputs.map(input => input.object), outputs: [output], reader: service, writer: service,
+        verifier: { provider: partial.acceptance, checksOnly: true } }), { code: 'COMPOSITION_MISMATCH' })
     } finally { await service.close() }
   })
 })

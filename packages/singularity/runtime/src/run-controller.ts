@@ -125,7 +125,7 @@ export async function createToolController(
         ? await readGlobalResource(service, prepared.methodResources.exploration, query) : undefined)
         ?? await readChildData(service, children, runtime.contract.spec.inputs, query, previous),
     skillNames: prepared.methodResources.skills.map(skill => skill.name),
-    mcpPlan: mcpDispatchPlan(prepared.methodResources.mcpServers),
+    mcpPlan: mcpDispatchPlan(prepared.methodResources.mcpServers, request.ctx.get('mcpResources', false) !== undefined),
     childBindingIds: prepared.methodResources.template.children.map(binding => binding.bindingId),
     decompose: {
       methodResources: prepared.methodResources,
