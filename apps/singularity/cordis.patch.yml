@@ -35,9 +35,6 @@
             # the first continuation chunk after a tool result.
             timeoutMs: 600000
             streamIdleTimeoutMs: 600000
-            retryPolicy:
-              mode: normal
-              maxRetries: 0
             compat:
               supportsDeveloperRole: false
               supportsReasoningEffort: true
