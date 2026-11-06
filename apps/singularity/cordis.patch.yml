@@ -37,10 +37,7 @@
             streamIdleTimeoutMs: 600000
             retryPolicy:
               mode: normal
-              # A transient provider disconnect must not discard a completed
-              # child tree during the root integration turn. Keep retries
-              # bounded so a persistent failure still surfaces promptly.
-              maxRetries: 2
+              maxRetries: 0
             compat:
               supportsDeveloperRole: false
               supportsReasoningEffort: true
