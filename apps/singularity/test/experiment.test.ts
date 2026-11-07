@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { chmod,glob,mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename,join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
@@ -364,7 +364,8 @@ void test('experiment settles exploration children by shell and reviews only the
   assert.equal(proposers, 1)
   assert.equal(workerStep, 13)
   const launch = JSON.parse(await readFile(join(root, 'launch.json'), 'utf8')) as { checkAcceptance: { id: string } }
-  assert.equal(launch.checkAcceptance.id, 'experiment:frozen-check-acceptance')
+  const campaignId = `experiment:${basename(root)}`
+  assert.equal(launch.checkAcceptance.id, `${campaignId}:frozen-check-acceptance`)
   const { DatabaseSync } = await import('node:sqlite')
   const db = new DatabaseSync(join(root, 'domain/domain.sqlite'), { readOnly: true })
   try {
@@ -374,7 +375,7 @@ void test('experiment settles exploration children by shell and reviews only the
     const admission = facts.find(fact => fact.type === 'task/children-admitted')
     const child = admission?.data.children?.[0]?.contract
     assert.ok(child)
-    assert.equal(child.acceptance.id, 'experiment:frozen-check-acceptance')
+    assert.equal(child.acceptance.id, `${campaignId}:frozen-check-acceptance`)
     const closure = facts.find(fact => fact.type === 'run/closed' && fact.data.runId === `${child.taskId}:run:1`)
     assert.equal(closure?.data.classification, 'verified')
     assert.equal(facts.filter(fact => fact.type === 'rsi/trace-sealed').length, 1)

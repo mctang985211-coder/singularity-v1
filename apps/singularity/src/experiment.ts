@@ -1,5 +1,5 @@
 import { copyFile,mkdir,writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename,join } from 'node:path'
 
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -37,6 +37,8 @@ const bytes = (value: unknown) => value instanceof Uint8Array ? value : new Text
 /** Operator host for any public domain bundle; domains own no Task or Round state. */
 export async function runExperiment(root: string, domain: ExperimentDomain, budget = EXPERIMENT_BUDGET) {
   const startedAt = Date.now(), deadlineAt = startedAt + budget.maxWallClockMs
+  const campaignId = `experiment:${basename(root).replace(/[^A-Za-z0-9_-]/g, '-')}`
+  const id = (suffix: string) => `${campaignId}:${suffix}`
   await mkdir(root)
   const cancellation = new AbortController()
   const patch = join(root, 'compaction.patch.yml')
@@ -54,20 +56,21 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
   const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
-    const provider = await put('experiment:acceptance', { v: 1, kind: 'independent-contract-review', policy: AGENT_REVIEW_POLICY })
-    const checkProvider = await put('experiment:frozen-check-acceptance', { v: 1, kind: 'frozen-contract-checks' })
-    const comparatorAsset = await put('experiment:comparator', { v: 1, kind: 'paired-consumer-quality', metric: 'verified-fraction' })
-    const baseTools = await Promise.all(['bash', 'job_output', 'job_list', 'job_kill'].map(name => put(`base-tool:${name}`, { v: 1, name })))
-    const protocol = await put('experiment:task-protocol', taskProtocolReference)
+    const provider = await put(id('acceptance'), { v: 1, kind: 'independent-contract-review', policy: AGENT_REVIEW_POLICY })
+    const checkProvider = await put(id('frozen-check-acceptance'), { v: 1, kind: 'frozen-contract-checks' })
+    const comparatorAsset = await put(id('comparator'), { v: 1, kind: 'paired-consumer-quality', metric: 'verified-fraction' })
+    const baseTools = await Promise.all(['bash', 'job_output', 'job_list', 'job_kill'].map(name => put(`${campaignId}:base-tool:${name}`, { v: 1, name })))
+    const protocol = await put(id('task-protocol'), taskProtocolReference)
     const tools = domain.tools === undefined ? [] : await freezeDomainTools(service, domain.tools)
     const snapshotValue: GlobalResourceSnapshot = { v: 1, skills: [], tools, baseTools, fallbackAcceptance: checkProvider, fallbackJoin: 'probe',
       documents: [{ id: 'task-protocol', description: 'Task planning, decomposition, schemas and resource usage.', object: protocol }] }
-    const snapshot = await freezeGlobalResources(service, 'experiment:global-resources', snapshotValue)
-    const seed = await put('experiment:seed', { v: 1, name: domain.id })
-    const profile = await put('experiment:profile', { v: 1, options, compaction: { threshold: 0.75, maxTokens: 40000 }, budget })
-    const method = await service.putObject('experiment:method-empty', bytes(sealMethodRevision({ v: 1, id: 'experiment:method-empty', templates: [], skills: [], tools: [] })), 'method')
-    await commit('method/registered', { revision: method }, 'experiment:register-empty')
-    await commit('method/activated', { next: method, approval: await put('experiment:initial-approval', { v: 1, purpose: 'empty-initialization' }) }, 'experiment:activate-empty')
+    const snapshot = await freezeGlobalResources(service, id('global-resources'), snapshotValue)
+    const seed = await put(id('seed'), { v: 1, name: domain.id })
+    const profile = await put(id('profile'), { v: 1, options, compaction: { threshold: 0.75, maxTokens: 40000 }, budget })
+    const methodId = id('method-empty')
+    const method = await service.putObject(methodId, bytes(sealMethodRevision({ v: 1, id: methodId, templates: [], skills: [], tools: [] })), 'method')
+    await commit('method/registered', { revision: method }, id('register-empty'))
+    await commit('method/activated', { next: method, approval: await put(id('initial-approval'), { v: 1, purpose: 'empty-initialization' }) }, id('activate-empty'))
     const summaries = new ContractSummaryService({ ctx: spike.ctx, writer: service, agentOptions: options })
     const verify = await createAgentVerifier(spike.ctx, { root: join(root, 'reviews'), reader: service, tools, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, maxSteps: budget.reviewMaxSteps })
     const verifierFor = (contract: TaskContract) => contract.acceptance.id === checkProvider.id && contract.acceptance.digest === checkProvider.digest
@@ -101,19 +104,19 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
     const bindSpec = async (id: string, taskDraft: Parameters<typeof bindDomainTask>[0], inputs: Readonly<Record<string, unknown>>) => bindDomainTask(taskDraft, Object.fromEntries(await Promise.all(
       Object.entries(inputs).map(async ([inputId, value]) => [inputId, await put(`${id}:${inputId}`, value)] as const),
     )))
-    const sourceSpec = await bindSpec('experiment:source-input', domain.sourceTask, domain.source)
+    const sourceSpec = await bindSpec(id('source-input'), domain.sourceTask, domain.source)
     const cases: { spec: TaskSpec; ref: Ref; validation?: boolean; acceptanceKind: 'review' | 'checks' | undefined }[] = []
     for (const definition of domain.cases) {
-      const spec = await bindSpec(`experiment:case-input:${definition.id}`, definition.task, definition.input)
+      const spec = await bindSpec(id(`case-input:${definition.id}`), definition.task, definition.input)
       const acceptanceKind = definition.acceptance ?? domain.acceptance
-      const contract = await contractFor(`experiment:definition:${definition.id}`, spec, method, 'evaluation', profile, acceptanceKind)
-      cases.push({ spec, validation: definition.validation, acceptanceKind, ref: await freezeEvaluationCase(service, `experiment:case:${definition.id}`, evaluationCaseFromContract(contract)) })
+      const contract = await contractFor(id(`definition:${definition.id}`), spec, method, 'evaluation', profile, acceptanceKind)
+      cases.push({ spec, validation: definition.validation, acceptanceKind, ref: await freezeEvaluationCase(service, id(`case:${definition.id}`), evaluationCaseFromContract(contract)) })
     }
     await writeFile(join(root, 'launch.json'), JSON.stringify({ v: 1, startedAt, deadlineAt, pid: process.pid, sourceSpec, cases, budget,
       domain: domain.id, emptyMethod: method, independentReview: provider, checkAcceptance: checkProvider, compaction: 'native enabled; all llm/stream calls accounted' }, null, 2))
     console.log(JSON.stringify({ event: 'campaign-started', pid: process.pid, root, startedAt, deadlineAt }))
     for (let index = 0; index < budget.rounds && accounting.available(); index += 1) {
-      const roundId = `experiment:round:${String(index + 1)}`, taskId = `${roundId}:source`
+      const roundId = id(`round:${String(index + 1)}`), taskId = `${roundId}:source`
       const active = (await service.methodRoundState()).productionHead
       if (active === undefined) throw new Error('Missing active Method')
       const source = await runTask(await contractFor(taskId, sourceSpec, active, 'work', await put(`${taskId}:request`, { v: 1, purpose: 'domain-work' })))
