@@ -3,7 +3,7 @@ import type { AgentHandle,AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Session,SessionId } from '@deepseek-ai/dsh-session'
 import { defineTool,ToolArgsError } from '@deepseek-ai/dsh-tools'
 import type { ContractSummary,ContractSummaryRef,JsonValue,SessionCut,TaskContract,TaskRunState,UsageRecord } from '@singularity/protocol'
-import { canonicalize,contractSummarySchema,parseProtocolValue } from '@singularity/protocol'
+import { canonicalize,computeDigest,contractSummarySchema,parseProtocolValue } from '@singularity/protocol'
 
 import { snapshotSession } from './agent.ts'
 import { DecomposeError,throwCollectedErrors } from './errors.ts'
@@ -166,7 +166,11 @@ export class ContractSummaryService {
   private async generate(entry: MutableOwner): Promise<void> {
     const owner = entry.owner
     const clock = this.options.clock ?? Date.now
-    const sessionId = `contract-summary:${owner.runId}:${owner.contract.digest}`
+    // DSH persistence uses the session id in a filename. Keep the external
+    // Task identity in the sealed summary metadata, but use a bounded stable
+    // key for the native worker so long evaluation task ids cannot overflow
+    // filesystem component limits.
+    const sessionId = `contract-summary:${computeDigest('object', { runId: owner.runId, contract: owner.contract.digest }).slice('sha256:'.length)}`
     const deadline = AbortSignal.timeout(Math.min(2_147_483_647, Math.max(0, owner.contract.limits.deadlineAt - clock())))
     const signal = AbortSignal.any([deadline, entry.cancellation.signal, ...(owner.signal === undefined ? [] : [owner.signal])])
     let handle: AgentHandle | undefined
