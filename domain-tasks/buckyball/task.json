@@ -9,6 +9,7 @@
     "constraints": [
       "Use the pinned poly configuration and its actual bank capacities; preserve numerical semantics.",
       "Expose dimensions and input data at the callable interface; do not hardcode case outputs. Repeated calls must not retain stale accumulator state.",
+      "Use only the current Task workspace for inspection, edits, builds and outputs. Access the prepared baseline only through the mounted Buckyball checkout tool; do not inspect other preparation or execution roots and do not create sibling/global run directories.",
       "Run: python3 ball/mxmm.py request.json response.json. The request/response schema is the executable contract in acceptance.py; every call carries actual codes/scales and returns C, eight unchanged FP32 guard words and its real command record.",
       "Build and run actual RISC-V ELF on focused BEMU with the MXMM core selected. Record the four existing capacity/window/window-chain/window-rows regression commands and terminal results; BEMU evidence is not RTL correctness.",
       "project.json identifies the pinned baseline and optional BEMU/compiler references. Work in independent prepared checkouts and preserve the baseline for comparison. Never substitute folded, projected or otherwise regenerated inputs for the frozen request bytes."

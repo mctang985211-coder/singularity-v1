@@ -7,7 +7,8 @@
     ],
     "constraints": [
       "Use integer arithmetic and preserve every input SKU, including zero and negative totals.",
-      "Keep the supplied input unchanged."
+      "Keep the supplied input unchanged.",
+      "Use only the current Task workspace for inspection, edits and outputs; do not inspect other preparation or execution roots or create sibling/global run directories."
     ]
   },
   "criteria": [
