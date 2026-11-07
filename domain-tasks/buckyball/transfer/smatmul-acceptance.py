@@ -10,6 +10,13 @@ GUARD = 0x5A5A5A5A
 REGRESSIONS = ('smatmul_16x16x32_test', 'smatmul_bias_accumulate_test')
 
 
+def remove_if_present(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def build_request(project):
     case = project['case']
     m, n, k, seed = case['m'], case['n'], case['k'], case['seed']
@@ -84,10 +91,11 @@ def main():
     try:
         completed = subprocess.run(
             [sys.executable, 'ball/smatmul.py', str(request_path), str(response_path)],
-            cwd=root, capture_output=True, text=True, timeout=60 * 60,
+            cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, timeout=60 * 60,
         )
     finally:
-        request_path.unlink(missing_ok=True)
+        remove_if_present(request_path)
     if completed.returncode != 0:
         print(completed.stdout)
         print(completed.stderr, file=sys.stderr)

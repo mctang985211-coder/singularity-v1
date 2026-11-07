@@ -18,6 +18,13 @@ REGRESSIONS = (
 )
 
 
+def remove_if_present(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def case_code(i, seed):
     value = (73 * i + 19 * (i // 256) + seed) % 127
     if i % 2:
@@ -202,10 +209,11 @@ def main():
     try:
         completed = subprocess.run(
             [sys.executable, 'ball/mxmm.py', str(request_path), str(response_path)],
-            cwd=root, capture_output=True, text=True, timeout=6 * 60 * 60,
+            cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, timeout=6 * 60 * 60,
         )
     finally:
-        request_path.unlink(missing_ok=True)
+        remove_if_present(request_path)
     if completed.returncode != 0:
         print(completed.stdout)
         print(completed.stderr, file=sys.stderr)
