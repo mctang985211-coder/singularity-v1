@@ -4,7 +4,7 @@ import { basename,join } from 'node:path'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GlobalResourceSnapshot,JsonValue,Ref,RoundPlan,TaskContract,TaskLimits,TaskSpec } from '@singularity/protocol'
-import { admitRootTask,canonicalize,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseProtocolValue,resolveTemplateView,sealMethodRevision } from '@singularity/protocol'
+import { admitRootTask,canonicalize,computeDigest,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseProtocolValue,resolveTemplateView,sealMethodRevision } from '@singularity/protocol'
 import type { EvaluationTaskRequest } from '@singularity/runtime'
 import { activateRoundCandidate,AGENT_REVIEW_POLICY,createAgentVerifier,compareVerifiedFraction,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
 
@@ -78,7 +78,8 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
     const runTask = async (contract: TaskContract, slot?: EvaluationTaskRequest) => {
       const runId = `${contract.taskId}:run:1`, sessionId = `${runId}:session`
       const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract, agentOptions: options, base: { v: 1, seed } })
-      return executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace: join(root, 'workspaces', Buffer.from(contract.taskId).toString('hex')),
+      const workspaceKey = computeDigest('object', { taskId: contract.taskId }).slice('sha256:'.length)
+      return executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace: join(root, 'workspaces', workspaceKey),
         runId, sessionId, admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt } },
         composition, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: verifierFor(contract), actor,
         maxActive: slot?.maxActive ?? budget.maxActive, workspaceRoot: join(root, 'runs'), summaries,
