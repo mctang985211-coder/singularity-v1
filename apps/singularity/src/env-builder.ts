@@ -27,7 +27,12 @@ not workflow or approval procedures. Do not install tools without a consumer.
 Do not author Methods, child contracts, Task/RSI control flow, budgets, retries,
 model routes or activation. Do not modify Singularity source or shared registries.
 The resulting directory is loaded and frozen by a later run, not hot-reloaded
-into a live Task. Leave the directory inspectable and report unresolved gaps.`
+into a live Task. Work only inside the supplied materials directory and the
+current output directory; do not search other workspaces or historical artifacts.
+Use one or two focused bash calls, stop after the generic loader succeeds, and
+do not write ad-hoc test harnesses or repeat checks already represented by the
+declared acceptance scripts. Leave the directory inspectable and report
+unresolved gaps.`
 const ENV_BUILDER_EXAMPLE = `Minimal domain.json: {"v":1,"id":"example","task":"task.json","acceptance":"checks","source":{"input":"cases/source.txt"},"cases":[{"id":"transfer","description":"A distinct frozen input.","inputs":{"input":"cases/transfer.txt"}},{"id":"validation","description":"Independent validation input.","inputs":{"input":"cases/validation.txt"},"validation":true}]}.
 task.json contains goal, criteria, inputs and outputs. An input has id, path,
 access and an optional default source path; it has no object Ref. Each required

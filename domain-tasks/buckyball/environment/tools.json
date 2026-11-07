@@ -24,7 +24,7 @@
         },
         {
           "name": "bbdev",
-          "description": "Run direct bbdev operations in a checked-out project with args as an argv array, for example [\"bebop-bemu\",\"--sim\",...]. Nix is already activated.",
+          "description": "Run direct bbdev operations in a checked-out project with a normal argv array, for example [\"bebop-bemu\",\"--sim\",\"--chip\",\"toy\",\"--binary\",\"app\"]. The MCP server normalizes bbdev's operation arguments; Nix is already activated by this server.",
           "parameters": {
             "type": "object",
             "additionalProperties": false,
