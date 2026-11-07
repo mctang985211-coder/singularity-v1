@@ -26,3 +26,16 @@ void test('MethodPatch caps operations and canonical UTF-8 bytes', () => {
   assert.throws(() => parseMethodPatch({ ...patch, changes: Array.from({ length: 65 }, () => ({ op: 'set-entry', templateId: null })) }))
   assert.throws(() => parseMethodPatch({ ...patch, hypothesis: '中'.repeat(100_000) }), /256 KiB/)
 })
+
+void test('MethodPatch templates cannot author host-owned learning-draft outputs', () => {
+  const ref = { id: 'acceptance', digest: `sha256:${'a'.repeat(64)}` }
+  const template = {
+    id: 'template:root', brief: 'Use the reusable result.', instanceSchema: { type: 'object' },
+    requiredCriteria: [],
+    requiredOutputs: [{ id: '__skill-drafts', path: 'learning-drafts/skills', kind: 'tree', role: 'skill-draft', required: false }],
+    acceptancePolicy: ref, skills: [], tools: [], children: [], guidance: 'Use the result.',
+    example: { goal: { summary: 'Produce a result.', deliverable: 'result/', scope: [], constraints: [] },
+      acceptanceCriteria: [{ id: 'result', statement: 'The result exists.', check: 'test -d result' }], inputs: [] },
+  }
+  assert.throws(() => parseMethodPatch({ ...patch, changes: [{ op: 'put-template', template }] }))
+})

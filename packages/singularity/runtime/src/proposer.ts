@@ -36,6 +36,9 @@ Examples illustrate; never dispatch on case/suite IDs or copy solved data/answer
 Explain unseen-input transfer and risks; source pass is insufficient.
 Skill names are DSH kebab-case machine IDs. Bind changed assets to templates
 reachable from entry (set-entry if needed); unreachable changes are no-ops.
+Template requiredOutputs are business outputs only and may use roles deliverable/supporting;
+the host always appends __skill-drafts and __mcp-drafts, so never declare those IDs,
+the learning-drafts path, or skill-draft/mcp-draft roles in a template.
 Public catalogs are separate; bind the intended tool set explicitly. Keep it within 12 KiB; help is a resource.
 Submit one JSON patch with rsi_submit_patch. Correct invalid arguments in this session;
 accepted submission ends the turn. Host precheck/evaluation/activation decide the result.`

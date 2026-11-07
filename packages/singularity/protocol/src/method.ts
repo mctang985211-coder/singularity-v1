@@ -6,6 +6,16 @@ import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
 import { outputSpecSchema, taskCriterionSchema } from './task.ts'
 
+/**
+ * Method templates declare business outputs only. Learning-draft outputs are
+ * appended by host admission and therefore cannot be authored in a template.
+ */
+export const templateOutputSpecSchema = outputSpecSchema.extend({
+  role: z.enum(['deliverable', 'supporting']),
+})
+
+export type TemplateOutputSpec = z.infer<typeof templateOutputSpecSchema>
+
 /** Static child binding from docs/framework.md §5. */
 export const childBindingSchema = closedObject({
   bindingId: z.string(),
