@@ -15,6 +15,9 @@ const patch = {
 
 void test('C-15 MethodPatch accepts only the defined reusable asset operations', () => {
   assert.deepEqual(parseMethodPatch(patch), patch)
+  const { base, ...draft } = patch
+  assert.deepEqual(parseMethodPatch(draft, base), patch)
+  assert.throws(() => parseMethodPatch(patch, base), 'the model cannot supply the host base')
   for (const op of ['edit-live-task', 'set-verifier', 'set-scorer', 'set-input', 'set-model', 'set-platform-prompt', 'run-evaluation', 'activate']) {
     assert.throws(() => parseMethodPatch({ ...patch, changes: [{ op, id: 'forbidden' }] }))
   }
@@ -28,12 +31,11 @@ void test('MethodPatch caps operations and canonical UTF-8 bytes', () => {
 })
 
 void test('MethodPatch templates cannot author host-owned learning-draft outputs', () => {
-  const ref = { id: 'acceptance', digest: `sha256:${'a'.repeat(64)}` }
   const template = {
-    id: 'template:root', brief: 'Use the reusable result.', instanceSchema: { type: 'object' },
+    id: 'template:root', brief: 'Use the reusable result.',
     requiredCriteria: [],
     requiredOutputs: [{ id: '__skill-drafts', path: 'learning-drafts/skills', kind: 'tree', role: 'skill-draft', required: false }],
-    acceptancePolicy: ref, skills: [], tools: [], children: [], guidance: 'Use the result.',
+    skills: [], tools: [], children: [], guidance: 'Use the result.',
     example: { goal: { summary: 'Produce a result.', deliverable: 'result/', scope: [], constraints: [] },
       acceptanceCriteria: [{ id: 'result', statement: 'The result exists.', check: 'test -d result' }], inputs: [] },
   }

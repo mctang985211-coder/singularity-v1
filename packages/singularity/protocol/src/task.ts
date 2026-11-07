@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { digestSchema, seal, verifyDigest } from './digest.ts'
+import type { JsonObject } from './json.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue, workspaceRelativePathSchema } from './schema.ts'
 
@@ -102,6 +103,18 @@ export const taskProposalSchema = closedObject({
 })
 
 export type TaskProposal = z.infer<typeof taskProposalSchema>
+
+/** Host-owned default used by exploration and every MethodPatch template. */
+export const DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA: JsonObject = {
+  type: 'object', additionalProperties: false,
+  required: ['goal', 'inputs', 'acceptanceCriteria'],
+  properties: {
+    goal: { type: 'object' },
+    acceptanceCriteria: { type: 'array', minItems: 1 },
+    inputs: { type: 'array' },
+    localOutputs: { type: 'array' },
+  },
+}
 
 const taskExampleInputSchema = closedObject({
   id: z.string(),

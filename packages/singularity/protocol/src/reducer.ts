@@ -975,6 +975,7 @@ export function decideTaskRetryPolicy(
   const task = state.tasks.get(taskId)
   const run = state.runs.get(runId)
   if (task === undefined || run === undefined) return { allowed: false, reason: 'Run closure fact missing' }
+  if (task.join === 'probe') return { allowed: false, reason: 'probe Tasks have one Run; the parent chooses the next probe' }
   let owner: TaskState | undefined = task
   while (owner !== undefined) {
     const totals = subtreeUsage(state, owner.taskId)

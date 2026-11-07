@@ -1,7 +1,7 @@
 {
   "goal": {
-    "summary": "Implement reusable capacity-aware MXFP8 C = A * B^T on the existing Buckyball MXMM Ball. Read project.json and deliver a callable implementation for matrices exceeding physical bank capacity, executed through the repository ISA and focused BEMU.",
-    "deliverable": "ball/ with applicable source patches, callable consumer, numerical checks and reproduction commands.",
+    "summary": "Implement reusable capacity-aware MXFP8 C = A * B^T on the existing Buckyball MXMM Ball. Deliver a callable consumer that executes the frozen request bytes through real RISC-V ELF on focused BEMU.",
+    "deliverable": "ball/mxmm.py plus all source patches and reproduction assets needed by the frozen CLI contract in acceptance.py.",
     "scope": [
       "MXMM host packing, tiling, ISA and focused verification.",
       "Inputs are row-major E4M3 codes and per-row E8M0 scales per 32 K elements; output is FP32. Support M=1 or multiples of 16 up to 64, N positive multiples of 16 up to 80, K positive multiples of 32 up to 4096."
@@ -9,30 +9,17 @@
     "constraints": [
       "Use the pinned poly configuration and its actual bank capacities; preserve numerical semantics.",
       "Expose dimensions and input data at the callable interface; do not hardcode case outputs. Repeated calls must not retain stale accumulator state.",
-      "Build and run actual RISC-V ELF on focused BEMU with the MXMM core selected.",
-      "project.json identifies the pinned baseline and optional BEMU/compiler references. Work in independent prepared checkouts and preserve the baseline for comparison."
+      "Run: python3 ball/mxmm.py request.json response.json. The request/response schema is the executable contract in acceptance.py; every call carries actual codes/scales and returns C, eight unchanged FP32 guard words and its real command record.",
+      "Build and run actual RISC-V ELF on focused BEMU with the MXMM core selected. Record the four existing capacity/window/window-chain/window-rows regression commands and terminal results; BEMU evidence is not RTL correctness.",
+      "project.json identifies the pinned baseline and optional BEMU/compiler references. Work in independent prepared checkouts and preserve the baseline for comparison. Never substitute folded, projected or otherwise regenerated inputs for the frozen request bytes."
     ]
   },
   "criteria": [
     {
-      "id": "executable-mapping",
-      "statement": "Using the pinned checkout, a callable implementation accepts dimensions and data and executes real MXMM instructions on focused BEMU. Respect active three-bank capacities, scales and output bases, DMA, K partitions and accumulation; a schedule or mathematical reference alone fails.",
-      "required": true
-    },
-    {
-      "id": "target-correctness",
-      "statement": "For every vector defined by the frozen case seed and dataRule, independently rebuild and compare target FP32 outputs with a decoded-input reference. Cover signed and zero codes, finite scales, long-K accumulation, M/N output tiling, repeated calls and output guards. Require exact results when representable and measured error bounds otherwise.",
-      "required": true
-    },
-    {
-      "id": "regression",
-      "statement": "Reproduce existing MXMM capacity/window/chain regressions and tests for every changed boundary. Record actual terminal results and distinguish BEMU evidence from RTL correctness.",
-      "required": true
-    },
-    {
-      "id": "delivery",
-      "statement": "Freeze ball/ with all patches, source identities, callable input/output layout, numerical rules and commands needed for a fresh reviewer to reproduce inputs and outputs without worker workspaces or build outputs. Report remaining gaps.",
-      "required": true
+      "id": "mxfp8-consumer",
+      "statement": "One deterministic fresh-CAS consumer executes ball/mxmm.py on every frozen call, requires successful focused-BEMU command records and the four named regressions, independently derives exact decoded-input products, checks exact FP32 values or the conservative accumulation error bound, verifies repeated calls and output guards, and rejects missing or altered request bytes.",
+      "required": true,
+      "check": "python3 acceptance.py"
     }
   ],
   "inputs": [
@@ -40,6 +27,12 @@
       "id": "project",
       "path": "project.json",
       "access": "copy-to-work"
+    },
+    {
+      "id": "acceptance",
+      "path": "acceptance.py",
+      "access": "read",
+      "source": "acceptance.py"
     }
   ],
   "outputs": [

@@ -5,6 +5,7 @@ import { skillAssetSchema, toolAssetSchema } from './method.ts'
 import type { MethodRevision, TaskTemplate } from './method.ts'
 import { refSchema } from './refs.ts'
 import { closedObject } from './schema.ts'
+import { DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA } from './task.ts'
 import type { TaskExample } from './task.ts'
 
 /** Frozen public resources explicitly selected by domain/operator (§6.1). */
@@ -30,27 +31,16 @@ export const EXPLORE_GUIDANCE = {
 
 export const EXPLORE_EXAMPLE = {
   goal: {
-    summary: 'Implement the record aggregation stage of a report workflow.',
-    deliverable: 'result/aggregate.py exposing aggregate(rows) and a CLI taking records.json; totals.json for the later report stage.',
-    scope: ['Own parsing, aggregation and stage integration; discover any direct responsibilities needed.'],
-    constraints: ['Consume the frozen records input; emit a JSON object mapping each key to its integer sum.',
-      'The parent retains final report integration and end-to-end checks; the next batch consumes the frozen totals output.'],
+    summary: 'Implement the callable consumer for the declared input.',
+    deliverable: 'result/consumer.sh and a declared output produced by invoking it with the frozen input.',
+    scope: ['Own implementation, invocation and local checks for this consumer; discover any direct responsibilities needed.'],
+    constraints: ['Consume only the frozen declared input and emit a deterministic output at the declared interface.',
+      'The parent retains final integration and end-to-end checks; the next batch consumes the frozen output.'],
   },
-  acceptanceCriteria: [{ id: 'aggregation', statement: 'The callable handles empty and cancelling inputs; callable, CLI and saved totals reproduce the supplied records.', check: `python3 - <<'PY'
-import json, runpy, subprocess, sys
-from pathlib import Path
-rows = json.loads(Path('records.json').read_text())
-expected = {}
-for row in rows:
-    expected[row['key']] = expected.get(row['key'], 0) + row['value']
-aggregate = runpy.run_path('result/aggregate.py')['aggregate']
-assert aggregate(rows) == expected and aggregate([]) == {}
-assert aggregate([{'key':'x','value':-2},{'key':'x','value':2}]) == {'x':0}
-actual = json.loads(subprocess.check_output([sys.executable, 'result/aggregate.py', 'records.json']))
-assert actual == expected == json.loads(Path('totals.json').read_text())
-PY` }],
-  inputs: [{ id: 'records', exampleText: '[{"key":"a","value":2},{"key":"b","value":-1},{"key":"a","value":3}]' }],
-  localOutputs: [{ id: 'totals', path: 'totals.json', kind: 'file', description: 'Frozen key totals consumed by the next report stage.' }],
+  acceptanceCriteria: [{ id: 'consumer-interface', statement: 'The child provides an executable consumer and the declared output at stable paths.', check: `test -x result/consumer.sh
+test -f result/output.bin` }],
+  inputs: [{ id: 'input', exampleText: 'A representative sample of the frozen input bytes.' }],
+  localOutputs: [{ id: 'output', path: 'result/output.bin', kind: 'file', description: 'Declared output consumed by the parent integration stage.' }],
 } satisfies TaskExample
 
 export const EXPLORE_GUIDANCE_REF = { id: 'platform:explore-guidance', digest: computeDigest('object', EXPLORE_GUIDANCE) }
@@ -63,11 +53,7 @@ export function explorationTemplate(snapshot: GlobalResourceSnapshot): TaskTempl
     brief: 'Own one workflow scope, its technical work and result integration.',
     guidance: EXPLORE_GUIDANCE_REF,
     example: EXPLORE_EXAMPLE_REF,
-    instanceSchema: {
-      type: 'object', additionalProperties: false,
-      required: ['goal', 'inputs', 'acceptanceCriteria'],
-      properties: { goal: { type: 'object' }, acceptanceCriteria: { type: 'array' }, inputs: { type: 'array' }, localOutputs: { type: 'array' } },
-    },
+    instanceSchema: structuredClone(DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA),
     requiredCriteria: [],
     requiredOutputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
     acceptancePolicy: snapshot.fallbackAcceptance,

@@ -44,28 +44,24 @@ const planningSketchDirectPlanSchema = closedObject({
   purpose: z.string(),
 })
 
-/**
- * Model-authored plan from docs/framework.md §6.3. It is structural input to
- * `singularity_plan`; it creates no Task, Method, workflow, scheduling, or
- * acceptance authority. `directPlan` is a flat list of level-1 direct-child
- * intents; it has no level field and never expresses level 2.
- */
-export const planningSketchSchema = closedObject({
+/** Model-authored business plan; host identities are deliberately not accepted. */
+export const planningSketchDraftSchema = closedObject({
   v: z.literal(1),
-  taskId: z.string(),
-  runId: z.string(),
-  // Context epochs are opaque host identities. The planning tool additionally
-  // accepts `current` as a host-resolved shorthand; persisted sketches always
-  // contain the actual epoch. Keep this field opaque rather than imposing the
-  // digest shape used by sourceContract: protocol fixtures and DSH adapters
-  // may use non-digest epoch identities.
-  contextEpoch: z.string(),
   objective: z.string(),
   levels: planningSketchLevelsSchema,
   directPlan: z.array(planningSketchDirectPlanSchema),
   assumptions: z.array(z.string()),
-  sourceContract: digestSchema,
 })
+
+export type PlanningSketchDraft = z.infer<typeof planningSketchDraftSchema>
+
+/** Persisted plan after the host stamps the current Run and contract identities. */
+export const planningSketchSchema = planningSketchDraftSchema.extend({
+  taskId: z.string(),
+  runId: z.string(),
+  contextEpoch: z.string(),
+  sourceContract: digestSchema,
+}).strict()
 
 export type PlanningSketch = z.infer<typeof planningSketchSchema>
 

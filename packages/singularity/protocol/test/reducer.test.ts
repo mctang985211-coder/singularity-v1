@@ -1056,6 +1056,25 @@ void test('failed retry is allowed only while maxRuns, deadline, and tokens perm
   )
 })
 
+void test('a failed probe closes after one Run and leaves the next probe to its parent', () => {
+  const root = makeProbeRootContract()
+  const child = makeChildContract({ taskId: 'task-child', method: probeMethodRef, bindingId: 'child-probe' })
+  const context = makeContext([root], [probeMethod])
+  const journal = new Journal()
+  journal.add('task/admitted', { taskId: root.taskId, contract: contractRef(root) })
+  journal.add('run/opened', runOpened(root.taskId, 'run-root-1', 1))
+  journal.add('task/children-admitted', admission('run-root-1', 'batch-1', [admittedChild(child, 'probe')]))
+  journal.add('run/opened', runOpened(child.taskId, 'run-child-1', 1))
+  journal.add('run/closed', failedExecutionClosed('run-child-1'))
+  const failed = reduceTaskRunFacts(journal.facts, context)
+  assert.equal(protocol.decideTaskRetryPolicy(failed, child.taskId, 'run-child-1', [], 100).allowed, false)
+  journal.add('task/closed', failedTask(child.taskId, 'run-child-1'))
+  const terminal = reduceTaskRunFacts(journal.facts, context)
+  assert.equal(terminal.tasks.get(child.taskId)?.closed?.outcome, 'failed')
+  const retry = appendFact(journal.facts, 'run/opened', runOpened(child.taskId, 'run-child-2', 2))
+  expectReducerError(() => reduceTaskRunFacts([...journal.facts, retry], context), 'TASK_NOT_OPEN')
+})
+
 void test('a retry Run cannot open while an earlier child is still active', () => {
   const root = makeRootContract()
   const context = makeContext([root])
@@ -1152,8 +1171,11 @@ for (const exhaustedOwner of ['root', 'parent'] as const) {
     const method = sealMethodRevision({
       v: 1,
       id: 'method-ancestor-retry',
-      templates: [templates[0], template('child-template', [
-        binding('grandchild-probe', 'grand-template', 'probe'),
+      templates: [template('root-template', [
+        binding('child-required', 'child-template', 'required'),
+        binding('child-probe', 'grand-template', 'probe'),
+      ]), template('child-template', [
+        binding('grandchild-probe', 'grand-template', 'required'),
         binding('grandchild-other', 'grand-template', 'probe'),
       ]), templates[2]],
       skills: [],
@@ -1163,7 +1185,7 @@ for (const exhaustedOwner of ['root', 'parent'] as const) {
     const root = makeRootContract({ method: methodRef })
     const parent = makeChildContract({ taskId: 'task-parent', method: methodRef, limits: { maxTokens: 400 } })
     const other = makeChildContract(exhaustedOwner === 'root'
-      ? { taskId: 'task-other', bindingId: 'child-probe', method: methodRef, limits: { maxTokens: 600 } }
+      ? { taskId: 'task-other', bindingId: 'child-probe', templateId: 'grand-template', method: methodRef, limits: { maxTokens: 600 } }
       : { taskId: 'task-other', parentId: parent.taskId, parentRunId: 'run-parent-2', batchId: 'batch-grand',
         bindingId: 'grandchild-other', templateId: 'grand-template', method: methodRef, limits: { maxTokens: 299 } })
     const grandchild = makeChildContract({
@@ -1183,7 +1205,7 @@ for (const exhaustedOwner of ['root', 'parent'] as const) {
     journal.add('run/closed', { ...failedExecutionClosed('run-parent-1'), usage: usage({ inputTokens: 1, outputTokens: 0 }) })
     journal.add('run/opened', runOpened(parent.taskId, 'run-parent-2', 2, { budgetReservation: reservation(399) }))
     journal.add('task/children-admitted', admission('run-parent-2', 'batch-grand', [
-      admittedChild(grandchild, 'probe'),
+      admittedChild(grandchild, 'required'),
       ...(exhaustedOwner === 'parent' ? [{ ...admittedChild(other, 'probe'), budgetReservation: reservation(299) }] : []),
     ]))
     journal.add('run/opened', runOpened(other.taskId, 'run-other-1', 1, { budgetReservation: reservation(other.limits.maxTokens) }))

@@ -7,7 +7,7 @@ import test from 'node:test'
 import { canonicalize, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type { Ref, RoundPlan, TaskRunState, TaskState } from '@singularity/protocol'
 
-import { compareEvaluation, compareReportedTokens, frozenEvaluationSlots, readEvaluationManifest } from '../src/evaluation.ts'
+import { compareEvaluation, compareVerifiedFraction, frozenEvaluationSlots, readEvaluationManifest } from '../src/evaluation.ts'
 import type { EvaluationComparator, EvaluationManifest, EvaluationSlotResult, EvaluationUsage } from '../src/evaluation.ts'
 import { CommandService } from '../src/service.ts'
 
@@ -22,7 +22,8 @@ const plan: RoundPlan = {
   budget: { maxRuns: 24, maxTokens: 1000, maxWallClockMs: 5000, maxActiveRuns: 1 },
   comparator: ref('comparator'), sourceSeed: ref('seed'), expectedPreviousActiveMethod: base,
 }
-const usage: EvaluationUsage = { inputTokens: 20, outputTokens: 5, steps: 2, unknownRequests: 0, complete: true }
+const usage: EvaluationUsage = { inputTokens: 20, outputTokens: 5, cacheReadTokens: 6, cacheWriteTokens: 2,
+  steps: 2, unknownRequests: 0, complete: true, cacheComplete: true }
 
 function manifest(policy: RoundPlan = plan): EvaluationManifest {
   const slots: EvaluationSlotResult[] = frozenEvaluationSlots('round', policy, base, candidate).map(slot => {
@@ -45,7 +46,9 @@ function manifest(policy: RoundPlan = plan): EvaluationManifest {
       },
     }
   })
-  return { slots, runCount: slots.length, complete: true, usage: { ...usage, inputTokens: usage.inputTokens * slots.length, outputTokens: usage.outputTokens * slots.length } }
+  return { slots, runCount: slots.length, complete: true, usage: { ...usage,
+    inputTokens: usage.inputTokens * slots.length, outputTokens: usage.outputTokens * slots.length,
+    cacheReadTokens: (usage.cacheReadTokens ?? 0) * slots.length, cacheWriteTokens: (usage.cacheWriteTokens ?? 0) * slots.length } }
 }
 
 function comparator(deltas: readonly number[] = [2, 2, 2], costObjective = false): EvaluationComparator {
@@ -87,6 +90,13 @@ void test('independent comparator is bounded by frozen minimum delta and every c
   assert.equal(result.outcome, 'improved')
   assert.equal(result.completeCases, 3)
   assert.equal(result.worstRegression, 0)
+  assert.deepEqual(result.tokenCosts, {
+    complete: true, cacheComplete: true,
+    baseline: { inputTokens: 120, outputTokens: 30, uncachedInputTokens: 72, cacheReadTokens: 36, cacheWriteTokens: 12 },
+    candidate: { inputTokens: 120, outputTokens: 30, uncachedInputTokens: 72, cacheReadTokens: 36, cacheWriteTokens: 12 },
+  })
+  const missingCache = { ...manifest(), usage: { ...manifest().usage, cacheComplete: false } }
+  assert.equal(compareEvaluation('round', ref('plan'), plan, missingCache, comparator()).tokenCosts?.baseline.uncachedInputTokens, null)
   assert.equal(compareEvaluation('round', ref('plan'), plan, input, comparator([1, 1, -0.1])).outcome, 'no-improvement')
   assert.equal(compareEvaluation('round', ref('plan'), plan, input, comparator([0.5, 0.5, 0.5])).outcome, 'no-improvement')
 })
@@ -160,14 +170,15 @@ void test('slot accounting includes failed attempts, descendants and owned summa
   assert.equal(result.complete, false)
   assert.equal(result.slots[0].status, 'invalid')
   assert.equal(result.runCount, 3)
-  assert.deepEqual(result.usage, { inputTokens: 33, outputTokens: 7, steps: 4, unknownRequests: 1, complete: true })
+  assert.deepEqual(result.usage, { inputTokens: 33, outputTokens: 7, steps: 4, unknownRequests: 1, complete: true, cacheComplete: false })
   assert.equal(result.slots[0].publicEvidence, undefined)
 })
 
-void test('reported-token comparison requires complete verified pairs for every case and repetition', () => {
+void test('verified-fraction comparison needs every quality trial but never converts cost into quality', () => {
   const evidence = manifest().slots.flatMap(slot => slot.publicEvidence === undefined ? [] : [slot.publicEvidence])
-  assert.equal(compareReportedTokens(plan, evidence).aggregateDelta, 0)
-  assert.equal(compareReportedTokens(plan, evidence.slice(1)).comparable, false)
-  assert.equal(compareReportedTokens(plan, evidence.map(value => ({ ...value, verdict: 'failed' }))).comparable, false)
-  assert.equal(compareReportedTokens(plan, evidence.map(value => ({ ...value, usage: { ...value.usage, complete: false } }))).comparable, false)
+  assert.equal(compareVerifiedFraction(plan, evidence).aggregateDelta, 0)
+  assert.equal(compareVerifiedFraction(plan, evidence.slice(1)).comparable, false)
+  assert.equal(compareVerifiedFraction(plan, evidence.map(value => ({ ...value, verdict: 'failed' }))).aggregateDelta, 0)
+  assert.equal(compareVerifiedFraction(plan, evidence.map(value => value.arm === 'candidate' ? { ...value, verdict: 'failed' } : value)).aggregateDelta, -1)
+  assert.equal(compareVerifiedFraction(plan, evidence.map(value => ({ ...value, usage: { ...value.usage, complete: false } }))).comparable, true)
 })

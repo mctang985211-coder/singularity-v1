@@ -14,9 +14,10 @@ import { createWakeMessage,snapshotSession } from '@singularity/runtime'
 
 import { prepareBuckyballDomain } from './fixtures/buckyball-domain.ts'
 import { EXPERIMENT_BUDGET,runExperiment } from '../src/experiment.ts'
-import type { ExperimentDomain } from '../src/domain.ts'
+import { bindDomainTask } from '../src/domain.ts'
+import type { ExperimentDomain,TaskDraft } from '../src/domain.ts'
 import { nativeAccounting } from '../src/accounting.ts'
-import { contextEpochFrom,messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
+import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
 import { previewDigestFrom } from './method-fixture.ts'
 import { withHarness } from './run-fixture.ts'
 import { agentOptions } from './task-fixture.ts'
@@ -186,8 +187,8 @@ void test('generic experiment admits empty Method, independently reviews frozen 
     const last = pages.at(-1)
     assert.ok(last)
     if (last.nextCursor !== undefined) return call('singularity_read', { kind: 'self', cursor: last.nextCursor })
-    const data = JSON.parse(pages.map(value => value.data).join('')) as { taskId: string; runId: string; contractDigest: string }
-    if (!calls.includes('singularity_plan')) return call('singularity_plan', { sketch: { v: 1, taskId: data.taskId, runId: data.runId, sourceContract: data.contractDigest, contextEpoch: last.contextEpoch,
+    JSON.parse(pages.map(value => value.data).join(''))
+    if (!calls.includes('singularity_plan')) return call('singularity_plan', { sketch: { v: 1,
       objective: 'Deliver the incomplete fixture honestly.', levels: [0, 1].map(level => ({ level, purpose: 'Inspect local output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })), directPlan: [], assumptions: [] } })
     assert.ok(toolSchemaNames(request).includes('mcp__buckyball__bbdev'), 'the frozen domain MCP is available in each fresh Run')
     assert.match(JSON.stringify(request.tools), /Nix is already activated/)
@@ -208,7 +209,13 @@ void test('generic experiment admits empty Method, independently reviews frozen 
     if (oldKey === undefined) delete process.env.SINGULARITY_SPIKE_API_KEY
     else process.env.SINGULARITY_SPIKE_API_KEY = oldKey
   })
-  const domain = await prepareBuckyballDomain(prepared)
+  const preparedDomain = await prepareBuckyballDomain(prepared)
+  const reviewTask = (task: typeof preparedDomain.sourceTask) => ({ ...task,
+    criteria: ['executable-mapping', 'target-correctness', 'regression', 'delivery'].map(id => ({
+      id, statement: `Independent semantic review of ${id}.`, required: true,
+    })) })
+  const domain: ExperimentDomain = { ...preparedDomain, acceptance: 'review', sourceTask: reviewTask(preparedDomain.sourceTask),
+    cases: preparedDomain.cases.map(value => ({ ...value, task: reviewTask(value.task) })) }
   const projectInput = JSON.parse(new TextDecoder().decode(domain.source.project as Uint8Array)) as { source: { destination: string }; technicalReferences: string[] }
   assert.equal(projectInput.source.destination, baseline)
   assert.ok(projectInput.technicalReferences.every(path => path.startsWith('.agents/skills/')))
@@ -218,7 +225,7 @@ void test('generic experiment admits empty Method, independently reviews frozen 
   assert.deepEqual(result.outcomes.map(value => value.source), ['failed', 'failed', 'invalid'])
   assert.ok(result.outcomes.every(value => value.activation === undefined))
   assert.equal(reviews, 6, 'real failures use fresh attempts; an unsubmitted review never asks the worker to redo work')
-  assert.equal(proposers, 3)
+  assert.equal(proposers, 2, 'an invalid source never purchases another proposer')
   assert.equal(result.usage.requests, fixture.requests.length)
   assert.equal(result.usage.completed, fixture.requests.length)
   assert.equal(result.usage.unknown, 0)
@@ -228,11 +235,10 @@ void test('generic experiment admits empty Method, independently reviews frozen 
   }
   assert.ok(launch.sourceSpec.goal.constraints.some(value => value.includes('project.json')))
   assert.equal(launch.sourceSpec.goal.constraints.some(value => value.includes('Singularity')), false)
-  assert.deepEqual(launch.sourceSpec.inputs.map(value => value.id), ['project'])
-  assert.equal(launch.cases.length, 2)
-  for (const { spec } of launch.cases) {
-    assert.ok(spec.goal.constraints.some(value => value.includes('project.json')))
-    assert.deepEqual(spec.inputs.map(value => value.id), ['project'])
+  assert.deepEqual(launch.sourceSpec.inputs.map(value => value.id), ['project', 'acceptance'])
+  assert.equal(launch.cases.length, 4)
+  for (const [index, { spec }] of launch.cases.entries()) {
+    assert.deepEqual(spec.inputs.map(value => value.id), index === 3 ? ['records', 'acceptance'] : ['project', 'acceptance'])
   }
   const receipts = glob(`${root}/reviews/*/receipt.json`)
   for await (const path of receipts) {
@@ -248,7 +254,7 @@ void test('generic experiment admits empty Method, independently reviews frozen 
   assert.equal(stopped.failure, undefined, 'a budget cancellation seals its terminal ExecutionRecord without a host failure')
   assert.deepEqual(stopped.outcomes, [])
   assert.equal(stopped.usage.unknown, 0)
-  assert.equal(proposers, 3, 'exhausted source never purchases an RSI request')
+  assert.equal(proposers, 2, 'exhausted source never purchases an RSI request')
   const { DatabaseSync } = await import('node:sqlite')
   const db = new DatabaseSync(join(exhausted, 'domain/domain.sqlite'), { readOnly: true })
   try {
@@ -269,14 +275,17 @@ void test('Buckyball cases freeze deterministic input data for paired acceptance
   assert.equal(source.seed, 17)
   assert.equal(source.shapes.length, 4)
   assert.match(source.dataRule, /73\*i/)
-  assert.match(source.dataRule, /11\*i\+seed/)
-  const cases = domain.cases.map(value => ({ ...value, data: decode(value.input.project).case }))
+  assert.match(source.dataRule, /scale=112\+\(\(11\*i\+seed\)%32\)/)
+  const cases = domain.cases.filter(value => value.id === 'long-k' || value.id === 'output-tiling')
+    .map(value => ({ ...value, data: decode(value.input.project).case }))
   assert.deepEqual(cases.map(value => value.data.seed), [29, 43])
   assert.deepEqual(cases.map(value => value.validation ?? false), [false, true])
   assert.ok(cases.every(value => value.data.dataRule === source.dataRule))
-  const spec = domain.task({ project: { id: 'project', digest: `sha256:${'0'.repeat(64)}` } })
-  assert.equal(spec.criteria.find(value => value.id === 'target-correctness')?.statement.includes('reviewer-selected'), false)
-  assert.match(spec.criteria.find(value => value.id === 'target-correctness')?.statement ?? '', /frozen case seed and dataRule/)
+  assert.deepEqual(domain.cases.map(value => value.id), ['long-k', 'output-tiling', 'smatmul-bias', 'inventory-transfer'])
+  const object = { id: 'input', digest: `sha256:${'0'.repeat(64)}` }
+  const spec = bindDomainTask(domain.sourceTask, { project: object, acceptance: object })
+  assert.equal(spec.criteria.length, 1)
+  assert.match(spec.criteria[0]?.statement ?? '', /deterministic fresh-CAS consumer/)
 })
 
 void test('experiment settles exploration children by shell and reviews only the root', { timeout: 120_000 }, async t => {
@@ -298,12 +307,7 @@ void test('experiment settles exploration children by shell and reviews only the
     const step = workerStep++
     if (step === 0 || step === 4 || step === 8) return call('singularity_read', { kind: 'self' })
     if (step === 1 || step === 5 || step === 9) {
-      const texts = messageTexts(request)
-      const identity = texts.map(text => /"task":\{"id":"([^"]+)"(?:,"parentId":"[^"]+")?,"runId":"([^"]+)"/.exec(text)).find(Boolean)
-      const digest = texts.map(text => /"contractDigest":"(sha256:[0-9a-f]{64})"/.exec(text)).find(Boolean)
-      const contextEpoch = contextEpochFrom({ ...request, messages: [...(request.messages ?? [])].reverse() })
-      assert.ok(identity && digest && contextEpoch)
-      return call('singularity_plan', { sketch: { v: 1, taskId: identity[1], runId: identity[2], sourceContract: digest[1], contextEpoch,
+      return call('singularity_plan', { sketch: { v: 1,
         objective: 'Produce and integrate one consumable result.', levels: [0, 1].map(level => ({ level, purpose: 'Produce or integrate output.', likelyChildren: [], expectedInputs: [], expectedOutputs: ['result/value.txt'] })),
         directPlan: [], assumptions: [] } })
     }
@@ -337,17 +341,16 @@ void test('experiment settles exploration children by shell and reviews only the
     if (oldKey === undefined) delete process.env.SINGULARITY_SPIKE_API_KEY
     else process.env.SINGULARITY_SPIKE_API_KEY = oldKey
   })
+  const task: TaskDraft = {
+    goal: { summary: 'Integrate one child result.', deliverable: 'result/value.txt', scope: [], constraints: [] },
+    criteria: [{ id: 'root-result', statement: 'Root integration is independently reviewed.', required: true }],
+    inputs: [], outputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
+  }
   const domain: ExperimentDomain = {
-    id: 'check-only-flow', source: {}, cases: [
-      { id: 'fixture-case', input: {}, description: 'Frozen protocol case.' },
-      { id: 'fixture-validation', input: {}, description: 'Frozen validation case.', validation: true },
+    id: 'check-only-flow', source: {}, sourceTask: task, cases: [
+      { id: 'fixture-case', input: {}, description: 'Frozen protocol case.', task },
+      { id: 'fixture-validation', input: {}, description: 'Frozen validation case.', validation: true, task },
     ],
-    task: () => ({
-      goal: { summary: 'Integrate one child result.', deliverable: 'result/value.txt', scope: [], constraints: [] },
-      criteria: [{ id: 'root-result', statement: 'Root integration is independently reviewed.', required: true }],
-      inputs: [], outputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
-    }),
-    tools: () => Promise.resolve([]),
   }
   await runExperiment(root, domain, { ...EXPERIMENT_BUDGET,
     rounds: 1, maxActive: 1, reviewMaxSteps: 8, maxRequests: 100, maxWallClockMs: 60_000, maxReportedTokens: 1_000_000, maxOutputBytes: 1024 * 1024,

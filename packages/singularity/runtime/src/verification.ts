@@ -50,7 +50,7 @@ export type InvalidVerificationCode =
 
 /** Runtime-side verifier request: data fields plus read-only CAS access. */
 export interface VerifierRequest extends VerifyRequest {
-  /** The domain adapter forwards cancellation and settles after its verifier stops. */
+  /** The host-owned verifier adapter forwards cancellation and settles after its work stops. */
   readonly signal: AbortSignal
   /**
    * Read one frozen CAS object and verify its digest under `domain`. The

@@ -420,11 +420,7 @@ void test('skill dispatch is denied after stop and after submission', async () =
         } while (cursor !== undefined)
         await planTool.execute({ sketch: {
           v: 1,
-          taskId: contract.taskId,
-          runId: 'skill-guard-run',
-          contextEpoch,
           objective: 'exercise skill guard states',
-          sourceContract: contract.digest,
           levels: [0, 1].map(level => ({
             level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
           })),
@@ -530,11 +526,7 @@ void test('MCP dispatch guard admits only frozen public tools/resources and keep
       assert.equal(codeOf(controller.checkGuard(execution('mcp__calc__echo', { message: 'hi' }))), 'PLAN_FIRST')
       await planTool.execute({ sketch: {
         v: 1,
-        taskId: contract.taskId,
-        runId: 'mcp-guard-run',
-        contextEpoch,
         objective: 'exercise MCP guard states',
-        sourceContract: contract.digest,
         levels: [0, 1].map(level => ({
           level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
         })),
@@ -590,11 +582,7 @@ void test('MCP dispatch guard admits only frozen public tools/resources and keep
       } while (submittedCursor !== undefined)
       await submittedPlan.execute({ sketch: {
         v: 1,
-        taskId: contract.taskId,
-        runId: 'mcp-guard-run',
-        contextEpoch,
         objective: 'exercise MCP submitted guard',
-        sourceContract: contract.digest,
         levels: [0, 1].map(level => ({
           level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
         })),
@@ -678,14 +666,12 @@ void test('tool dispatch uses the exact host budget check while preserving read 
     await assert.rejects(readTool.execute({ kind: 'self', cursor: 'unissued-cursor' }, execution('singularity_read')), /INVALID_ARGUMENT/)
     assertSubmissionGate('PLAN_FIRST')
     await planTool.execute({ sketch: {
-      v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch,
-      objective: 'complete current task', sourceContract: contract.digest,
+      v: 1, objective: 'complete current task',
       levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
       directPlan: [], assumptions: [],
     } }, execution('singularity_plan'))
     const currentPlan = await planTool.execute({ sketch: {
-      v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch: 'current',
-      objective: 'replan current task', sourceContract: contract.digest,
+      v: 1, objective: 'replan current task',
       levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
       directPlan: [], assumptions: [],
     } }, execution('singularity_plan')) as { readonly planningSketchRef: Ref }
@@ -701,7 +687,7 @@ void test('tool dispatch uses the exact host budget check while preserving read 
         levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
         directPlan: [], assumptions: [],
       } }, execution('singularity_plan')),
-      /PLAN_FIRST/,
+      /INVALID_ARGUMENT/,
     )
     assertSubmissionGate(undefined)
     assert.equal(controller.checkGuard(execution('bash')), undefined)
@@ -809,11 +795,7 @@ void test('S4-B1/B2 registers decompose for empty child bindings and accepts dup
     } while (cursor !== undefined)
     const sketch = (directPlan: readonly { readonly bindingId: string; readonly purpose: string }[]) => ({
       v: 1,
-      taskId: contract.taskId,
-      runId: 'b1-plan-run',
-      contextEpoch,
       objective: 'exercise directPlan visibility',
-      sourceContract: contract.digest,
       levels: [0, 1].map(level => ({
         level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
       })),
@@ -1001,11 +983,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
     assert.equal(codeOf(controller.checkGuard(execution('singularity_decompose', commitArgs))), 'PLAN_FIRST')
     await plan.execute({ sketch: {
       v: 1,
-      taskId: contract.taskId,
-      runId: 'run-s4b2-guard',
-      contextEpoch,
       objective: 'commit one child',
-      sourceContract: contract.digest,
       levels: [0, 1].map(level => ({
         level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
       })),
@@ -1093,11 +1071,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
     } while (retryCursor !== undefined)
     await retryPlan.execute({ sketch: {
       v: 1,
-      taskId: contract.taskId,
-      runId: 'run-s4b2-retry',
-      contextEpoch,
       objective: 'retry commit',
-      sourceContract: contract.digest,
       levels: [0, 1].map(level => ({
         level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
       })),

@@ -8,7 +8,8 @@ export function nativeAccounting(ctx: Context, options: {
   deadlineAt: number; maxRequests: number; maxReportedTokens: number
   cancellation: AbortController; log: string
 }) {
-  const usage = { requests: 0, completed: 0, inputTokens: 0, outputTokens: 0, unknown: 0 }
+  const usage = { requests: 0, completed: 0, inputTokens: 0, outputTokens: 0,
+    cacheReadTokens: 0, cacheWriteTokens: 0, cacheUnknown: 0, unknown: 0 }
   const available = () => !options.cancellation.signal.aborted && Date.now() < options.deadlineAt
     && usage.requests < options.maxRequests
     && usage.inputTokens + usage.outputTokens < options.maxReportedTokens
@@ -29,6 +30,13 @@ export function nativeAccounting(ctx: Context, options: {
     } finally {
       const input = reported === undefined ? 0 : reported.inputTokens + (reported.cacheReadTokens ?? 0) + (reported.cacheWriteTokens ?? 0)
       const output = reported?.outputTokens ?? 0
+      if (Number.isSafeInteger(reported?.cacheReadTokens) && Number.isSafeInteger(reported?.cacheWriteTokens)
+        && (reported?.cacheReadTokens ?? -1) >= 0 && (reported?.cacheWriteTokens ?? -1) >= 0) {
+        usage.cacheReadTokens += reported?.cacheReadTokens ?? 0
+        usage.cacheWriteTokens += reported?.cacheWriteTokens ?? 0
+      } else {
+        usage.cacheUnknown += 1
+      }
       usage.completed += 1
       if (input + output <= 0) {
         // Unknown usage is observational only. DSH owns transport retry;

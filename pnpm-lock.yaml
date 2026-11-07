@@ -105,15 +105,6 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.2.0
         version: 2.2.0
-      '@singularity/domain-inventory':
-        specifier: workspace:*
-        version: link:../../packages/domains/inventory
-
-  packages/domains/inventory:
-    dependencies:
-      '@singularity/protocol':
-        specifier: workspace:*
-        version: link:../../singularity/protocol
 
   packages/singularity/protocol:
     dependencies:

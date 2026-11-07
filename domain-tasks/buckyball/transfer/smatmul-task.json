@@ -1,0 +1,45 @@
+{
+  "goal": {
+    "summary": "Implement the frozen int8 SMatMul C = A * B + bias consumer on the existing SMatMul Ball and execute it as real RISC-V ELF on focused BEMU.",
+    "deliverable": "ball/smatmul.py and all source patches and reproduction assets required by the frozen interface in acceptance.py.",
+    "scope": [
+      "A is 16x32 row-major int8, B is 32x16 row-major int8, bias and C are 16-element and 16x16 int32 respectively.",
+      "Run the two existing SMatMul 16x16x32 and bias-accumulate regressions in the same independent prepared checkout."
+    ],
+    "constraints": [
+      "Run: python3 ball/smatmul.py request.json response.json. Return exact int32 C, eight unchanged int32 guard words and the real focused-BEMU command record in the machine format implemented by acceptance.py.",
+      "Use the pinned pebble configuration and actual SMatMul ISA; the focused core is global index 0. Do not replace the frozen bytes with another example or a host-only mathematical calculation.",
+      "Work in an independent prepared checkout, preserve the baseline and distinguish BEMU evidence from RTL correctness."
+    ]
+  },
+  "criteria": [
+    {
+      "id": "smatmul-consumer",
+      "statement": "The deterministic fresh-CAS consumer runs ball/smatmul.py on the exact frozen int8 bytes, independently checks every C element and guard, and requires successful focused-BEMU execution plus both named SMatMul regression command records.",
+      "required": true,
+      "check": "python3 acceptance.py"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "project",
+      "path": "project.json",
+      "access": "copy-to-work"
+    },
+    {
+      "id": "acceptance",
+      "path": "acceptance.py",
+      "access": "read",
+      "source": "transfer/smatmul-acceptance.py"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "ball",
+      "path": "ball",
+      "kind": "tree",
+      "role": "deliverable",
+      "required": true
+    }
+  ]
+}

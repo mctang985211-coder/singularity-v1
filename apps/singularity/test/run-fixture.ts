@@ -38,12 +38,10 @@ import {
 } from './task-fixture.ts'
 import type { ReplyScript, Scenario, ScriptedReply, WireRequest } from './task-fixture.ts'
 
-export function planReply(scenario: Scenario, taskId: string, runId: string, contextEpoch: string): ScriptedReply {
+export function planReply(...args: [Scenario, string, string, string]): ScriptedReply {
+  void args
   const sketch = {
     v: 1,
-    taskId,
-    runId,
-    contextEpoch,
     objective: 'Produce the declared result file and submit it.',
     levels: [
       {
@@ -63,7 +61,6 @@ export function planReply(scenario: Scenario, taskId: string, runId: string, con
     ],
     directPlan: [],
     assumptions: ['The fixture model can use the native bash tool.'],
-    sourceContract: scenario.contract.digest,
   }
   return {
     reasoning: 'Submit the plan for the current context epoch.',

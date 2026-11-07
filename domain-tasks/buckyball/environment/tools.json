@@ -5,7 +5,7 @@
     "description": "Existing bbdev CLI with project-local Nix activation.",
     "kind": "mcp-server",
     "server": {
-      "source": "environment-source",
+      "source": "environment",
       "manifest": "environment/manifest.json",
       "config": "environment/config.json",
       "capabilities": ["public-ball-development"],

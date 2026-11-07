@@ -26,9 +26,6 @@
     },
     {
       "path": "../../packages/singularity/runtime/tsconfig.build.json"
-    },
-    {
-      "path": "../../packages/domains/inventory/tsconfig.build.json"
     }
   ]
 }

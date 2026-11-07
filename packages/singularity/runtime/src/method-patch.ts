@@ -3,16 +3,20 @@ FactActor,JsonValue,MethodPatch,MethodRevision,Ref,TaskTemplate,
 } from '@singularity/protocol'
 import { isSkillName } from '@deepseek-ai/dsh-skill'
 import {
+AdmissionError,
 assertTaskTemplateInterface,
 canonicalize,
 computeDigest,
 computeDigestBytes,
+DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA,
+globalResourceSnapshotSchema,
 methodRevisionSchema,
 parseJsonText,
 parseMethodPatch,
 parseProtocolValue,
 seal,
 sealMethodRevision,
+taskContractSchema,
 taskExampleSchema,
 validateInstanceSchema,
 } from '@singularity/protocol'
@@ -49,12 +53,11 @@ export async function submitMethodPatch(request: {
   readonly roundId: string
   readonly value: unknown
 }): Promise<Ref> {
-  const patch = parseMethodPatch(request.value)
-  for (const change of patch.changes) if (change.op === 'put-skill' && !isSkillName(change.skill.name))
-    throw new MethodPatchRejection(`skill name ${JSON.stringify(change.skill.name)} is not DSH kebab-case`)
   const opened = request.service.facts().find(fact => fact.type === 'rsi/round-opened' && fact.data.roundId === request.roundId)
   if (opened?.type !== 'rsi/round-opened') throw new Error('Round is not open')
-  if (!sameRef(patch.base, opened.data.baseMethod)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')
+  const patch = parseMethodPatch(request.value, opened.data.baseMethod)
+  for (const change of patch.changes) if (change.op === 'put-skill' && !isSkillName(change.skill.name))
+    throw new MethodPatchRejection(`skill name ${JSON.stringify(change.skill.name)} is not DSH kebab-case`)
   if (request.service.facts().some(fact => (fact.type === 'rsi/proposal-submitted' || fact.type === 'rsi/round-closed') && fact.data.roundId === request.roundId)) {
     throw new Error('Round already has a formal proposal or is closed')
   }
@@ -86,12 +89,19 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
   const base = parseProtocolValue(methodRevisionSchema, await readJson(service, opened.data.baseMethod, 'method'))
   if (base.id !== opened.data.baseMethod.id || base.digest !== opened.data.baseMethod.digest) throw new Error('Pinned base Method identity is invalid')
   const trace = await readPublicTrace(service, opened.data.sourceTrace)
+  const contractChapter = trace.chapters.find(chapter => chapter.id === 'contract')
+  if (contractChapter === undefined) throw new Error('Sealed trace has no root contract')
+  const root = parseProtocolValue(taskContractSchema, await readJson(service, contractChapter.object))
+  const exploration = root.resources.exploration === undefined ? undefined
+    : parseProtocolValue(globalResourceSnapshotSchema, await readJson(service, root.resources.exploration))
+  const defaultAcceptance = exploration?.fallbackAcceptance ?? root.acceptance
+  await service.readObject(defaultAcceptance)
   let candidate: MethodRevision
   try {
     if (!sameRef(patch.base, opened.data.baseMethod)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')
-    candidate = await applyPatch(service, base, patch, trace.authorizedObjects.map(entry => entry.ref))
+    candidate = await applyPatch(service, base, patch, defaultAcceptance)
   } catch (error) {
-    if (!(error instanceof MethodPatchRejection || error instanceof MethodResourceError || error instanceof ZodError)) throw error
+    if (!(error instanceof MethodPatchRejection || error instanceof MethodResourceError || error instanceof AdmissionError || error instanceof ZodError)) throw error
     const reason = error instanceof Error ? error.message : String(error)
     const precheckReceipt = await putJson(service, `round:${roundId}:precheck`, seal('object', {
       v: 1, roundId, patch: proposal.data.patch, accepted: false, reason,
@@ -121,7 +131,7 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
 }
 
 async function applyPatch(
-  service: CommandService, base: MethodRevision, patch: MethodPatch, publicRefs: readonly Ref[],
+  service: CommandService, base: MethodRevision, patch: MethodPatch, defaultAcceptance: Ref,
 ): Promise<MethodRevision> {
   const templates = new Map(base.templates.map(template => [template.id, template]))
   const skills = new Map(base.skills.map(skill => [skill.id, skill]))
@@ -129,7 +139,6 @@ async function applyPatch(
   if (templates.size !== base.templates.length || skills.size !== base.skills.length || tools.size !== base.tools.length) throw new MethodPatchRejection('Base Method contains duplicate asset IDs')
   let entry = base.entryTemplateId
   const modified = new Set<string>()
-  const allowed = [...publicRefs, ...base.templates.map(template => template.acceptancePolicy)]
   for (const change of patch.changes) {
     const id = change.op === 'set-entry' ? '' : 'id' in change ? change.id
       : change.op === 'put-template' ? change.template.id
@@ -148,10 +157,11 @@ async function applyPatch(
       case 'remove-mcp-server': tools.delete(change.id); break
       case 'put-template': {
         const { guidance, example, ...template } = change.template
-        if (!allowed.some(ref => sameRef(ref, template.acceptancePolicy))) throw new MethodPatchRejection('Template acceptancePolicy is outside the authorized public references')
-        await service.readObject(template.acceptancePolicy)
+        const acceptancePolicy = templates.get(template.id)?.acceptancePolicy ?? defaultAcceptance
         templates.set(template.id, {
           ...template,
+          instanceSchema: structuredClone(DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA),
+          acceptancePolicy,
           guidance: await putContent(service, { v: 1, text: guidance }),
           example: await putContent(service, example),
         })
@@ -195,7 +205,6 @@ async function applyPatch(
     for (const id of template.tools) if (!tools.has(id)) throw new MethodPatchRejection('Template MCP server binding is dangling')
     for (const binding of template.children) if (!templates.has(binding.templateId)) throw new MethodPatchRejection('Child template binding is dangling')
     const example = parseProtocolValue(taskExampleSchema, await readJson(service, template.example))
-    assertProposalSchemaFields(template.instanceSchema)
     const guidance = await readJson(service, template.guidance)
     if (guidance === null || typeof guidance !== 'object' || Array.isArray(guidance)
       || Object.keys(guidance).length !== 2 || guidance['v'] !== 1 || typeof guidance['text'] !== 'string'
@@ -218,20 +227,6 @@ async function applyPatch(
   return candidate
 }
 
-function assertProposalSchemaFields(schema: JsonValue): void {
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return
-  const allowed = ['goal', 'acceptanceCriteria', 'inputs', 'localOutputs']
-  const properties = schema['properties']
-  if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)
-    && Object.keys(properties).some(key => !allowed.includes(key))) throw new MethodPatchRejection('Template instanceSchema can constrain only TaskProposal fields')
-  const required = schema['required']
-  if (Array.isArray(required) && required.some(key => typeof key !== 'string' || !allowed.includes(key))) throw new MethodPatchRejection('Template instanceSchema cannot add host-owned Task fields')
-  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
-    const branches = schema[keyword]
-    if (Array.isArray(branches)) for (const branch of branches) assertProposalSchemaFields(branch)
-  }
-  if (Object.hasOwn(schema, 'not')) assertProposalSchemaFields(schema['not'])
-}
 
 async function effectiveContent(service: CommandService, method: MethodRevision): Promise<unknown> {
   const tree = async (ref: Ref) => {

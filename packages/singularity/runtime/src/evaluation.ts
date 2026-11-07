@@ -57,9 +57,12 @@ export function frozenEvaluationSlots(roundId: string, plan: RoundPlan, base: Re
 export interface EvaluationUsage {
   readonly inputTokens: number
   readonly outputTokens: number
+  readonly cacheReadTokens?: number
+  readonly cacheWriteTokens?: number
   readonly steps: number
   readonly unknownRequests: number
   readonly complete: boolean
+  readonly cacheComplete: boolean
 }
 
 export interface PublicEvaluationEvidence {
@@ -204,7 +207,22 @@ export interface ComparisonCost {
   readonly unit: string
 }
 
-/** Domain owns metric extraction, repetition aggregation and sample policy. */
+export interface TokenCostArm {
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly uncachedInputTokens: number | null
+  readonly cacheReadTokens: number | null
+  readonly cacheWriteTokens: number | null
+}
+
+export interface TokenCostReport {
+  readonly complete: boolean
+  readonly cacheComplete: boolean
+  readonly baseline: TokenCostArm
+  readonly candidate: TokenCostArm
+}
+
+/** Host-supplied quality comparison; domain bundles cannot inject a comparator. */
 export interface EvaluationComparator {
   readonly asset: Ref
   describeMetric(plan: RoundPlan): ComparisonMetric
@@ -226,6 +244,7 @@ export interface EvaluationComparison {
   readonly cost?: ComparisonCost
   readonly cases: readonly ComparedCase[]
   readonly usage: EvaluationUsage
+  readonly tokenCosts?: TokenCostReport
   readonly slots: readonly EvaluationSlotResult[]
   readonly missingOrInvalid: readonly string[]
   readonly outcome: 'improved' | 'no-improvement' | 'insufficient-evidence'
@@ -245,7 +264,7 @@ export function compareEvaluation(
     v: 1 as const, roundId, plan: planRef, claim: plan.claim, complete: manifest.complete,
     completeCases: [...plan.cases, ...plan.validationCases].filter(caseRef => manifest.slots
       .filter(result => same(result.slot.caseRef, caseRef)).every(result => result.status === 'complete')).length,
-    usage: manifest.usage, slots: manifest.slots, missingOrInvalid,
+    usage: manifest.usage, tokenCosts: tokenCostReport(manifest), slots: manifest.slots, missingOrInvalid,
   }
   const insufficient = (reason: string): EvaluationComparison => ({ ...common, cases: [], outcome: 'insufficient-evidence', reason })
   if (comparator === undefined || !same(comparator.asset, plan.comparator)) return insufficient('unsupported-comparator')
@@ -410,17 +429,47 @@ async function assertPairedContracts(service: CommandService, state: TaskRunStat
   }
 }
 
-function emptyUsage(): { inputTokens: number; outputTokens: number; steps: number; unknownRequests: number; complete: boolean } {
-  return { inputTokens: 0, outputTokens: 0, steps: 0, unknownRequests: 0, complete: true }
+type MutableEvaluationUsage = { -readonly [Key in keyof EvaluationUsage]: EvaluationUsage[Key] }
+
+function emptyUsage(): MutableEvaluationUsage {
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+    steps: 0, unknownRequests: 0, complete: true, cacheComplete: true }
 }
 
-function addUsage(target: ReturnType<typeof emptyUsage>, source: UsageRecord | EvaluationUsage): void {
+function addUsage(target: MutableEvaluationUsage, source: UsageRecord | EvaluationUsage): void {
   target.inputTokens += source.inputTokens
   target.outputTokens += source.outputTokens
   target.steps += source.steps
   target.unknownRequests += source.unknownRequests
   if ('complete' in source) target.complete &&= source.complete
+  const cacheComplete = 'cacheComplete' in source ? source.cacheComplete
+    : source.cacheReadTokens !== undefined && source.cacheWriteTokens !== undefined
+  target.cacheComplete &&= cacheComplete
+  if (target.cacheComplete) {
+    target.cacheReadTokens = (target.cacheReadTokens ?? 0) + (source.cacheReadTokens ?? 0)
+    target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + (source.cacheWriteTokens ?? 0)
+  } else {
+    delete target.cacheReadTokens
+    delete target.cacheWriteTokens
+  }
   if ('summary' in source && source.summary !== undefined) addUsage(target, source.summary)
+}
+
+function tokenCostReport(manifest: EvaluationManifest): TokenCostReport {
+  const cacheComplete = manifest.complete && manifest.usage.cacheComplete
+  const arm = (name: 'baseline' | 'candidate'): TokenCostArm => {
+    const usage = emptyUsage()
+    for (const slot of manifest.slots) if (slot.slot.arm === name) addUsage(usage, slot.usage)
+    return {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      uncachedInputTokens: cacheComplete
+        ? usage.inputTokens - (usage.cacheReadTokens ?? 0) - (usage.cacheWriteTokens ?? 0) : null,
+      cacheReadTokens: cacheComplete ? usage.cacheReadTokens ?? 0 : null,
+      cacheWriteTokens: cacheComplete ? usage.cacheWriteTokens ?? 0 : null,
+    }
+  }
+  return { complete: manifest.complete, cacheComplete, baseline: arm('baseline'), candidate: arm('candidate') }
 }
 
 function tokenCount(usage: Pick<UsageRecord, 'inputTokens' | 'outputTokens'>): number {
@@ -431,18 +480,22 @@ function same(left: Ref, right: Ref): boolean {
   return left.id === right.id && left.digest === right.digest
 }
 
-/** Compare complete, functionally verified Task subtrees using host-accounted usage. */
-export function compareReportedTokens(plan: RoundPlan, evidence: readonly PublicEvaluationEvidence[]) {
-  if (evidence.some(value => value.verdict !== 'verified')) return { comparable: false as const, reason: 'functional-acceptance-required' }
+/** Compare real consumer quality; token cost is reported separately and is not the objective. */
+export function compareVerifiedFraction(plan: RoundPlan, evidence: readonly PublicEvaluationEvidence[]) {
   const cases = []
   for (const caseRef of [...plan.cases, ...plan.validationCases]) {
     const arm = (name: 'baseline' | 'candidate') => evidence.filter(value => value.caseRef.digest === caseRef.digest && value.caseRef.id === caseRef.id && value.arm === name)
     const baseline = arm('baseline'), candidate = arm('candidate')
-    if (baseline.length !== plan.trialsPerCase || candidate.length !== plan.trialsPerCase) return { comparable: false as const, reason: 'missing-cost-trial' }
-    if ([...baseline, ...candidate].some(value => !value.usage.complete)) return { comparable: false as const, reason: 'missing-cost' }
-    const mean = (values: typeof baseline) => values.reduce((sum, value) => sum + value.usage.inputTokens + value.usage.outputTokens, 0) / values.length
+    if (baseline.length !== plan.trialsPerCase || candidate.length !== plan.trialsPerCase) {
+      return { comparable: false as const, reason: 'missing-quality-trial' }
+    }
+    const mean = (values: typeof baseline) => values.reduce((sum, value) => sum + (value.verdict === 'verified' ? 1 : 0), 0) / values.length
     const before = mean(baseline), after = mean(candidate)
-    cases.push({ caseRef, baseline: before, candidate: after, verdict: after < before ? 'improved' : after > before ? 'regression' : 'equal' })
+    cases.push({ caseRef, baseline: before, candidate: after, verdict: after > before ? 'improved' : after < before ? 'regression' : 'equal' })
   }
-  return { comparable: true as const, cases, aggregateDelta: cases.reduce((sum, value) => sum + value.baseline - value.candidate, 0) / cases.length }
+  const tokens = (arm: 'baseline' | 'candidate') => evidence.filter(value => value.arm === arm)
+    .reduce((sum, value) => sum + value.usage.inputTokens + value.usage.outputTokens, 0)
+  return { comparable: true as const, cases,
+    aggregateDelta: cases.reduce((sum, value) => sum + value.candidate - value.baseline, 0) / cases.length,
+    cost: { baseline: tokens('baseline'), candidate: tokens('candidate'), unit: 'reported-tokens' } }
 }

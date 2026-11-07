@@ -1,0 +1,43 @@
+{
+  "goal": {
+    "summary": "Reconcile the supplied inventory transactions. Count every data row, sum signed integer deltas by SKU, retain zero and negative totals, and publish report.json with rowCount and an ascending totals array of {sku, quantity} objects.",
+    "deliverable": "report.json containing the exact consolidated inventory for the supplied CSV.",
+    "scope": [
+      "Public CSV inventory reconciliation on an unseen combination of SKUs, zero totals and negative totals."
+    ],
+    "constraints": [
+      "Use integer arithmetic and preserve every input SKU, including zero and negative totals.",
+      "Keep the supplied input unchanged."
+    ]
+  },
+  "criteria": [
+    {
+      "id": "exact-report",
+      "statement": "The frozen report has the exact row count and ascending per-SKU integer totals independently derived from the frozen CSV; no total is omitted.",
+      "required": true,
+      "check": "python3 acceptance.py"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "records",
+      "path": "records.csv",
+      "access": "copy-to-work"
+    },
+    {
+      "id": "acceptance",
+      "path": "acceptance.py",
+      "access": "read",
+      "source": "transfer/inventory-acceptance.py"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "report",
+      "path": "report.json",
+      "kind": "file",
+      "role": "deliverable",
+      "required": true
+    }
+  ]
+}

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 
-import { loadDomainPackage,runDomainPackage } from '../src/domain.ts'
+import { bindDomainTask,loadDomainPackage,runDomainPackage } from '../src/domain.ts'
 import { buildDomainEnvironment } from '../src/env-builder.ts'
 import { EXPERIMENT_BUDGET } from '../src/experiment.ts'
 import { messageTexts,startChatCompletionsFixture,toolNames,toolSchemaNames,wireText } from './fixtures/chat-completions.ts'
@@ -57,8 +57,8 @@ void test('ordinary env-builder session prepares data that a fresh run loads wit
       const last = pages.at(-1)
       assert.ok(last)
       if (last.nextCursor !== undefined) return call('singularity_read', { kind: 'self', cursor: last.nextCursor })
-      const data = JSON.parse(pages.map(value => value.data).join('')) as { taskId: string; runId: string; contractDigest: string }
-      return call('singularity_plan', { sketch: { v: 1, taskId: data.taskId, runId: data.runId, sourceContract: data.contractDigest, contextEpoch: last.contextEpoch,
+      JSON.parse(pages.map(value => value.data).join(''))
+      return call('singularity_plan', { sketch: { v: 1,
         objective: 'Publish the exact input.', levels: [0, 1].map(level => ({ level, purpose: 'Copy the declared input to the declared output.', likelyChildren: [], expectedInputs: ['input.txt'], expectedOutputs: ['result.txt'] })), directPlan: [], assumptions: [] } })
     }
     if (!calls.includes('bash')) return call('bash', { description: 'Publish the supplied text.', command: 'cp input.txt result.txt' })
@@ -74,7 +74,7 @@ void test('ordinary env-builder session prepares data that a fresh run loads wit
     if (previousKey === undefined) delete process.env.SINGULARITY_SPIKE_API_KEY
     else process.env.SINGULARITY_SPIKE_API_KEY = previousKey
   })
-  const prepared = await buildDomainEnvironment(materials, join(directory, 'preparation'), { deadlineAt: Date.now() + 60_000, maxRequests: 10, maxReportedTokens: 100_000 })
+  const prepared = await buildDomainEnvironment(materials, join(directory, 'nested', 'preparation'), { deadlineAt: Date.now() + 60_000, maxRequests: 10, maxReportedTokens: 100_000 })
   const domain = await loadDomainPackage(prepared.domain)
   assert.equal(new TextDecoder().decode(domain.source.input as Uint8Array), 'alpha\n')
   assert.deepEqual(domain.cases.map(value => new TextDecoder().decode(value.input.input as Uint8Array)), ['beta\n', 'gamma\n'])
@@ -116,4 +116,99 @@ void test('standalone template has distinct frozen cases and its public acceptan
     await writeFile(join(workspace, 'report.json'), '{"rowCount":0,"totals":[]}')
     await assert.rejects(execute('python3', ['acceptance.py'], { cwd: workspace }), /report mismatch/)
   }
+})
+
+void test('domain loader rejects duplicate IDs and check acceptance without a frozen check command', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'singularity-domain-boundary-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await writeFile(join(directory, 'domain.json'), JSON.stringify({ v: 1, id: 'invalid', task: 'task.json', acceptance: 'checks', source: {}, cases: [
+    { id: 'case', description: 'first', inputs: {} }, { id: 'case', description: 'duplicate', inputs: {} },
+  ] }))
+  await writeFile(join(directory, 'task.json'), JSON.stringify({ goal: { summary: 'x', deliverable: 'x', scope: [], constraints: [] },
+    criteria: [{ id: 'required', statement: 'x', required: true }], inputs: [], outputs: [] }))
+  await assert.rejects(loadDomainPackage(directory), /requires a check/)
+  await writeFile(join(directory, 'task.json'), JSON.stringify({ goal: { summary: 'x', deliverable: 'x', scope: [], constraints: [] },
+    criteria: [{ id: 'required', statement: 'x', required: true, check: 'true' }], inputs: [], outputs: [] }))
+  await assert.rejects(loadDomainPackage(directory), /duplicate case/)
+})
+
+void test('Buckyball freezes finite source bytes and its deterministic consumer rejects altered outputs', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'singularity-buckyball-consumer-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const domain = await loadDomainPackage(fileURLToPath(new URL('../../../domain-tasks/buckyball', import.meta.url)))
+  assert.equal(domain.acceptance, 'checks')
+  const project = JSON.parse(new TextDecoder().decode(domain.source.project as Uint8Array)) as {
+    case: { shapes: [number, number, number][] }
+  }
+  project.case.shapes = [[16, 16, 32]]
+  await mkdir(join(directory, 'ball'))
+  await writeFile(join(directory, 'project.json'), JSON.stringify(project))
+  await writeFile(join(directory, 'acceptance.py'), domain.source.acceptance as Uint8Array)
+  await writeFile(join(directory, 'ball/mxmm.py'), `import json, runpy, struct, sys
+contract = runpy.run_path('acceptance.py')
+request = json.load(open(sys.argv[1]))
+results = []
+for call in request['calls']:
+    decoded = contract['decode_bytes'](call)
+    values = []
+    for row in range(call['m']):
+        for column in range(call['n']):
+            exact, _magnitude, exponent = contract['exact_cell'](call, decoded, row, column)
+            values.append(struct.unpack('<f', struct.pack('<I', contract['rne32'](exact, exponent)))[0])
+    command = {'name': call['id'], 'argv': ['bbdev', 'bebop-bemu', '--sim', '--chip', 'poly', '--core-index', '2', '--binary', 'fixture'], 'cwd': '.', 'exit': 0, 'stdout': '', 'stderr': ''}
+    results.append({'id': call['id'], 'c': values, 'guard': call['guard'], 'command': command})
+regressions = [{'name': name, 'argv': ['bbdev', 'bebop-bemu', '--sim', '--chip', 'poly', '--core-index', '2', '--binary', name], 'cwd': '.', 'exit': 0, 'stdout': '', 'stderr': ''} for name in contract['REGRESSIONS']]
+json.dump({'v': 1, 'calls': results, 'regressions': regressions}, open(sys.argv[2], 'w'))
+`)
+  await execute('python3', ['acceptance.py'], { cwd: directory })
+  const source = await readFile(join(directory, 'ball/mxmm.py'), 'utf8')
+  await writeFile(join(directory, 'ball/mxmm.py'), source.replace('values.append(struct.unpack', 'values.append(1e30 if row == 0 and column == 0 else struct.unpack'))
+  await assert.rejects(execute('python3', ['acceptance.py'], { cwd: directory }))
+})
+
+void test('transfer cases keep distinct TaskSpecs and execute SMatMul and inventory acceptance', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'singularity-transfer-consumers-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const domain = await loadDomainPackage(fileURLToPath(new URL('../../../domain-tasks/buckyball', import.meta.url)))
+  const smatmul = domain.cases.find(value => value.id === 'smatmul-bias')
+  const inventory = domain.cases.find(value => value.id === 'inventory-transfer')
+  assert.ok(smatmul && inventory)
+  assert.equal(smatmul.acceptance, 'checks')
+  assert.equal(inventory.acceptance, 'checks')
+  assert.equal(inventory.validation, true)
+  const refs = (input: Readonly<Record<string, unknown>>) => Object.fromEntries(Object.keys(input).map(id => [id, { id, digest: `sha256:${'0'.repeat(64)}` }]))
+  const smatmulSpec = bindDomainTask(smatmul.task, refs(smatmul.input))
+  const inventorySpec = bindDomainTask(inventory.task, refs(inventory.input))
+  assert.notEqual(smatmulSpec.goal.summary, inventorySpec.goal.summary)
+  assert.notEqual(smatmulSpec.criteria[0]?.id, inventorySpec.criteria[0]?.id)
+
+  const smatmulRoot = join(directory, 'smatmul')
+  await mkdir(join(smatmulRoot, 'ball'), { recursive: true })
+  await writeFile(join(smatmulRoot, 'project.json'), smatmul.input.project as Uint8Array)
+  await writeFile(join(smatmulRoot, 'acceptance.py'), smatmul.input.acceptance as Uint8Array)
+  const runner = `import json, runpy, sys
+contract = runpy.run_path('acceptance.py')
+request = json.load(open(sys.argv[1]))
+expected = contract['expected'](request)
+command = {'name': 'smatmul-bias', 'argv': ['bbdev', 'bebop-bemu', '--sim', '--chip', 'pebble', '--core-index', '0', '--binary', 'smatmul-fixture'], 'cwd': '.', 'exit': 0, 'stdout': '', 'stderr': ''}
+regressions = [{'name': name, 'argv': ['bbdev', 'bebop-bemu', '--sim', '--chip', 'pebble', '--core-index', '0', '--binary', name], 'cwd': '.', 'exit': 0, 'stdout': '', 'stderr': ''} for name in contract['REGRESSIONS']]
+json.dump({'v': 1, 'c': expected, 'guard': request['guard'], 'command': command, 'regressions': regressions}, open(sys.argv[2], 'w'))
+`
+  await writeFile(join(smatmulRoot, 'ball/smatmul.py'), runner)
+  await execute('python3', ['acceptance.py'], { cwd: smatmulRoot })
+  await writeFile(join(smatmulRoot, 'ball/smatmul.py'), runner.replace("'c': expected", "'c': [expected[0] + 1] + expected[1:]"))
+  await assert.rejects(execute('python3', ['acceptance.py'], { cwd: smatmulRoot }))
+
+  const inventoryRoot = join(directory, 'inventory')
+  await mkdir(inventoryRoot)
+  await writeFile(join(inventoryRoot, 'records.csv'), inventory.input.records as Uint8Array)
+  await writeFile(join(inventoryRoot, 'acceptance.py'), inventory.input.acceptance as Uint8Array)
+  const report = { rowCount: 7, totals: [
+    { sku: 'BOLT', quantity: -2 }, { sku: 'GADGET', quantity: 6 },
+    { sku: 'NUT', quantity: 7 }, { sku: 'WIDGET', quantity: 0 },
+  ] }
+  await writeFile(join(inventoryRoot, 'report.json'), JSON.stringify(report))
+  await execute('python3', ['acceptance.py'], { cwd: inventoryRoot })
+  await writeFile(join(inventoryRoot, 'report.json'), JSON.stringify({ rowCount: 0, totals: [] }))
+  await assert.rejects(execute('python3', ['acceptance.py'], { cwd: inventoryRoot }), /report mismatch/)
 })

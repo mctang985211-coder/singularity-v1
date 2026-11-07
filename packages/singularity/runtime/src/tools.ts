@@ -6,6 +6,7 @@ import type {
 DecomposeCommit,
 JsonValue,
 PlanningSketch,
+PlanningSketchDraft,
 Ref,
 TaskContract,
 TaskFeedback,
@@ -15,7 +16,7 @@ canonicalize,
 decomposeCommitSchema,decomposePrepareSchema,
 errorMessage,
 parseProtocolValue,
-planningSketchSchema,
+planningSketchDraftSchema,
 taskFeedbackInputSchema,
 } from '@singularity/protocol'
 
@@ -41,7 +42,7 @@ class TaskToolRefusal extends Error {}
 const TOOL_ERROR_NEXT_ACTIONS: Readonly<Record<string, string>> = {
   INVALID_ARGUMENT: 'Fix the tool arguments and retry with declared fields only.',
   READ_SELF_FIRST: 'Call singularity_read(kind="self") and follow nextCursor through the complete contract, then continue.',
-  PLAN_FIRST: 'Call singularity_plan with the current task/run/sourceContract and contextEpoch:"current", then continue.',
+  PLAN_FIRST: 'Call singularity_plan with business fields only; the host stamps identities.',
   BINDING_FIXED: 'Use a bindingId from the current NodeView childOptions, then continue.',
   PREVIEW_REQUIRED: 'Call singularity_decompose with action="prepare" for a visible child binding first.',
   PREVIEW_STALE: 'Read the current self contract and prepare the child example again in this context epoch.',
@@ -433,20 +434,18 @@ export class RunToolController {
         render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
       },
       execute: async (args) => {
-        let sketch: PlanningSketch
+        let draft: PlanningSketchDraft
         try {
-          sketch = parseProtocolValue(planningSketchSchema, args.sketch)
+          draft = parseProtocolValue(planningSketchDraftSchema, args.sketch)
         } catch (error) {
           throw this.toolError('INVALID_ARGUMENT', errorMessage(error, 'unknown error'))
         }
-        const normalized = sketch.contextEpoch === 'current'
-          ? { ...sketch, contextEpoch: this.state.epoch }
-          : sketch
-        if (normalized.taskId !== this.options.contract.taskId
-          || normalized.runId !== this.options.runId
-          || normalized.contextEpoch !== this.state.epoch
-          || normalized.sourceContract !== this.options.contract.digest) {
-          throw this.toolError('PLAN_FIRST', 'sketch does not match the current task/run/epoch/contract')
+        const normalized: PlanningSketch = {
+          ...draft,
+          taskId: this.options.contract.taskId,
+          runId: this.options.runId,
+          contextEpoch: this.state.epoch,
+          sourceContract: this.options.contract.digest,
         }
         const visibleBindings = new Set(this.childBindingIds)
         for (const entry of normalized.directPlan) {

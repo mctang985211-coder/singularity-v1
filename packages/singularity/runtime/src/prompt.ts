@@ -91,10 +91,11 @@ Author acceptanceCriteria with inline shell tests under bash -e -o pipefail.
 They run with captured streams in a fresh directory containing only frozen
 inputs/outputs at contract paths; the worker checkout/build is absent.
 Copy complete InputRefs unchanged from self, children or evidence.outputs.
-Use contextEpoch:"current" (or the exact value from self) and visible bindingIds.
+Plan business fields only; the host stamps task/run/contract/epoch. Use visible bindingIds.
 singularity_decompose prepare returns
 the example; on a later step commit bindingId, ackPreview=previewRef.digest and task.
 Commit yields. On wake read children/feedback, integrate by goal and replan.
+A failed probe returns once; integrate locally or explicitly create a corrected probe.
 
 Use singularity_feedback when a premise or contract blocks the parent goal.
 Reply with replyTo=child feedback.id to resume the same Run. Contract changes

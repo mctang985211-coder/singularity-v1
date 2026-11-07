@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–025 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–026 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -55,7 +55,7 @@
 | protocol/core | 业务对象、命令、事实、纯 reducer、guard、视图 | DSH、模型调用、工作目录、领域算法 |
 | DSH adapter | agent 创建/同进程续接、scope、wake、MCP server 挂载、工具门禁、进程和预算协调 | Task 验收权威、Method 内容决策 |
 | Method revision | 模板目录、模板局部指导、skill/tool 内容及绑定 | 平台 system card、scheduler、root 验收规则 |
-| domain package | 目标、参考资料、根评判标准、测试数据与环境资源 | Task/Round 状态、fact writer、Agent 生命周期、production head |
+| domain bundle | 目标、参考资料、根评判标准、测试数据与环境资源 | Task/Round 状态、fact writer、Agent 生命周期、production head |
 
 唯一领域写入路径：
 
@@ -101,11 +101,11 @@ DSH session log 保存对话和工具轨迹；Singularity journal 保存领域�
 
 采用 DSH 常见的 packages/<group>/<package>、src/index.ts、类型与 runtime 分离、Cordis plugin apply、TS ESM、显式 import type、.ts 源码导入、包 exports、tsconfig references 和统一格式化。
 
-包按责任组织：`packages/singularity/protocol` 定义纯业务协议，`runtime` 组合 DSH 和事务存储，`apps/singularity` 只做 profile/启动组合，`packages/domains/*` 提供案例、领域验收与比较。领域实现与 core 分包，runtime 不出现领域分支。内部文件拆分由实际消费者决定，不设文件数或行数目标。
+包按责任组织：`packages/singularity/protocol` 定义纯业务协议，`runtime` 组合 DSH 和事务存储，`apps/singularity` 只做 profile/启动组合，`domain-tasks/*` 以外部目录提供案例、领域验收与环境资源。领域实现与 core 分开，runtime 不出现领域分支，也不编译领域包。内部文件拆分由实际消费者决定，不设文件数或行数目标。
 
 文档入口为 `docs/framework.md`（协议）、`AGENTS.md`（施工约束）、`docs/progress.md`（状态与证据）。调研 artifact 只提供证据，不具有规范权威。
 
-依赖方向：runtime → protocol；app → runtime；domain package → protocol 的公开类型。protocol 不访问 FS、网络、进程、DSH 或时钟。runtime 复用 DSH tool/skill registries，不建立可变的第二套 registry；Method 的 catalog 是冻结数据，不是运行时注册服务。
+依赖方向：runtime → protocol；app → runtime；领域目录通过 JSON、数据文件和外部 MCP 资产接入，不成为 workspace package，也不被 app 静态 import。protocol 不访问 FS、网络、进程、DSH 或时钟。runtime 复用 DSH tool/skill registries，不建立可变的第二套 registry；Method 的 catalog 是冻结数据，不是运行时注册服务。
 
 Schema 与 TS 类型只选择一个可维护的权威定义源；不要分别手写四套相似 validator。协议结构使用 Zod 单源；模板中的动态 instanceSchema 是另一种用户数据，使用 Ajv 2020 校验与编译，而不是手写 JSON Schema 解释器。向 DSH 发布的工具 schema 必须符合其接受的子集。禁止协议 schema 的 transform/default/coercion，在源码门禁检查，不在每次解析时做 canonical JSON 往返。框架冻结的是字段与行为，不是内部函数拆分或行数。
 
@@ -284,7 +284,7 @@ maxTokens 计本 Task 子树所有尝试的 inputTokens + outputTokens；cache t
 
 `at`、`deadlineAt`、`asOf` 统一为 Unix epoch milliseconds（UTC）安全整数，`0 <= value <= Number.MAX_SAFE_INTEGER`，在协议边界校验。`deadlineAt` 是绝对时间，行动边界只允许 `now < deadlineAt`：`now >= deadlineAt` 不开始新行动，retry/同进程续接不延长。runtime 使用宿主时钟和原生 deadline signal，不增加逐工具调用的时钟回拨状态机。
 
-固定 retry policy：stop(blocked) 如实关闭 Task 并交回 dispatcher，不自动重试；其他 failed 在剩余 maxRuns、根预算和 deadline 内可重试；invalid 仅对领域部署预先列明的可重试验收结果（例如合作取消的 verifier-timeout）重试；这里不包括抛出的宿主错误。cancelled、污染、composition mismatch 和证据损坏不重试。每次 retry 使用新 session，宿主提供未使用的 workspace 路径，由 runtime 独占创建新目录；新鲜性由本次创建直接保证，不依赖读取历史 session 的 cwd。模型不能修改这项策略。required-child failure 不直接关闭 parent Run：source child 先 terminal，scheduler 写 direct-parent feedback，parent 在 active batch 清空后可以为同一 binding 创建 replacement child。只有 parent 无法继续、显式 stop、no-submission、step limit 或预算终结时，当前 parent Run 才按上述 retry policy 关闭。新 parent Run 不自动复用旧 child verdict，必须重新解决本 Run 的 required obligations。
+固定 retry policy：stop(blocked) 如实关闭 Task 并交回 dispatcher，不自动重试；root 和 required child 的其他 failed 在剩余 maxRuns、根预算和 deadline 内可重试；invalid 仅对领域部署预先列明的可重试验收结果（例如合作取消的 verifier-timeout）重试；这里不包括抛出的宿主错误。probe Task 只有一个 Run，非 verified closure 后直接 terminal，由 parent 决定本地集成或显式新 probe。cancelled、污染、composition mismatch 和证据损坏不重试。每次 retry 使用新 session，宿主提供未使用的 workspace 路径，由 runtime 独占创建新目录；新鲜性由本次创建直接保证，不依赖读取历史 session 的 cwd。模型不能修改这项策略。required-child failure 不直接关闭 parent Run：source child 先 terminal，scheduler 写 direct-parent feedback，parent 在 active batch 清空后可以为同一 binding 创建 replacement child。只有 parent 无法继续、显式 stop、no-submission、step limit 或预算终结时，当前 parent Run 才按上述 retry policy 关闭。新 parent Run 不自动复用旧 child verdict，必须重新解决本 Run 的 required obligations。
 
 资源 binding 由模板、deployment policy 与 frozen global snapshot 决定。模型提供 skills/tools/method/parentId/verifier 等字段一律拒绝，不能“规范化覆盖掉”后继续。Contract Summary Worker 从冻结合同生成以 `contractDigest` 索引的 ContractSummary；摘要保留 sourceContract 和版本，作为祖先查询的只读便利视图，原合同始终是权威。
 
@@ -307,13 +307,13 @@ base outputs
 
 ### 4.3 AcceptanceRef 的权威
 
-Root 的 criteria、verifier、scorer 来自用户授权的 domain case/operator，不属于 Method。
+Root 的 criteria、验收类型和冻结输入来自用户授权的 domain case/operator；verifier、check runner 与 scorer 由 host 按统一接口提供，不属于 Method。
 
 Child 的 goal、完整 inputs、输出接口和 acceptanceCriteria 由 parent 在派发前编写。新增测试代码可直接内联在 check 中，使用冻结输入和声明输出相对路径，从 workspace 根执行。host 仅校验合同结构、授权与冻结身份，不判断自然语言测试充分性；独立领域 review 仍可因未覆盖的目标缺陷否决。模板的继承义务保留，root 评分标准不可被 child 或 RSI 放宽。
 
 `TaskContract.acceptance` 是 `object` domain 的 `AcceptanceRef`，冻结 acceptance policy 与 provider identity；领域装载结果不得使用未列 domain 或裸 digest。宿主解析出的 provider 必须与 `PublicReceipt.provider`、`Evidence.verification.provider` 在 `id` 和 `digest` 上完全一致；不匹配按 `invalid` 结算，不能补写 closure。`AcceptanceRef` 的对象 schema 仍由领域发布声明，本规范只冻结 ref domain、身份比较和 receipt 绑定规则。
 
-因此 RSI 可以改 child template 的目标、预填 criteria、输出结构和分解关系；**不能改已经准入的 Task，不能改 root case、root verifier 或 scorer**。不得把“不能修改 live contract”误解成“不能改未来 child template 的验收描述”。
+因此 RSI 可以改 child template 的目标、预填 criteria、输出结构和分解关系；**不能改已经准入的 Task，不能改 root case、root acceptance 或 host 的验收/比较实现**。不得把“不能修改 live contract”误解成“不能改未来 child template 的验收描述”。
 
 Child contract 的 schema 合法不证明子任务自然语言目标一定足够支持父目标。最终仍由 parent 的独立验收负责，框架不声称能做语义蕴含证明。
 
@@ -461,13 +461,13 @@ explore-child 创建的 child                    → 开始时再独立获得同
 
 所以“只一级”是**每个模型只组织自己的直接下一层**，不是“任务树总深度只能为一”。fallback 可递归，仍受根 maxDepth/maxTasks 限制。
 
-平台 explore-child 不预制 child 验收。parent 在准入前编写非空 acceptanceCriteria，形成 required 合同项；领域 verifier 对照该 child 的冻结目标与接口独立检查，命令失败不能被 review 放行。每个探索 child 继承 required deliverable `{id:'result', path:'result', kind:'tree'}`，将产物放入 result/ 并以 output ID result 提交；localOutputs 只追加 supporting 输出。root 仍使用 operator/domain 定义的验收与输出。
+平台 explore-child 不预制 child 验收。parent 在准入前编写非空 acceptanceCriteria，形成 required 合同项；host verifier/check runner 对照该 child 的冻结目标与接口独立检查，命令失败不能被 review 放行。每个探索 child 继承 required deliverable `{id:'result', path:'result', kind:'tree'}`，将产物放入 result/ 并以 output ID result 提交；localOutputs 只追加 supporting 输出。root 仍使用 operator/domain 定义的验收与输出。
 
 平台 `explore-child` fallback 的默认 join 是 `probe`；只有 root/domain admission 明确把该 fallback binding 固定为 required 时，才建立 required obligation。模型不能把 fallback 从 probe 改成 required。
 
 ### 6.1 全局资源怎样进入探索层
 
-domain package/operator 指定公开资源根，可能包括用户所说的 .agent 下全局资源。框架不擅自改成只读取另一种目录，也不默认继承用户 HOME 下所有资源。
+domain bundle/operator 指定公开资源根，可能包括用户所说的 .agent 下全局资源。框架不擅自改成只读取另一种目录，也不默认继承用户 HOME 下所有资源。
 
 root admission 冻结 GlobalResourceSnapshot：
 
@@ -505,11 +505,8 @@ MCP servers → { name, exposed tools, manifest digest, bundle digest }
 在既有 purpose/assumptions 中说明本级职责的功能、先决条件、结果消费者、所需证据、预计耗时/成本与不确定性，并保留集成与复验工作。区分已知输入和待验证假设；实际只派发当前已就绪的直属工作，读取并验证前批结果后才形成依赖它的新合同。叶节点须前提已成立、结果可直接验证；同一 checkout 内的一串命令并不足以证明它是叶节点。计划偏离父目标、前提不明或原合同不成立时主动用 feedback 讨论，需改合同则 blocked 交回。时间估计由模型依据资源和实际观察更新，不新增逐 Task 时长门禁、计划执行判定器或 schema 字段。
 
 ~~~ts
-interface PlanningSketch {
+interface PlanningSketchDraft {
   readonly v: 1
-  readonly taskId: string
-  readonly runId: string
-  readonly contextEpoch: string
   readonly objective: string
   readonly levels: readonly {
     readonly level: 0 | 1 | 2
@@ -523,11 +520,16 @@ interface PlanningSketch {
     readonly purpose: string
   }[]
   readonly assumptions: readonly string[]
-  readonly sourceContract: Digest
+}
+interface PlanningSketch extends PlanningSketchDraft {
+  readonly taskId: string       // host 盖章
+  readonly runId: string        // host 盖章
+  readonly contextEpoch: string // host 盖章
+  readonly sourceContract: Digest // host 盖章
 }
 ~~~
 
-`singularity_plan` 以普通 Task tool 提交或更新草图；host 校验 task/run/contextEpoch/sourceContract、层级只能是 0/1/2、directPlan 只引用可见 binding。模型可以把 `contextEpoch` 写成 `"current"`，由 host 解析为本次调用的 epoch 后再写入 CAS；显式旧值仍严格拒绝。`directPlan.join` 不属于模型输入；join 永远由当前 Method 中该 binding 的固定定义派生，并在 preview、children-admitted 和 NodeView 中呈现。草图写入 CAS 并作为持久 DSH tool result；后续 `decompose commit` 和 `submit` 必须引用当前 epoch 的 sketch receipt。它是模型计划，不是受信合同；host 只验证结构，不采纳模型写入的验收、资源或 join 字段。
+`singularity_plan` 只接受 PlanningSketchDraft 的业务字段；taskId、runId、contextEpoch、sourceContract 由 host 从当前 Run 和冻结合同盖章，模型提交这些字段会被 strict schema 拒绝，不再提供 `"current"` 或抄写 digest 的旁路。host 校验层级只能是 0/1/2、directPlan 只引用可见 binding。`directPlan.join` 不属于模型输入；join 永远由当前 Method 中该 binding 的固定定义派生，并在 preview、children-admitted 和 NodeView 中呈现。完整 PlanningSketch 写入 CAS 并作为持久 DSH tool result；后续 `decompose commit` 和 `submit` 必须引用当前 epoch 的 sketch receipt。它是模型计划，不是受信合同；host 只验证结构，不采纳模型写入的验收、资源或 join 字段。
 
 worker 可按需调用 `singularity_read(kind='ancestor')` 查询祖先的 `ContractSummary`、公开 goal、criteria、constraints、outputs 和已冻结 decisions。读取范围只沿 parent 链向上，返回 sourceContract、summaryVersion 和 asOf；不返回祖先私有 transcript、兄弟、孙节点内部规划或隐藏验收数据。祖先查询不改变当前合同和预算。
 
@@ -571,11 +573,11 @@ Summary Worker 的工具面只有读取已注入合同和提交摘要对象；�
 join 在 Method 的 child binding 上固定，Task worker 不能在 commit 中改。每一个 `required` binding 是当前 parent Run 的一个 obligation，按 `bindingId` 计算；模板若不需要该义务必须把 binding 声明为 `probe` 或不提供该 binding：
 
 - required：该 binding 必须有一个 verified winner，parent 才能提交成功。
-- probe：探索性尝试，失败不自动否定 parent；parent 仍要通过自己的验收。同一 probe binding 可在同一 batch 创建多个独立 Task，也可在后续 batch 承接新的子问题；多个实例可确认同一个已交付的 preview；已有 verified child 不锁定该入口，新 probe 不自动替换或 supersede 历史 child。winner 与自动 replacement 限制仅适用于 required obligation。
+- probe：探索性尝试，失败不自动否定 parent；parent 仍要通过自己的验收。一个 probe Task 只有一个 Run，非 verified closure 后按同一 retry policy 直接 terminal，不自动购买新 Run。parent 读取这次公开结果，决定本地集成、继续其它工作或显式创建一个修正后的新 probe。相同 probe binding 可在同一 batch 创建多个独立 Task，也可在后续 batch 承接新的子问题；多个实例可确认同一个已交付的 preview；已有 verified child 不锁定该入口，新 probe 不自动替换或 supersede 历史 child。winner 与自动 replacement 限制仅适用于 required obligation。
 - 一个 required obligation 的 winner 是同一 parent Run 中、该 binding 下、已 terminal、`closed(verified)` 且未被 replacement supersede 的 child Task。一个 obligation 同时最多有一个 active child；替换只在旧 child terminal 后发生。
 - 所有已准入 child Task 都须 terminal 后，parent 才能提交或成功关闭；失败/取消记录必须保留。
 
-required child failure 不会直接结束当前 parent Run。source child Run 先按第 9.2 节进入 terminal；如果 child Task 的 retry policy 仍允许，它先完成自己的 retry。每次 child Run 非 verified closure 时，scheduler 向 direct parent 写 `source='scheduler'` 的 feedback；parent 在当前 active batch 全部 child Task terminal 后醒来，可以读取失败 Evidence 并为同一 binding 创建 replacement child。replacement 是新 Task、新合同、新 Evidence 链；旧 child 不可编辑、reopen 或改成 probe。
+required child failure 不会直接结束当前 parent Run。source child Run 先按第 9.2 节进入 terminal；required Task 的 retry policy 仍允许时，它先完成自己的 retry，probe 不适用这条自动 retry。每次 child Run 非 verified closure 时，scheduler 向 direct parent 写 `source='scheduler'` 的 feedback；parent 在当前 active batch 全部 child Task terminal 后醒来，可以读取失败 Evidence 并为同一 binding 创建 replacement child。replacement 是新 Task、新合同、新 Evidence 链；旧 child 不可编辑、reopen 或改成 probe。
 
 replacement 的 `supersedesChildIds` 由 host 根据 binding、触发 replacement 的已 terminal failure/feedback 和当前 parent Run 派生，模型不能提交或伪造该字段。host 选择该 binding 下当前仍未 supersede 且没有 verified winner 的 terminal child；存在多个时全部列入，找不到可替换 predecessor 或仍有 active child 时拒绝 replacement。被 supersede 的 child 仍保留在 trace 中且不得作为 winner；verified winner 不得被 replacement supersede。新的 child verified 后，该 binding 的 obligation 才满足。
 
@@ -731,7 +733,7 @@ verified/failed/invalid 由 host 按 §15.3 从 strict `PublicReceipt`、冻结�
 
 没有提交的 failed Run 可以有 execution record，但没有 acceptance receipt。不要伪造 verifier receipt 来统一数据外观。已提交但 receipt 缺失、畸形或含 invalid criterion 时，invalid receipt 仅作 operator 诊断，不作为 Evidence，closure 使用 `ExecutionRecord(invalid)`，且不扩展 ExecutionRecord 增加 receipt 字段。
 
-失败 Run 按冻结的 maxRuns/retry policy 决定 Task 是否 terminal；显式 stop(blocked) 是交回派发者的例外，不自动重试。新 Run 的方法、Task contract 和祖先总预算不变。
+失败 Run 按冻结的 maxRuns/retry policy 决定 Task 是否 terminal；显式 stop(blocked) 是交回派发者的例外，不自动重试；probe 在这一次 Run 后直接 terminal，required/root 的新 Run 才沿用原方法、Task contract 和祖先总预算。
 
 ### 9.3 完成与 yield 约束
 
@@ -1285,10 +1287,11 @@ Author acceptanceCriteria with inline shell tests under bash -e -o pipefail.
 They run with captured streams in a fresh directory containing only frozen
 inputs/outputs at contract paths; the worker checkout/build is absent.
 Copy complete InputRefs unchanged from self, children or evidence.outputs.
-Use contextEpoch:"current" (or the exact value from self) and visible bindingIds.
+Plan business fields only; the host stamps task/run/contract/epoch. Use visible bindingIds.
 singularity_decompose prepare returns
 the example; on a later step commit bindingId, ackPreview=previewRef.digest and task.
 Commit yields. On wake read children/feedback, integrate by goal and replan.
+A failed probe returns once; integrate locally or explicitly create a corrected probe.
 
 Use singularity_feedback when a premise or contract blocks the parent goal.
 Reply with replyTo=child feedback.id to resume the same Run. Contract changes
@@ -1338,9 +1341,9 @@ singularity_read
   ancestor 按祖先 contractDigest 返回 ContractSummary；摘要未生成时返回 SUMMARY_PENDING，并在 data.nextAction 指引后续模型步重读同一 ancestor；feedback 返回 direct child 提问和对本 Task 提问的 parent 答复
 
 singularity_plan
-  input: { sketch: PlanningSketch }
+  input: { sketch: PlanningSketchDraft }
   output: { planningSketchRef, contextEpoch, remainingBudgetPct }
-  effect: 保存当前 Run 的结构化计划；不创建 Task，不改变合同
+  effect: host 盖章当前 task/run/contract/epoch，保存完整结构化计划；不创建 Task，不改变合同
 
 singularity_decompose
   prepare: { action: prepare, bindingId }
@@ -1533,7 +1536,7 @@ ExecutionRecord 用于 no-submission、stop、cancel、预算终结或无效验�
 
 `run/closed.usage` 是该 Run closure 的最终 usage 快照；若同时引用 Evidence/ExecutionRecord，其内嵌 usage 必须与 fact.usage canonical-equal。两者由同一 writer 在同一 command 中产生，不是两套独立计量。
 
-`UsageRecord` 必须把模型消耗按 owner 分类保存：普通 Task Run 的 input/output usage 归属该 Task，并向 root subtree 汇总；Contract Summary Worker 的消耗放在 `summary` 子记录中，带 `ownerTaskId`、`sourceContract` 和 known/unknown token counts，归属拥有该合同的 Task，并计入其 root trace 与 evaluation slot 成本；RSI proposer 的消耗归属 Round proposer budget；evaluation slot 内的摘要消耗归属该 slot。feedback tool 和 scheduler feedback 没有模型 usage。usage 已知计数与 unknownRequests 单独表达。未知不等于 0，不能据此宣称节约成本。预算按宿主已报告 usage 在请求边界控制；计量不可用时停止继续购买请求，保留 incomplete usage。在途请求的真实尾部消耗完整记账，contextWindow 不作 token 预留。`summary?` 是本节既有子记录；不增加 `ContractSummary.usage` 字段，不新增 usage fact。RSI proposer usage 仍留在 Round 预算/宿主记录，本规范不为 `rsi/round-closed` 增加 usage 字段。
+`UsageRecord` 必须把模型消耗按 owner 分类保存：普通 Task Run 的 input/output usage 归属该 Task，并向 root subtree 汇总；Contract Summary Worker 的消耗放在 `summary` 子记录中，带 `ownerTaskId`、`sourceContract` 和 known/unknown token counts，归属拥有该合同的 Task，并计入其 root trace 与 evaluation slot 成本；RSI proposer 的消耗归属 Round proposer budget；evaluation slot 内的摘要消耗归属该 slot。feedback tool 和 scheduler feedback 没有模型 usage。inputTokens 保持包含 cacheReadTokens/cacheWriteTokens 的预算口径，两个 cache 字段均为可选：只有 provider 明确报告时才累计，缺字段不是 0。usage 已知计数与 unknownRequests 单独表达。未知不等于 0，不能据此宣称节约成本。预算按宿主已报告 usage 在请求边界控制；计量不可用时停止继续购买请求，保留 incomplete usage。在途请求的真实尾部消耗完整记账，contextWindow 不作 token 预留。`summary?` 是本节既有子记录；不增加 `ContractSummary.usage` 字段，不新增 usage fact。RSI proposer usage 仍留在 Round 预算/宿主记录，本规范不为 `rsi/round-closed` 增加 usage 字段。
 
 composition 记录：DSH 确切包/配置 identity、platform prompt digest、Task contract、局部 template/guidance、skills 完整 bundle、MCP server manifest/bundle/schema/config、模型路由、资源 snapshot、初始 seed。后续 direct child input snapshot 用 asOf+refs记录，不伪装为启动前已知。
 
@@ -1798,7 +1801,7 @@ interface ProposerView {
 
 ProposerView 是独立的读取授权结果。`publicCases` 只含领域公开描述和 case identity；validation/holdout 的 input、answer、hidden test、private verifier recipe 只在 evaluator/verifier scope。分页大小由 host guard 固定，ProposerView 内的预算字段只展示百分比。
 
-`previousRound` 由当前 Round 开启之前的 journal 顺序确定：仅选择同一 base Method 最近一个已关闭 Round。`rsi_read(kind='previous-round')` 按页返回该轮的公开 hypothesis、outcome/reason，以及已有 comparison 的 complete、metric、aggregateDelta、worstRegression、cost。它不返回 per-case 数据、slot、case/trace/receipt 引用或私有 payload，不授予对上一轮对象的任意读取。没有上一轮时省略此索引。投影直接从既有 patch/closure/comparison 派生，无新 fact、状态机或跨轮执行 Agent；本次 proposer 使用同一开启前截面。
+`previousRound` 由当前 Round 开启之前的 journal 顺序确定：仅选择同一 base Method 最近一个已关闭 Round。`rsi_read(kind='previous-round')` 按页返回该轮的公开 hypothesis、outcome/reason，以及已有 comparison 的 complete、metric、aggregateDelta、worstRegression、cost、tokenCosts（旧归档没有该字段时省略）。它不返回 per-case 数据、slot、case/trace/receipt 引用或私有 payload，不授予对上一轮对象的任意读取。没有上一轮时省略此索引。投影直接从既有 patch/closure/comparison 派生，无新 fact、状态机或跨轮执行 Agent；本次 proposer 使用同一开启前截面。
 
 ## 17. RSI proposer 协议
 
@@ -1837,13 +1840,17 @@ Improve reusable Method assets from sealed evidence; Task outputs are per-instan
 Read authoring, pinned Method and relevant original assets with rsi_read;
 read previous-round feedback when offered.
 Trace the contract, findings, planning and relevant costs; distinguish workflow,
-domain and host failures. Align one hypothesis and the smallest change with the metric.
+domain and host failures. Improve future reasoning, decomposition and reusable interfaces,
+not merely this source's implementation. Choose the smallest change aligned with the metric;
+never collapse a useful workflow into a larger single-run runbook just to reduce steps.
 Extract reusable algorithms, scripts, MCP/CLI tools and consumer checks, scoped by ordinary inputs;
 avoid rebuilding code each trial or preserving source-specific review/audit chains.
 Examples illustrate; never dispatch on case/suite IDs or copy solved data/answers.
 Explain unseen-input transfer and risks; source pass is insufficient.
 Skill names are DSH kebab-case machine IDs. Bind changed assets to templates
 reachable from entry (set-entry if needed); unreachable changes are no-ops.
+Author business guidance, examples, assets and bindings only. The host stamps base,
+TaskProposal schema, acceptancePolicy and learning outputs; none belongs in a patch.
 Public catalogs are separate; bind the intended tool set explicitly. Keep it within 12 KiB; help is a resource.
 Submit one JSON patch with rsi_submit_patch. Correct invalid arguments in this session;
 accepted submission ends the turn. Host precheck/evaluation/activation decide the result.
@@ -1857,25 +1864,24 @@ rsi_read
            id?, cursor?, page? }
   output: { data, objectRef, nextCursor?, remainingBudgetPct }
   scope: 本次 source trace、base Method、source 中的 drafts、公开能力目录、公开 RoundPlan，以及同 base 最近一个 closed Round 的限定公开反馈
-  authoring 返回提交工具的精确 MethodPatch JSON Schema（按需读取，不在每次请求重复注入）
+  authoring 返回提交工具的精确 MethodPatchDraft JSON Schema（按需读取，不在每次请求重复注入）
   proposer-view 不含 validation/holdout 的具体输入、答案、隐藏测试或 private verifier recipe
 
 rsi_submit_patch
-  input: { patch: MethodPatch }
+  input: { patch: MethodPatchDraft }
   output: { submitted: true, proposalRef, remainingBudgetPct }
-  guard: base 一致、无既有正式 proposal、schema/size 合法
-  effect: 冻结 patch，append rsi/proposal-submitted，concludeTurn
+  guard: 无既有正式 proposal、schema/size 合法；host 从 opened Round 盖入 base
+  effect: 冻结带 host base 的 MethodPatch，append rsi/proposal-submitted，concludeTurn
   后续：runtime 在 turn 外排空 proposer，运行 precheck 和 paired evaluation
 ~~~
 
-候选大小上限固定为 patch 256 KiB、最多 64 次资产操作。大库通过分页读取；单轮不要求重写全库。工具不接受模型给出的 output digest、score 或 approval。
+候选大小上限固定为 patch 256 KiB、最多 64 次资产操作。大库通过分页读取；单轮不要求重写全库。工具不接受模型给出的 base、output digest、score 或 approval。
 
 ### 17.2 Patch 结构与允许演化
 
 ~~~ts
-interface MethodPatch {
+interface MethodPatchDraft {
   readonly v: 1
-  readonly base: MethodRef
   readonly hypothesis: string
   readonly changes: readonly (
     | { readonly op: 'put-template'; readonly template: TemplateDraft }
@@ -1889,12 +1895,15 @@ interface MethodPatch {
   readonly predictedRisks: readonly string[]
   readonly transferPlan: string
 }
+interface MethodPatch extends MethodPatchDraft {
+  readonly base: MethodRef // host 从 opened Round 盖入；模型输入拒绝此字段
+}
 ~~~
 
-TemplateDraft 提供 guidance 文本、完整 example JSON 及全部 skills/MCP servers/children 绑定；put-template 是一个完整局部模板的替换，能够表达新增/删除绑定、修改下一级关系。SkillDraft/McpServerDraft 提供相对文件名到 UTF-8 源码的映射、server manifest、tool schemas 和配置。host 生成 ObjectRefs、bundle digests 与部署 receipts，模型不手填虚假的计算结果。
+TemplateDraft 提供 guidance 文本、完整 example JSON 及全部 skills/MCP servers/children 绑定；put-template 是一个完整局部模板的替换，能够表达新增/删除绑定、修改下一级关系。SkillDraft/McpServerDraft 提供相对文件名到 UTF-8 源码的映射、server manifest、tool schemas 和配置。host 生成 ObjectRefs、bundle digests 与部署 receipts，模型不手填虚假的计算结果。host 统一提供默认 TaskProposal instanceSchema；同名模板继承原 acceptancePolicy，新模板继承 source exploration fallbackAcceptance（没有 exploration 时继承 root acceptance）。模型不提供这两个字段，也不声明 §6.2 的 learning outputs；它们由 host 在候选准入和 Task 准入分别派生。
 
 ~~~ts
-type TemplateDraft = Omit<TaskTemplate, 'guidance' | 'example'> & {
+type TemplateDraft = Omit<TaskTemplate, 'guidance' | 'example' | 'instanceSchema' | 'acceptancePolicy'> & {
   readonly guidance: string
   readonly example: TaskExample
 }
@@ -1939,7 +1948,7 @@ base digest == current round base
 exact schema / size / canonical JSON
 only allowed Method fields changed
 template bindings form a finite reusable catalog
-template instance schemas cannot add root verifier/scorer
+host-derived TaskProposal schema and acceptancePolicy resolve; examples satisfy the default schema
 skill content and MCP server bundle/manifest/config digests resolve
 MCP consumed config fields satisfy schema; deployment fixes trusted bundles and actual OS permissions
 every exposed MCP tool has a stable name and schema matching the manifest
@@ -2011,11 +2020,22 @@ metric value + direction/unit
 median or domain aggregate delta
 worst per-case regression
 usage complete/unknown
+tokenCosts = {
+  complete, cacheComplete,
+  baseline/candidate: {
+    inputTokens, outputTokens,
+    uncachedInputTokens: number | null,
+    cacheReadTokens: number | null,
+    cacheWriteTokens: number | null
+  }
+}
 missing/invalid evidence list
 outcome = improved | no-improvement | insufficient-evidence
 ~~~
 
-v1 不发明领域分数。MetricSpec、aggregate、minimum sample 和 threshold 由 domain package 提供；若 domain 没有明确比较器，Round 以 insufficient-evidence 关闭，reason=unsupported-comparator。source replay 只验证协议链路，不能作为领域改进或自动发布依据。
+tokenCosts 按 arm 汇总整棵 Task 子树及失败尝试；inputTokens 仍是含 cache 的总口径，uncachedInputTokens=inputTokens-cacheReadTokens-cacheWriteTokens。只有 complete 且所有相关 provider 都报告 cache 字段时 cacheComplete=true；否则 cache 三项为 null，不当作 0。费用比较和质量结论是独立输出，不能由 token 下降反推能力提升。
+
+通用实验以 paired verified consumer fraction 为质量指标，只有真实 consumer 通过率提高且各 case/validation 不回退才可能 improved；token 只作分列成本与冻结上限，token 下降本身是 no-improvement。领域 bundle 只能通过冻结公开 criteria 和 case 数据表达业务质量，不能注入自定义 comparator、aggregate、minimum sample、threshold 或调度回调；这些通用规则由 host 固定。source replay 只验证协议链路，不能作为领域改进或自动发布依据。
 
 validation=required-by-domain 时，本轮必须按预先冻结的独立 validation/holdout cases 与预算完成验证；未完成则 insufficient-evidence，不产生可发布的 improved。validation=none 可以做 source replay，结论必须标注 claim=source-replay，只验证协议链路，不自动激活 production head。单题变好而领域 validation 退化、成本阈值失败或任一冻结回归条件不满足，不能判为 improved。
 
@@ -2062,7 +2082,7 @@ function activate(candidate: MethodRef, round: RoundRef, approval: Approval) {
 
 activation 只移动 future root 的 MethodRef。live Task/Run 不被改写。rollback 是新的 activation command，由独立 trusted approval 发起，不是 proposer 工具。
 
-费用判断：总成本含整棵任务树、失败尝试及工具调用，不只算 root。unknown usage 只作观测/归档，不改变质量结论，也不因此取消或阻断 retry；若成本是硬门槛，只有明确缺失成本时才判 insufficient。规则在 plan 中冻结，不能看到结果后改变。
+费用判断：总成本含整棵任务树、失败尝试及工具调用，不只算 root。unknown usage 和缺失 cache metadata 只作观测/归档，不改变质量结论，也不因此取消或阻断 retry；cache 缺失不得换算成 0 或非缓存成本。若总成本是硬门槛，只有明确缺失成本时才判 insufficient；仅 cache 分列未知不伪装成总成本缺失。规则在 plan 中冻结，不能看到结果后改变。
 
 完整 round procedure：
 
@@ -2090,7 +2110,7 @@ round outcome 是统计结果；report 只渲染这些事实。report 写入失�
 
 ## 19. 领域包边界
 
-领域目录只提供目标、参考资料、根评判标准、可选的同领域测试集和环境资源。非 root 合同和检查仍由派发模型编写。领域目录不实现 RSI 流程、reviewer Agent、预算、重试或 activation；这些都由宿主和协议承载。
+领域目录只提供目标、参考资料、根评判标准、可选的不同算子/不同任务真实 consumer 测试集和环境资源。非 root 合同和检查仍由派发模型编写。领域目录不实现 RSI 流程、reviewer Agent、预算、重试或 activation；这些都由宿主和协议承载。
 
 ### 19.0 领域任务编写框架
 
@@ -2110,22 +2130,23 @@ round outcome 是统计结果；report 只渲染这些事实。report 写入失�
 宿主以领域目录的声明式字段装载一次冻结输入。实际边界是：
 
 ~~~text
-domain.json   → 领域身份、task.json 路径、根 acceptance、source/cases 路径、可选 tools.json
+domain.json   → 领域身份、默认 task.json、默认 acceptance、source/cases 路径、可选 tools.json
 task.json     → root goal、criteria、inputs、outputs；输入只在装载时绑定 CAS Ref
-cases/*       → source、公共 case、validation/holdout 的冻结 bytes 或重建规则
+cases/*       → source、公共 case、validation/holdout 的冻结 bytes 或重建规则；
+                每个 case 可覆盖 task.json 与 acceptance，以组成不同算子/任务 suite
 environment/* → 外部 MCP 的 source、manifest、config 及部署所需权限
 ~~~
 
-宿主负责把这些数据变成冻结 `TaskSpec`、`AcceptanceRef`、输入对象、环境资源和 paired evaluation；它不从领域目录读取 Task 树、Method、预算或控制流。`acceptance="checks"` 时，required criteria 的 check 由宿主在 CAS 输入/输出上执行；`acceptance="review"` 时，操作者显式选择的独立 reviewer 负责语义复现。reviewer 正常结束但未提交 findings 属于 invalid 验收，不代写领域 fail 或触发普通领域重试。领域特有指标可以随评判标准提供；reported-token 等通用成本比较复用宿主实现。框架不定义 EDA 或仿真参数。
+宿主负责把这些数据变成冻结 `TaskSpec`、`AcceptanceRef`、输入对象、环境资源和 paired evaluation；它不从领域目录读取 Task 树、Method、预算或控制流。case 未覆盖时沿用默认 TaskSpec/acceptance，覆盖后该 case 的冻结合同与执行 slot 必须使用同一选择。`acceptance="checks"` 时，required criteria 的 check 由宿主在 CAS 输入/输出上执行；`acceptance="review"` 时，操作者显式选择的独立 reviewer 负责语义复现。能确定性执行的 root consumer 应优先 checks，不默认购买 LLM review。reviewer 正常结束但未提交 findings 属于 invalid 验收，不代写领域 fail 或触发普通领域重试。领域特有质量/迁移指标可以随评判标准提供；通用 paired verified fraction 与 cache 分列成本复用宿主实现，reported-token 下降不单独构成能力提升。框架不定义 EDA 或仿真参数。
 
-验收实现与可信级别由部署在启动前确定：公开可信案例可使用进程内领域函数；私有 fixtures、不可信 worker/MCP 或必须强停的 verifier，必须先用现成 OS/容器/固定 broker 建立真实读取、网络和进程边界，不能由 harness 的目录/HOME/metadata 检查替代。领域 verifier 必须转发宿主 deadline 与 operator 取消合并后的 `AbortSignal` 并等待自己拥有的工作退出；外部取消复用子树取消结算，只有本次宿主 deadline 才分类 verifier-timeout，上游同名 `TimeoutError` 保留原异常；任意不合作进程内函数不在强停保证内。verifier 接收 §15.3 的 `VerifyRequest` 并返回 strict `PublicReceipt`；receipt 中公开 criterion 与 metric，不公开 private fixtures。宿主校验 receipt 身份、digest、criteria、`exit`、`timedOut` 并按 §15.3 派生 outcome；verifier 自报总 verdict 或 exit code 不是验收权威。`privateReceipt` 保持 opaque，不进入 worker/RSI/模型视图。compare 只能读取 public Evidence；它不能发 journal fact、创建 Agent、修改 Method 或改变 plan；invalid/missing evidence 不得作为零分。
+验收实现与可信级别由部署在启动前确定：领域只声明冻结输入、输出和 check 命令，宿主使用统一的临时目录、CAS 物化、取消/截止和退出状态适配器执行；领域脚本不作为宿主内进程函数导入，也不接收 Task 树、Method、scheduler 或 transcript。私有 fixtures、不可信 worker/MCP 或必须强停的 check，必须先用现成 OS/容器/固定 broker 建立真实读取、网络和进程边界，不能由 harness 的目录/HOME/metadata 检查替代。需要语义判断时使用宿主提供的独立 reviewer；它接收 §15.3 的 `VerifyRequest` 并返回 strict `PublicReceipt`，且必须转发宿主 deadline 与 operator 取消合并后的 `AbortSignal` 并等待自己拥有的工作退出。receipt 中公开 criterion 与 metric，不公开 private fixtures；宿主校验 receipt 身份、digest、criteria、`exit`、`timedOut` 并按 §15.3 派生 outcome。check 的进程退出状态和 reviewer 自报总 verdict 都不是单独的验收权威。`privateReceipt` 保持 opaque，不进入 worker/RSI/模型视图。compare 只能读取 public Evidence；它不能发 journal fact、创建 Agent、修改 Method 或改变 plan；invalid/missing evidence 不得作为零分。
 
 完整 RSI 评测领域包发布要带：
 
 ~~~text
 domain manifest
 MCP server manifests and bundle digests
-verifier/scorer digests
+acceptance check/script digests and host comparator identity
 fixture/input object digests
 public/private boundary declaration
 real scenario conformance suite
@@ -2157,7 +2178,7 @@ parent 提交 child batch 或 child 发出反馈提问后释放执行槽位；�
 
 ~~~text
 T0  root admission
-    pin method-empty、初始 RTL seed、公開仿真 skill/MCP server snapshot、root verifier
+    pin method-empty、初始 RTL seed、公開仿真 skill/MCP server snapshot、host acceptance runner
 T1  root Run-1 首次 prompt
     固定 worker card + exploration card + root goal summary
     自动列出文档/skills/MCP servers + explore-child brief；显示剩余预算百分比
@@ -2243,7 +2264,7 @@ C-24 single-case gain with validation regression is not improved
 
 ## 22. 发布冻结与版本治理
 
-本 V1 发布版冻结 C1–C3、A–F、amendment 001–025 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
+本 V1 发布版冻结 C1–C3、A–F、amendment 001–026 以及本文全部配套字段、状态、guard、预算和符合性场景。它是唯一的 framework/protocol 施工基线；实现阶段只能实现本文语义，不得把实现选择重新写成隐含架构。
 
 ### 22.1 冻结内容
 
@@ -2264,7 +2285,7 @@ C-24 single-case gain with validation regression is not improved
 
 ~~~text
 版本：V1 发布规范
-修订：2026-11-06 纳入 amendment 006–025（当前运行契约、原生组合、workflow、验收、领域编写与 RSI 组成边界）
+修订：2026-11-07 纳入 amendment 006–026（当前运行契约、宿主派生、probe、质量迁移与成本边界）
 权威文件：docs/framework.md
 实现边界：只实现本文已冻结的协议；新增架构语义必须走 amendment
 历史文件：旧草案、旧实现和研究记录仅作参考，不拥有规范权威
@@ -2303,7 +2324,7 @@ C-24 single-case gain with validation regression is not improved
 
 实现默认沿 DSH 公开接口或现成库完成。保留自定义层必须提供具体原生调用路径，并比较本项目实际接入后的状态、分支和适配；只有明确证明原生方案更复杂时才保留。“暂不能证明等价”“库存在不代表可替代”都不能单独充当保留理由。可由操作者保证的条件在启动前固定，runtime 不为环境违约另建探测、恢复或兜底系统。输入不符合合同或权限时返回对应错误，普通执行失败按现有分类结束。改变公开字段、状态或 authority 时提出 amendment；独立正常功能继续推进。
 
-当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014/015/016/017/018/019/020/021/022/023/024/025 为准）：
+当前已批准并纳入的 amendment（后续修订覆盖相冲突的历史实现约定，当前运行边界以 006/007/008/009/010/011/012/013/014/015/016/017/018/019/020/021/022/023/024/025/026 为准）：
 
 | Amendment | 状态 | 纳入内容 |
 |---|---|---|
@@ -2340,6 +2361,7 @@ C-24 single-case gain with validation regression is not improved
 | 023 | 2026-11-06 用户要求缩编 Buckyball 任务、给予探索空间并重开真实测试；已纳入 §17/§19 | 固定领域编写框架：root 只写外部目标、验收、少量 cases、资料与环境资源，不限制 Method/RSI 资产或 Singularity 内部流程。算法、脚本、bbdev/MCP 统一经独立 checkout 与 MethodPatch 演化。删除重复公共 case 和工具/内部排除表述，保留功能验收。 |
 | 024 | 2026-11-06 用户要求对 PR37 后未提交修复做多角度根因审计与减量修复；已纳入 §11/§12/§13/§17/§19 | round10 的 19 个 check-only children 重复购买 771 次 review 请求，并形成多层复核树；改由既有 AcceptanceRef 组合原生 check-only 结算，root 保留有界独立语义验收。children 返回既有 goalSummary/deliverable；worker/RSI 不再引导审核链。领域 case 冻结 seed+数据规则，paired arms 不换题。无新 fact、状态、语义门禁或默认 LLM review。 |
 | 025 | 2026-11-06 用户要求核查全部模型可见信息、真实工具调用与冗余代码；已纳入 §2/§6/§12/§14 | self 统一 JSON 文本且只保留一份 criteria；Summary/Proposer 清除无工具提示；空 MCP resource surface 可由部署关闭，SUMMARY_PENDING 给出后续重读动作；保留有实际调用的 status/feedback/jobs/RSI 工具，bbdev 明确直接 MCP 入口。无新增状态、兼容分支或无消费者 helper。 |
+| 026 | 2026-11-07 用户明确批准关键激进减量、Buckyball 根合同修正及 RSI 评测重做；已纳入 §4/§6/§7/§9/§15/§17/§18/§19 | PlanningSketchDraft 仅含业务字段，host 盖章 task/run/contract/epoch；MethodPatchDraft 不含 base，host 派生 acceptancePolicy、默认 TaskProposal schema 和 learning outputs，删除模型抄写及旧 instanceSchema 门禁。probe 一次 Run 后 terminal，parent 决定集成或新 probe；required retry/replacement 保留。case 可覆盖 TaskSpec/acceptance，通用质量比较采用真实 consumer verified fraction，cache read/write 与 uncached cost 分列且未知为 null。保留 CAS、真实绑定、receipt 和 required join，不增加兼容输入或新 fact。 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

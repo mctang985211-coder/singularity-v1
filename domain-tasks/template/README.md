@@ -51,7 +51,8 @@ my-domain/
 - `source`：本次学习的实际输入。key 必须对应 `task.json` 的 input ID。
 - `cases[].inputs`：仅替换该 case 变化的输入；未变化的输入沿用合同中的 `source`。
 - `validation: true`：冻结为独立验证 case。这里的三个输入都是公开 fixture；这个标志不制造隐藏数据或安全边界。
-- `acceptance: "checks"`：所有 required root criteria 都有 check，宿主直接在冻结输入和输出上执行。省略该字段或填写 `"review"`，则选择通用独立语义 review；它没有确定性检查能力，不能用来代替真实执行。
+- `acceptance: "checks"`：所有 required root criteria 都有 check，宿主直接在冻结输入和输出上执行。省略该字段或填写 `"review"`，则选择通用独立语义 review；它没有确定性检查能力，不能用来代替真实执行。每个 case 可单独覆盖 `acceptance`。
+- 可选 `cases[].task`：该 case 使用另一份根 TaskSpec，以组成不同算子/不同任务的 suite；未填写时沿用默认 `task.json`。TaskSpec 仍只描述外部问题，不写 workflow、Method 或预算。
 - 可选 `tools`：指向标准 MCP 环境声明，见下文。没有真实工具消费者时省略，不填空壳工具。
 
 `domain.json` 不接受 `method`、`workflow`、`children`、`reviewerAgent`、`maxRuns`、`retry`、`provider`、`budget`、`deadline` 或 `activation`。这些是宿主或运行合同，不是领域知识。
@@ -68,7 +69,7 @@ my-domain/
 
 示例只保留一个可独立验证的外部结果：`rowCount` 正确、每个 SKU 的整数总量正确、保留零和负值、排序正确。它没有规定函数名、算法、子任务、工具、树深或“只能修改哪些 Singularity 资产”。
 
-`criteria[].check` 是实际执行的命令，不是文档路径。本例 `python3 acceptance.py` 能运行，是因为 `acceptance.py` 是冻结输入；复验时宿主从 CAS 准备它，而不是读取 worker 修改过的脚本。Python 是操作者准备的环境前提。
+`criteria[].check` 是实际执行的命令，不是文档路径。本例 `python3 acceptance.py` 能运行，是因为 `acceptance.py` 是冻结输入；复验时宿主从 CAS 准备它，而不是读取 worker 修改过的脚本。Python 是操作者准备的环境前提。所有领域共用同一验收边界，见 [`../ACCEPTANCE.md`](../ACCEPTANCE.md)：宿主准备声明的输入/输出、执行冻结命令并从退出状态生成 `PublicReceipt`，脚本不接触调度器或历史会话。
 
 复杂项目可以交付 `tree`，例如：
 
@@ -93,8 +94,8 @@ my-domain/
 1. 验收检查真实 consumer 和真实输出，不检查“是否创建过工具”“是否分解过”“是否写过审核报告”。
 2. 能用确定性检查就不要购买 LLM review。语义验收只处理脚本无法完整表达的部分；check 失败不能被 review 改成 pass。
 3. source、公开 case、validation 都冻结真实 bytes，或可精确重建 bytes 的 seed 和规则。paired baseline/candidate 必须使用同一输入、验收和预算，只有 Method 不同。
-4. case 应覆盖有区分度的外部行为，不为同一 shape 换名字，也不把实例答案、case 专用解法或审核流程写进 guidance。
-5. 一个 case 通过不代表迁移；没有完整 baseline/candidate、validation 和成本比较，就不能声称 RSI 改善。
+4. case 应覆盖有区分度的外部行为，优先加入不同算子/不同任务的真实 consumer，不为同一 shape 换名字，也不把实例答案、case 专用解法或审核流程写进 guidance。
+5. 一个 case 通过不代表迁移；通用实验以 paired verified consumer fraction 为质量指标，token 只作 uncached/cacheRead/cacheWrite 分列成本与上限，不能单独证明 RSI 改善。没有完整 baseline/candidate、validation 和质量比较，就不能声称 RSI 改善。
 
 公开验收脚本便于调试。隐藏 fixture 不应复制进此目录，也不能靠路径、cwd、HOME 或工具描述来伪装保密；部署必须先提供现成 OS、容器或 broker 隔离。
 

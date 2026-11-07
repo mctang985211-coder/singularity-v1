@@ -1,6 +1,6 @@
 # Singularity V1 进度
 
-更新：2026-11-05。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
+更新：2026-11-07。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
 
 用户已授权核实架构审计并联动修改规范、约束、源代码和测试，作为 amendment 006/007/008 纳入框架与 spec-lock。随后授权 deepseek-flash 真实全流程验证、prompt 优化及 PR/合并；amendment 009 澄清 probe 后续批次复用。接手时的 S4–S7 成果保留，没有重置工作区。
 
@@ -46,8 +46,6 @@ amendment 008 的删改与核验：
 amendment 008 最终 `pnpm install --frozen-lockfile`、`pnpm verify` 全通过：**428/428**（protocol 202、runtime 134、app 79、domain 13），0 fail、0 skipped；project/build/typecheck/lint 均通过，`git diff --cached --check` 通过。日志：`artifacts/architecture-audit-20261101-amendment008-final-verify.log`。CAS 独立读者原子可见性、缺失 CAS consumer 的事务拒绝、公开 schema 字段的 Composition 序列化均有直接回归测试。待发布文本检查未发现私钥/token 签名，artifacts/环境文件未进入暂存区；该检查不冒充通用秘密检测器。
 
 amendment 008 完成时生产 src 为 65 文件、14,507 行，相对 amendment 007 净减 947 行，相对最初接手净减 3,701 行；其中库存 harness 294 行移到 examples，并非删除用例。逐文件统计见 amendment008-metrics artifact，不把净行数当行为覆盖率。
-
-本次真实验证见 [validation-20261101.md](validation-20261101.md)。已完成从空 Method 建库、三级 Task 树、两批 probe 探索、祖先摘要、原生 skill/MCP、paired evaluation、连续赢家激活与发布后任务。432/432 本地门禁通过（protocol 203、runtime 134、app 82、domain 13）；真实失败和源码快照分开归档。runtime 修正已观察的空字段序列化、probe winner/replacement 和提示描述；RSI 工具直接使用 Zod JSON Schema 并删除手写形状转换器。产品/领域 src 净减 13 行，没有新增恢复层、状态或生产依赖。
 
 S4–S7 的框架实现已完成，C-01–24 均有对应协议测试或原生 DSH fixture。下表区分本次真实证据、历史冻结版本及部署缺口；验证域中的真实 activation 不代表外部生产部署或复杂芯片任务收益。
 
@@ -477,3 +475,63 @@ round10 于 05:19 因宿主异常退出，并非截止、预算耗尽或 RSI 结
 复核当前数据装载实现后，删除 §19.0 中已经失真的 `DomainAdapter` 伪接口及其 `validateChild`、`resolveAcceptance`、`mountMcpServers`、`seedFor` 等方法描述，改为声明式 `domain.json`/`task.json`/`cases`/`environment` 边界。宿主仍拥有 acceptance 装载、Task/Run/RSI、reviewer 与比较生命周期；领域目录只提供根合同、冻结输入、环境资产和可选评判资料。同步更新 `AcceptanceRef`、发布边界和 `spec-lock`，没有新增运行时 authority 或 helper。
 
 清理后 `pnpm verify` **455/455** 通过，`git diff --check` 通过。该项只消除规范对领域作者的错误引导，不改变当前真实模型证据：仍没有新的付费 campaign、完整 Buckyball comparison 或 RSI 收益结论。
+
+### round12–16 多角度根因复核与宿主减量修复（2026-11-07）
+
+本次从 PR37 后的本地提交、SQLite facts、原生 DSH sessions、requests、CAS MethodPatch 和独立数值重建倒查。开始时工作区没有未提交改动；PR38 远端停在 `0c09c3d`，本地另有七个提交，PR39 为 stacked branch。此前 progress 只记录到 round10，以下以实际归档更正“连续失败都是 workflow 引导不足”的笼统归因。
+
+- round12 的 MCP source 打包先在零请求时因操作者准备目录超过 1 MiB 失败；后续两次运行分别只有 2 和 29 次请求并因 `Request timed out` 结束，只有 root admitted/opened，没有 child、验收或 RSI。规划失败的运行中模型调用了 12 次 `singularity_plan`，反复误用 acceptance、Method、输入对象及 epoch digest 充当 `sourceContract`，证明宿主身份抄写是实际负担；后续加入的 `contextEpoch:"current"` 只覆盖其中一个字段。不能把这部分计为领域算法失败。
+- round14 两次运行分别 214 请求、30,450,731 reported tokens 和 108 请求、17,470,414 reported tokens，均以 `Connection error` 退出，unknown=1。首次已有 ISA/容量、BEMU pipeline、独立数值参考三个直属 child verified，说明模型能够形成合理的技术 workflow；没有 root closure 或 RSI。第二次只有 root opened。传输失败按既定宿主边界退出，没有恢复旧根或伪造业务结果。
+- round15 共 1,518 请求、303,483,955 reported tokens，unknown=0；其中 reviewer 372 请求、68,863,451 tokens，proposer 54 请求、3,527,911 tokens。两个 source 都因 root reviewer 达到 128 步而未提交完整 findings，以 `verifier-invalid` 关闭，却仍被 `acceptsExecutionRecord: () => true` 放行进入 RSI。第一轮 patch 从公开 root contract 选择 `experiment:acceptance`，但 trace 漏授权该 root provider，precheck 因而拒绝；该 patch 还含非 TaskProposal 的 instanceSchema 字段。第二轮 patch 又复制了 host-owned learning-draft outputs，`AdmissionError` 没被 precheck 当作候选拒绝捕获，直接终止整个 campaign。没有 candidate、paired comparison 或 winner。
+- round16 共 429 请求、89,426,908 reported tokens，unknown=0。root Run1 只有 `target-correctness` 失败；Run2 已提交，但 reviewer 在第 56 步启动完整复现后进程终止，只有 `run/submitted`，没有 run/review closure、`result.json`、trace 或 RSI fact。本轮审计时对应进程已不存在。故 round16 不能记作“RSI 部分失败”，它根本没有进入 RSI；也不能把操作者终止留下的开放事实伪造成结算结果。
+
+Task 侧不能再简单归结为模型不知道自己是 workflow 节点。round14 的三路技术分解、round15 的多批派发/冻结交接、round16 的独立参考 child 和 parent 集成都真实存在。持续的问题是：宿主 ID 与调度字段需要模型抄写，probe 失败仍按 `maxRuns=3` 自动购买重试，parent 必须编写任意 shell 验收，且 root 没有稳定的机器可调用接口。正确的分解也会被错误合同和重复调度消耗。
+
+Buckyball 的冻结数据存在更根本的可达成性矛盾。本次按公开 `dataRule`、E4M3/E8M0 与 FP32 范围独立重建，source 四个向量分别有 702、2510、1137、0 个操作数在解码前即超出 FP32；所有 source/public/validation 向量的绝对累加范围也都超出 FP32。pinned BEMU 在 `examples/balls/mxmm/emu/src/mxfp8.rs:108-112` 和 `:161` 分别拒绝非有限解码和累加。round15 的 fold/scale 投影实际换成了另一道题，round16 reviewer 已明确指出冻结 bytes 没有进入 callable。用同一 codes/shapes 将 scale 改为 `112 + ((11*i + seed) % 32)`（112–143）后，独立上界计算中解码和全部累加均保持有限。此项修改会改变冻结根合同，本次没有擅自应用。
+
+本次只实施不需要改变公共 Task/Method 合同的修复：
+
+1. `precheckMethodPatch` 将 `AdmissionError` 与其它候选结构拒绝一样结算为 `rejected`，不再炸掉 campaign；保留 CAS/host 异常原样抛出。
+2. `sealPublicTrace` 授权已经在 root contract 公开的 acceptance provider，使 MethodPatch 的 `acceptancePolicy` 检查与 proposer 实际可见输入一致；原生回归直接用独立 root provider 完成 accepted precheck。
+3. generic experiment 不再为 `invalid` source 开启 proposer。预算取消仍走原 trace seal 后停止路径，不新增 outcome，不改变既有语义。
+4. RSI card 改为优化未来 reasoning/decomposition/interfaces，禁止只为减少步骤把有用 workflow 压成更大的 single-run runbook；同步 framework 与 spec-lock。
+
+定向回归通过：runtime MethodPatch 11/11、generic experiment 5/5、原生 RSI proposer 4/4。随后 `pnpm install --frozen-lockfile` 与根 `pnpm verify` 全部通过：**457/457**（protocol 207、runtime 140、app 97、inventory 13），0 fail/skip，project/build/typecheck/lint 全部通过。测试覆盖 round15 的 AdmissionError 崩溃、独立 root acceptance 的授权与 accepted precheck，以及 invalid source 零 proposer；没有新付费请求、BEMU 执行或真实改善声明。
+
+以下属于需要用户明确确认的合同/实验设计决策，本次未实施：
+
+- 是否按上述有界 scale 规则修正三份 Buckyball case，而不是允许 fold/投影替换冻结输入。
+- 是否冻结最小 callable CLI 与机器输出格式，并以领域确定性 checks 替代高价 LLM root review；当前“callable”没有稳定接口， reviewer 只能逐次理解实现。
+- 是否让 host 派生 PlanningSketch 身份、MethodPatch.base、acceptancePolicy、默认 instanceSchema 与 learning outputs，删除模型抄写和连续拒绝；这涉及公开协议 amendment。
+- 是否停止 probe 的自动 retry，让 parent 根据一次公开结果决定本地集成或显式新 probe；required retry/replacement 保持。
+- 是否把 RSI 评测改为多算子/多任务迁移和质量优先指标。当前只有同一 MXMM 的 shape/data 变化，主指标又含缓存 input，完成 comparison 也不能证明跨问题更聪明，且天然偏向少步骤/少复核。
+
+在上述根合同问题解决前，不建议再启动大规模付费 campaign。
+
+
+### amendment 026 激进减量与真实 consumer 迁移改造（2026-11-07）
+
+用户明确批准修正 Buckyball 根任务、形成新公开协议 amendment、重做质量/迁移判据。以上“待确认”事项现已按批准实施，旧 round12–16 仅保留历史失败证据，不继续作为当前合同。
+
+- Buckyball 三份 MXMM case 的 scale 已改为 `112+((11*i+seed)%32)`，codes/shapes 和 A/B 各自字节索引语义保持旧独立重建结果。零模型上界检查全部有限，source/public/validation 最大保守上界 log2 约 61.615，不再有 FP32 溢出的根合同矛盾。根验收缩为一个 `mxfp8-consumer` 原生 check，冻结 `python3 ball/mxmm.py request.json response.json`、base64 原始输入、C/guard/真实命令记录和四个回归命令；`acceptance.py` 独立重建 bytes，以精确整数参考和保守 FP32 误差界判定，fold/投影不能冒充原输入。没有 LLM root review，也没有四次重复完整复现。
+- `domain.json` 现在包含 long-k、smatmul-bias、output-tiling、inventory-transfer 四个 case；case 可覆盖 TaskSpec/acceptance。SMatMul 是不同算子和独立 int8+bias consumer，inventory 是不同非加速器任务。SMatMul 不使用 poly-attention；实际 generated config 证明其部署在 pebble global core 0。独立 checkout 的真实 `smatmul_16x16x32` 和 `smatmul_bias_accumulate` 均出现 PASS，日志保存在 `artifacts/smatmul-consumer-preflight-20261107/`。poly 上 binary_not_found 的部署辨识过程没有被写成支持证据。
+- PlanningSketch 的模型输入缩为 PlanningSketchDraft，taskId/runId/contextEpoch/sourceContract 由 host 盖章，旧身份字段由 strict schema 拒绝。MethodPatchDraft 不含 base，host 从 opened Round 盖入；同名模板继承原 acceptancePolicy，新模板继承 source exploration fallback（无 exploration 时 root acceptance）；TaskProposal 使用 host 默认 schema，learning outputs 仍由 admission 派生。旧 `assertProposalSchemaFields` 和 provider 抄写路径删除，没有双格式兼容分支。CAS、真实绑定、验收 receipt、required join 和 active-head activation 保留。
+- probe 的 retry policy 改为一 Run 后 terminal，parent 读取公开结果后决定本地集成或显式新 probe；required/root 的 fresh Run retry 和 required replacement 保持。纯 reducer 回归同时覆盖 probe 一次终态、retry 拒绝和 required 祖先预算，现有 required child 原生集成 retry 通过。
+- generic experiment 不再以 reported-token 下降产生 improved。主指标改为每 case 的 paired verified consumer fraction，均值至少提高 0.01、各 case/validation 不回退、总 reported-token 成本不超过 baseline 2 倍才可 improved。comparison 新增 tokenCosts，按 arm 分列 input/output/uncachedInput/cacheRead/cacheWrite 和 complete/cacheComplete；缺 cache 元数据为 null，不是 0。UsageRecord/trace 同步保留可选 cache 字段，预算口径不变。
+- 零模型 fixture 已执行 MXMM 小形状 CLI 正误路径、SMatMul 正误路径、inventory 正误路径和不同 TaskSpec 装载。generic review fixture 显式保留独立 review 覆盖，Buckyball 自身保持 checks。runtime comparison 直接断言 cache 数字及 null 语义；MethodPatch/RSI 原生 proposer 验证 draft→host 完整候选。上述 fixture 不冒充真实模型工作流或真实候选实现证据。
+
+当前没有启动新付费 campaign，没有新 source、candidate、paired comparison、winner 或 activation，不能声称模型已理解全部 workflow、跨任务能力提升或 RSI 已完成。最终 `pnpm install --frozen-lockfile` 与根 `pnpm verify` 全部通过：**462/462**（protocol 209、runtime 140、app 99、inventory 13），0 fail/skip，project/build/typecheck/lint 全部通过；`git diff --check` 通过。新运行仍须全新执行根、独立环境预检和完整 candidate/baseline/validation comparison。
+
+### 领域调度越界清理（2026-11-07）
+
+沿当前 git 树复核后发现，规范已经声明领域目录是外部数据边界，但 workspace 仍编译旧领域包，并保留领域专用 Task/预算/RSI/activation 循环。该路径使领域算法和验收器反向参与 Singularity 调度，和声明式领域目录重复。
+
+本次删除该旧 domain package、领域专用验证启动器、资源装配和对应 runner/budget 测试；app 与根 tsconfig、workspace lockfile 不再引用旧领域包。Buckyball 与 template 继续只以 JSON、冻结数据、验收脚本和标准 MCP source/manifest/config 进入 `apps/singularity/src/domain.ts`。`loadDomainPackage` 在冻结前统一校验 case/task/criterion/input/output 唯一性及 checks acceptance 的 required check，避免把领域错误推迟到 scheduler 运行中。
+
+验收边界写入 `domain-tasks/ACCEPTANCE.md`：宿主对每个 required check 创建临时目录，物化 CAS 输入/输出，按冻结命令执行并从退出状态生成标准 `PublicReceipt`；脚本不获得 Task 树、Method、scheduler 或 transcript。领域 CLI 仍由外部标准 MCP server 提供，模型只调用冻结的业务 schema。验证：app 定向回归 **95/95**，workspace 为 4 个项目；尚未启动付费 campaign、BEMU 或真实领域运行。
+
+随后复核规范残留的验收表述：删除“进程内领域函数”作为领域验收器及领域直接交付 verifier/scorer 的路径，明确统一 check runner、冻结脚本 digest 和宿主 comparator identity；`spec-lock.json` 已同步新的 `docs/framework.md` digest。这样领域目录只声明数据、TaskSpec、check/MCP 资产，宿主独占调度、验收适配和评测生命周期。
+
+同时清除了 protocol/runtime 的平台探索示例中遗留的 inventory `records/aggregation/totals` 工作流和固定提交输出；示例现在只展示中性的“声明输入 → 可调用 consumer → 父级集成”接口。领域算法不会再从通用 Task 工具 schema 或 explore-child 示例进入模型提示。
+
+本次后续复核没有增加静态门禁。清理了磁盘上被忽略的旧 inventory/domain 与旧入口构建产物；Buckyball MCP 冻结 source 统一使用 `environment/server.cjs`，删除重复的 `environment-source/` 副本。env-builder 仍以新目录独占创建，现会先创建缺失的父目录，保留已有目录即失败的 fresh-root 语义。完整 workspace 测试为 444/444（protocol 209、runtime 140、app 95），build、typecheck、lint 通过；本机 Node 22.23.3 运行 `verify:project` 仅因仓库要求 Node >=24.9.0 失败。

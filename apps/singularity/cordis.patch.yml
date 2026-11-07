@@ -44,7 +44,7 @@
             models:
               - id: deepseek-flash
                 name: DeepSeek Flash
-                contextWindow: 700000
+                contextWindow: 500000
                 maxTokens: 40000
                 input: [text]
                 reasoningEfforts:

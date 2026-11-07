@@ -4,7 +4,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { defineTool,ToolArgsError } from '@deepseek-ai/dsh-tools'
 import type { FactActor,JsonValue,MethodPatch,Ref,SessionCut,UsageRecord } from '@singularity/protocol'
-import { canonicalize,closedObject,methodPatchSchema,methodRevisionSchema,parseProtocolValue,protocolJsonSchema,seal } from '@singularity/protocol'
+import { canonicalize,closedObject,methodPatchDraftSchema,methodRevisionSchema,parseProtocolValue,protocolJsonSchema,seal } from '@singularity/protocol'
 import { ZodError } from 'zod'
 import { DecomposeError,throwCollectedErrors } from './errors.ts'
 
@@ -22,23 +22,24 @@ import { readPublicTrace,readTraceAsset,readTracePage } from './trace.ts'
 import { deliverWakeOnceOrFail } from './wake.ts'
 
 const encoder = new TextEncoder()
-const patchInputSchema = protocolJsonSchema(closedObject({ patch: methodPatchSchema }))
+const patchInputSchema = protocolJsonSchema(closedObject({ patch: methodPatchDraftSchema }))
 delete patchInputSchema.$schema
 
 export const RSI_PROPOSER_CARD = `Improve reusable Method assets from sealed evidence; Task outputs are per-instance results.
 Read authoring, pinned Method and relevant original assets with rsi_read;
 read previous-round feedback when offered.
 Trace the contract, findings, planning and relevant costs; distinguish workflow,
-domain and host failures. Align one hypothesis and the smallest change with the metric.
+domain and host failures. Improve future reasoning, decomposition and reusable interfaces,
+not merely this source's implementation. Choose the smallest change aligned with the metric;
+never collapse a useful workflow into a larger single-run runbook just to reduce steps.
 Extract reusable algorithms, scripts, MCP/CLI tools and consumer checks, scoped by ordinary inputs;
 avoid rebuilding code each trial or preserving source-specific review/audit chains.
 Examples illustrate; never dispatch on case/suite IDs or copy solved data/answers.
 Explain unseen-input transfer and risks; source pass is insufficient.
 Skill names are DSH kebab-case machine IDs. Bind changed assets to templates
 reachable from entry (set-entry if needed); unreachable changes are no-ops.
-Template requiredOutputs are business outputs only and may use roles deliverable/supporting;
-the host always appends __skill-drafts and __mcp-drafts, so never declare those IDs,
-the learning-drafts path, or skill-draft/mcp-draft roles in a template.
+Author business guidance, examples, assets and bindings only. The host stamps base,
+TaskProposal schema, acceptancePolicy and learning outputs; none belongs in a patch.
 Public catalogs are separate; bind the intended tool set explicitly. Keep it within 12 KiB; help is a resource.
 Submit one JSON patch with rsi_submit_patch. Correct invalid arguments in this session;
 accepted submission ends the turn. Host precheck/evaluation/activation decide the result.`
@@ -197,7 +198,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
         },
       }), { kind: 'trace-index' }))
       const submit = defineTool({
-        name: 'rsi_submit_patch', description: 'Submit one reusable MethodPatch; read authoring for exact fields. Bind changed assets into entry-reachable templates. Skill names use DSH kebab-case; acceptancePolicy must be authorized. Host derives refs and digests.',
+        name: 'rsi_submit_patch', description: 'Submit reusable business Method changes; read authoring for exact fields. Host stamps the Round base and interface policy.',
         parameters: { patch: { type: 'json', required: true } },
         output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: canonicalize(value) }] },
         execute: async (args, exec) => {
@@ -207,7 +208,7 @@ export async function executeRsiProposer(request: ExecuteRsiProposerRequest): Pr
           return { submitted: true, proposalRef, remainingBudgetPct: percentages() } as unknown as JsonValue
         },
       })
-      register(withToolExample(submit, { patch: { v: 1, base: opened.data.baseMethod,
+      register(withToolExample(submit, { patch: { v: 1,
         hypothesis: 'Describe the reusable improvement.', changes: [], predictedRisks: [], transferPlan: 'Evaluate the changed workflow.' } }))
       const globalNames = request.ctx.tools.definitions().map(definition => definition.name)
       if (globalNames.length > 0) ctx.tools.restrict({ deny: globalNames })
@@ -266,6 +267,7 @@ async function previousRoundFeedback(service: CommandService, roundId: string, b
       ...(comparison === undefined ? {} : { complete: comparison.complete, metric: comparison.metric,
         aggregateDelta: comparison.aggregateDelta, worstRegression: comparison.worstRegression,
         ...(comparison.cost === undefined ? {} : { cost: comparison.cost }),
+        ...(comparison.tokenCosts === undefined ? {} : { tokenCosts: comparison.tokenCosts }),
         ...(comparison.reason === undefined ? {} : { reason: comparison.reason }) }) }
   }
   return undefined

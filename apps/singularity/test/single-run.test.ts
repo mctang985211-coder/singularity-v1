@@ -250,12 +250,10 @@ async function makeScenario(
   }
 }
 
-function planReply(scenario: Scenario, taskId: string, runId: string, contextEpoch: string): ScriptedReply {
+function planReply(...args: [Scenario, string, string, string]): ScriptedReply {
+  void args
   const sketch = {
     v: 1,
-    taskId,
-    runId,
-    contextEpoch,
     objective: 'Produce the declared result file and submit it.',
     levels: [
       {
@@ -275,7 +273,6 @@ function planReply(scenario: Scenario, taskId: string, runId: string, contextEpo
     ],
     directPlan: [],
     assumptions: ['The fixture model can use the native bash tool.'],
-    sourceContract: scenario.contract.digest,
   }
   return {
     reasoning: 'Submit the plan for the current context epoch.',
@@ -544,11 +541,9 @@ function assertVerifiedToolSemantics(
     if (!call.succeeded || call.name !== 'singularity_plan') return false
     const sketch = planSketchOf(call)
     return sketch !== undefined
-      && sketch['taskId'] === expected.taskId
-      && sketch['runId'] === expected.runId
-      && sketch['sourceContract'] === expected.contractDigest
-      && typeof sketch['contextEpoch'] === 'string'
-      && sketch['contextEpoch'].length > 0
+      && typeof sketch['objective'] === 'string'
+      && !('taskId' in sketch) && !('runId' in sketch)
+      && !('sourceContract' in sketch) && !('contextEpoch' in sketch)
   })
   const submit = calls.findLastIndex(call => call.succeeded && call.name === 'singularity_submit')
   const bash = calls.findLastIndex(call => call.succeeded && call.name === 'bash')
@@ -1278,11 +1273,8 @@ void test('Task resource CAS failure aborts without asking the model to repair h
     assert.ok(scenario)
     if (index === 0) return { toolCalls: [{ id: 'host-fault-self', name: 'singularity_read', arguments: JSON.stringify({ kind: 'self' }) }], usage: fixtureUsage(index) }
     if (index === 1) {
-      const contextEpoch = contextEpochFrom(request)
-      assert.ok(contextEpoch)
       return { toolCalls: [{ id: 'host-fault-plan', name: 'singularity_plan', arguments: JSON.stringify({ sketch: {
-        v: 1, taskId: scenario.contract.taskId, runId: 'host-fault-run', contextEpoch,
-        objective: 'Inspect the authorized input.', sourceContract: scenario.contract.digest,
+        v: 1, objective: 'Inspect the authorized input.',
         levels: [0, 1].map(level => ({ level, purpose: 'local work', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
         directPlan: [], assumptions: [],
       } }) }], usage: fixtureUsage(index) }

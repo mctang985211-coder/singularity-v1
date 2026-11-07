@@ -1,9 +1,0 @@
-{
-  "serverName": "buckyball",
-  "transport": "stdio",
-  "instructions": "First checkout a new absolute project path. For direct bbdev operations, call mcp__buckyball__bbdev with project=<checkout> and an argv array such as [\"bebop-bemu\",\"--sim\",\"--chip\",\"poly\",\"--core-index\",\"2\",\"--binary\",<name>]. It already activates nix develop; use bash for source edits and other standalone tools, not to duplicate this bbdev entry.",
-  "entrypoint": "server.cjs",
-  "limits": {
-    "maxBundleBytes": 1048576
-  }
-}

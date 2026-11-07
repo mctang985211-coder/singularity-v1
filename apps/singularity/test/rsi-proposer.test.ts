@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import type { FactPayloadMap,FactType,JsonValue,MethodPatch,RoundPlan } from '@singularity/protocol'
+import type { FactPayloadMap,FactType,JsonValue,MethodPatchDraft,RoundPlan } from '@singularity/protocol'
 import { canonicalize,parseJsonText,sealTaskContract } from '@singularity/protocol'
 import {
 closeRsiRound,
@@ -22,7 +22,7 @@ import { ACTOR,agentOptions,fixtureUsage,jsonBytes,makeScenario } from './task-f
 void test('C-14 sealed public trace drives an independent scoped DSH proposer and atomic candidate precheck', { timeout: 120_000 }, async () => {
   let scenario: Scenario | undefined
   let nextScenario: Scenario | undefined
-  let patch: MethodPatch | undefined
+  let patch: MethodPatchDraft | undefined
   let comparisonDigest = ''
   const taskId = 'task:s5-source', runId = 'run:s5-source'
   await withHarness((request, index) => {
@@ -46,7 +46,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       return { toolCalls: ['public-resources', 'authoring'].map(kind => ({ id: `read-${kind}`, name: 'rsi_read', arguments: JSON.stringify({ kind }) })), usage: fixtureUsage(index) }
     }
     if (index === 5) {
-      for (const field of ['instanceSchema', 'requiredCriteria', 'requiredOutputs', 'acceptancePolicy', 'guidance', 'exampleText', 'files', 'set-entry', 'templateId']) assert.ok(messageTexts(request).join('\n').includes(field), `authoring must display ${field}`)
+      for (const field of ['requiredCriteria', 'requiredOutputs', 'guidance', 'exampleText', 'files', 'set-entry', 'templateId']) assert.ok(messageTexts(request).join('\n').includes(field), `authoring must display ${field}`)
       return { toolCalls: [{ id: 'read-children', name: 'rsi_read', arguments: JSON.stringify({ kind: 'trace-page', id: 'children' }) }], usage: fixtureUsage(index) }
     }
     if (index === 6) return { toolCalls: [{ id: 'private-denied', name: 'rsi_read', arguments: JSON.stringify({ kind: 'asset', id: 'private-validation-case' }) }], usage: fixtureUsage(index) }
@@ -83,12 +83,15 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
         skills: [], tools: [], baseTools: scenario.contract.resources.baseTools,
         fallbackAcceptance: scenario.provider, fallbackJoin: 'probe',
       }))
-      const contract = sealTaskContract({ ...contractPayload(scenario.contract), resources: { ...scenario.contract.resources, exploration: snapshot } })
+      const rootAcceptance = await sourceStore.putObject('acceptance:root-only', jsonBytes({ v: 1, kind: 'root-acceptance' }))
+      const contract = sealTaskContract({ ...contractPayload(scenario.contract), acceptance: rootAcceptance,
+        resources: { ...scenario.contract.resources, exploration: snapshot } })
       const composition = await buildSingleRunComposition(spike.ctx, {
         store: sourceStore, id: 's5-source', contract,
         base: compositionBase(scenario.composition), agentOptions: agentOptions(),
       })
-      scenario = { ...scenario, contract, composition, runAdmission: { ...scenario.runAdmission, contract } }
+      scenario = { ...scenario, contract, composition, provider: rootAcceptance,
+        runAdmission: { ...scenario.runAdmission, contract, acceptanceBytes: jsonBytes({ v: 1, kind: 'root-acceptance' }) } }
     } finally { await sourceStore.close() }
     const source = await executeSingleRun({
       ctx: spike.ctx, journalRoot: storeRoot, workspace, sessionId: 'session-s5-source', runId,
@@ -112,6 +115,9 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       assert.equal(sealed.body.sessionCuts.length, 1)
       assert.deepEqual(sealed.body.sourceResourceSnapshot, scenario.contract.resources.exploration)
       assert.ok(sealed.body.authorizedObjects.some(item => item.ref.id === 'document:s5-public'))
+      const sourceAcceptance = scenario.contract.acceptance
+      assert.ok(sealed.body.authorizedObjects.some(item => item.ref.id === sourceAcceptance.id && item.ref.digest === sourceAcceptance.digest),
+        'the root provider visible in the contract is also authorized for a Method template')
       const repeated = await sealPublicTrace({ service, actor: ACTOR, ctx: spike.ctx, rootTaskId: taskId })
       assert.deepEqual(repeated.trace, sealed.trace)
       assert.equal(service.facts().filter(fact => fact.type === 'rsi/trace-sealed').length, 1)
@@ -136,14 +142,19 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       })
       const template = scenario.method.templates[0]
       assert.ok(template)
+      const businessTemplate = {
+        id: template.id, brief: template.brief, requiredCriteria: template.requiredCriteria,
+        requiredOutputs: template.requiredOutputs, skills: template.skills, tools: template.tools, children: template.children,
+      }
       patch = {
-        v: 1, base: methodRef, hypothesis: 'Reuse a local review skill for the declared output.',
+        v: 1, hypothesis: 'Reuse a local review skill for the declared output.',
         changes: [
           { op: 'put-skill', skill: { id: 'skill:s5-review', name: 's5-review', description: 'Review declared outputs.', files: {
             'SKILL.md': '# Review\n\nRead the frozen criteria. Do not invent a score. Check the declared output.',
           } } },
           { op: 'put-template', template: {
-            ...template, guidance: 'Read the criteria, produce the output and check it with the bound review skill.',
+            ...businessTemplate, requiredOutputs: [],
+            guidance: 'Read the criteria, produce the output and check it with the bound review skill.',
             example: { goal: { summary: 'Produce result.txt with the requested content.', deliverable: 'result.txt', scope: ['Write the requested text.'], constraints: ['Use the declared output path.'] }, acceptanceCriteria: [{ id: 'requested-text', statement: 'The result contains the requested text.', check: 'test -s result.txt' }], inputs: [{ id: 'request', exampleText: 'Write the requested text.' }] },
             skills: ['skill:s5-review'],
           } },

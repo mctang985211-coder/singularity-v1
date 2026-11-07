@@ -1,5 +1,5 @@
-import { copyFile,mkdir,writeFile } from 'node:fs/promises'
-import { join,resolve } from 'node:path'
+import { copyFile,mkdir,stat,writeFile } from 'node:fs/promises'
+import { dirname,join,resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import type { AgentHandle,AgentOptions } from '@deepseek-ai/dsh-agent'
@@ -42,16 +42,20 @@ export async function buildDomainEnvironment(materials: string, outputRoot: stri
   readonly agentOptions?: AgentOptions
 } = {}) {
   const startedAt = Date.now(), deadlineAt = options.deadlineAt ?? startedAt + 60 * 60_000
-  await mkdir(outputRoot)
-  const domain = join(outputRoot, 'domain')
+  const materialsRoot = resolve(materials)
+  if (!(await stat(materialsRoot)).isDirectory()) throw new Error(`Environment materials must be a directory: ${materialsRoot}`)
+  const destination = resolve(outputRoot)
+  await mkdir(dirname(destination), { recursive: true })
+  await mkdir(destination)
+  const domain = join(destination, 'domain')
   await mkdir(domain)
-  const patch = join(outputRoot, 'builder.patch.yml')
+  const patch = join(destination, 'builder.patch.yml')
   await copyFile(new URL('./experiment.patch.yml', import.meta.url), patch)
-  const spike = await bootSpikeProfile({ home: join(outputRoot, 'dsh'), patchFiles: [patch] })
+  const spike = await bootSpikeProfile({ home: join(destination, 'dsh'), patchFiles: [patch] })
   const cancellation = new AbortController()
   const accounting = nativeAccounting(spike.ctx, { deadlineAt, cancellation,
     maxRequests: options.maxRequests ?? 200, maxReportedTokens: options.maxReportedTokens ?? 10_000_000,
-    log: join(outputRoot, 'requests.jsonl') })
+    log: join(destination, 'requests.jsonl') })
   const timer = setTimeout(() => { cancellation.abort('env-builder-deadline') }, Math.max(0, deadlineAt - Date.now()))
   const agentOptions: AgentOptions = options.agentOptions ?? { provider: 'singularity-local', model: 'deepseek-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
   const failures: unknown[] = []
@@ -67,7 +71,7 @@ export async function buildDomainEnvironment(materials: string, outputRoot: stri
         ctx.tools.restrict({ allow: ['bash'] })
       } })
     handle.agent.followup(createWakeMessage({ wakeId: 'domain-env-builder:materials',
-      text: `Operator-supplied material directory: ${resolve(materials)}\nPrepare the independent domain directory at the current working directory. Inspect the materials and validate the result without starting a Task or RSI Round.` }))
+      text: `Operator-supplied material directory: ${materialsRoot}\nPrepare the independent domain directory at the current working directory. Inspect the materials and validate the result without starting a Task or RSI Round.` }))
     await handle.agent.whenIdle()
     cancellation.signal.throwIfAborted()
     const snapshot = snapshotSession(handle.agent.session)
@@ -80,8 +84,8 @@ export async function buildDomainEnvironment(materials: string, outputRoot: stri
   }
   if (failures.length > 0) throw new AggregateError(failures, 'Domain environment preparation failed')
   const prepared = await loadDomainPackage(domain)
-  await writeFile(join(outputRoot, 'builder.json'), JSON.stringify({ v: 1, startedAt, finishedAt: Date.now(), deadlineAt,
-    materials: resolve(materials), domain, domainId: prepared.id, usage: accounting.usage }, null, 2))
+  await writeFile(join(destination, 'builder.json'), JSON.stringify({ v: 1, startedAt, finishedAt: Date.now(), deadlineAt,
+    materials: materialsRoot, domain, domainId: prepared.id, usage: accounting.usage }, null, 2))
   return { domain, usage: accounting.usage }
 }
 

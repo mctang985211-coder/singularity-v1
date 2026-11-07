@@ -13,6 +13,6 @@
     "shapes": [[1, 32, 4096], [16, 16, 32]],
     "description": "Long-K chain and minimal block; deterministic finite scales, signed/zero codes and repeated calls.",
     "validation": false,
-    "dataRule": "For vector j and flat byte index i (zero-based), seed=case.seed+j. code=((73*i+19*floor(i/256)+seed)%127)|(i%2?128:0), overridden to 0 when i%257=0 and 128 when i%263=0. scale=(11*i+seed)%255. Codes are row-major; scales are row-major per 32 K elements. These rules define every supplied input byte."
+    "dataRule": "For vector j and flat byte index i (zero-based), seed=case.seed+j. code=((73*i+19*floor(i/256)+seed)%127)|(i%2?128:0), overridden to 0 when i%257=0 and 128 when i%263=0. scale=112+((11*i+seed)%32). Codes are row-major; scales are row-major per 32 K elements. These rules define every supplied input byte."
   }
 }

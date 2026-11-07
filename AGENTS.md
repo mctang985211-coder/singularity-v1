@@ -4,7 +4,7 @@
 
 - `docs/framework.md` 是协议唯一权威；`spec-lock.json` 固定其 digest。`AGENTS.md` 只写施工约束，`docs/progress.md` 写当前状态、证据和缺口。调研 artifact 不替代规范，不另建平行任务卡和交接规范。
 - 开始或恢复工作时阅读相关规范、进度和实际消费者；保留工作区已有未提交成果。旧 Singularity 仓库不提供本仓库兼容要求。
-- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011/012/013/014/015/016/017/018/019/020/021/022/023/024/025 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
+- 用户已授权本次核实审计，并联动修改架构、约束、代码和测试；amendment 006/007/008/009/010/011/012/013/014/015/016/017/018/019/020/021/022/023/024/025/026 记录本次运行契约与原生优先原则。常规实现选择自主推进，不重复请求确认。未来超出已授权范围的公开协议/authority 变化先说明 amendment；用户明确授权优先。
 
 ## 启动条件先于执行
 
@@ -20,12 +20,12 @@
 ## 唯一 authority 与依赖
 
 - `runtime → protocol`、`app → runtime`。领域目录由 JSON、数据文件和外部 MCP 资产组成，不由 app 静态 import，也不要求领域任务使用 TS；protocol 保持纯 TS，除纯 hash 外不访问宿主副作用，runtime 不包含领域算法/suite 分支，app 只做组合。原始资料可由普通 env-builder DSH session 整合成独立目录，再由 app 在新执行中校验、冻结；env-builder 不写 Task/RSI/Method，不热改 live 合同。
-- 领域包只提供目标、参考资料、根评判标准、案例数据和环境资源；不得在领域 example 中重写 RSI 控制流、reviewer Agent 生命周期、预算、重试或 activation，也不得规定 Singularity/RSI 可修改的资产范围或解法。领域约束只表达外部问题不变量、复现和部署边界。通用成本比较归宿主，业务指标规则归评判标准；不以移动文件名代替职责收缩。`domain-tasks/template/` 是最小填写例，Buckyball 等实际领域资产也在宿主源码树之外。
+- 领域包只提供目标、参考资料、根评判标准、案例数据和环境资源；不得在领域 example 中重写 RSI 控制流、reviewer Agent 生命周期、预算、重试或 activation，也不得规定 Singularity/RSI 可修改的资产范围或解法。领域约束只表达外部问题不变量、复现和部署边界。通用质量比较、真实 consumer 迁移与 cache 分列成本归宿主，业务指标规则归评判标准；不以移动文件名代替职责收缩。`domain-tasks/template/` 是最小填写例，Buckyball 等实际领域资产也在宿主源码树之外。
 - Task、Run、Method、Evidence、RsiRound 是业务概念；Task 树是只读投影。每个 domain 一个 CommandService、事实序列、纯 fold 和 Task wake authority。SQLite 事务内强制 guard → INSERT fact → COMMIT；retry policy 参数不能关闭 guard。领域投影和 CAS 解析可缓存；命令去重直接查询 events.command_id 唯一索引，不维护内存 command projection 或第二份可变业务状态表。CAS 用同目录完整临时文件 + 原生 link 原子发布；不添加 append 引用扫描或修复器。
 - DSH 拥有 Agent/Session、模型 loop、tool/skill registry、MCP transport、compaction、session persistence、创建回滚、取消和 disposal。直接组合公开能力；同步 receipt/usage 原始事件读取只留一个经过接入成本比较的适配入口，不复制 inbox 或 transcript。scope 只展示实际可用工具的提示；无实际 MCP resources 时不挂载 resource surface，self 的 data 统一为 JSON 文本且不重复 criteria。
-- 每个 worker 是 workflow 的一级：先形成草图，再依据相关资源在 purpose/assumptions 细化功能、依赖、消费者、证据及预计成本/不确定性；只派发当前就绪且产物由本层消费的直属职责，host 验收不再成为 child 工作。每层承担本地技术工作与集成；叶节点须前提已成立、结果可直接验证，同一 checkout 不构成叶节点依据。优化现有 prompt，不增语义判定器、固定树深或分解数量门禁；guided 分解证据不能升级为空 Method 自主发现多层 workflow 的证据。
+- 每个 worker 是 workflow 的一级：先形成草图，PlanningSketchDraft 只含业务字段，task/run/contract/epoch 由 host 盖章；再依据相关资源在 purpose/assumptions 细化功能、依赖、消费者、证据及预计成本/不确定性；只派发当前就绪且产物由本层消费的直属职责，host 验收不再成为 child 工作。每层承担本地技术工作与集成；叶节点须前提已成立、结果可直接验证，同一 checkout 不构成叶节点依据。优化现有 prompt，不增语义判定器、固定树深或分解数量门禁；guided 分解证据不能升级为空 Method 自主发现多层 workflow 的证据。
 - 正式 child Task 使用独立 DSH session；只创建 direct children，root/descendants 固定 Method revision，运行中合同不变。Summary 是按合同 digest 派生的只读业务缓存，usage 归 source Task；Summary 使用原生 agents.create/dispose；替换为 subagent 所需的 live parent/preset/catalog 成本比较见 `docs/progress.md` 的原生接入比较。
-- root acceptance 归 operator/domain；parent 在派发前编写非空 acceptanceCriteria（statement + 自包含 shell check），准入后冻结为 required 合同项。探索 child 仍固定 required result/ tree；check-only AcceptanceRef 直接由原生 shell 对 CAS 产物结算，其它 provider 的 review 不能放行失败检查。保留冻结 Ref/digest 和外部 receipt 绑定；DB 外键不能证明外部内容身份。Proposer 只提交 patch，host 评测、比较和 trusted expected-head activation；隐藏 payload 保持实际部署读取边界。
+- root acceptance 归 operator/domain；parent 在派发前编写非空 acceptanceCriteria（statement + 自包含 shell check），准入后冻结为 required 合同项。探索 child 仍固定 required result/ tree；check-only AcceptanceRef 直接由原生 shell 对 CAS 产物结算，其它 provider 的 review 不能放行失败检查。保留冻结 Ref/digest 和外部 receipt 绑定；DB 外键不能证明外部内容身份。Proposer 只提交 MethodPatchDraft；host 盖入 base、acceptancePolicy、默认 TaskProposal schema 和 learning outputs，再评测、比较和执行 trusted expected-head activation；隐藏 payload 保持实际部署读取边界。
 
 ## 最短正常路径
 
@@ -36,16 +36,23 @@
 - 预算/截止、领域失败和无效验收仍按协议结算。verifier 转发 AbortSignal 并等待自己拥有的工作退出，不能丢弃 Promise 冒充停止。任意不合作进程内代码不在强停保证内。
 - retry 通过既有 evidence 读取最近 closed Run 的公开逐项验收，复用其 CAS 冻结输出；不读取旧 workspace/transcript。start/batch/tool 预算共用当前 Task 投影，retry 不重置 token/time 百分比。
 - resource 文本读取的 UTF-8 边界用 Node 原生 isUtf8；合法二进制对象返回模型可改正的工具拒绝，使用 copy-to-work 与原生文件工具。CAS 读取异常仍是宿主异常，不添加格式猜测或解包恢复器。
-- 同进程 yield → 整批 terminal 或直属反馈 → continue 是正常路径；只允许实际观察到的 live yield 续接，不从归档重建。保持原合同、session 和 deadline；已挂载 child 输出不重复覆盖。stop(blocked) 交回 dispatcher 且不自动 retry；普通业务 retry 使用新 Run/session 和独占创建的新 workspace，保留 required feedback/replan/replacement；probe 允许同批多实例与后续批次的新问题，不沿用 required winner 或自动 replacement 门禁。
+- 同进程 yield → 整批 terminal 或直属反馈 → continue 是正常路径；只允许实际观察到的 live yield 续接，不从归档重建。保持原合同、session 和 deadline；已挂载 child 输出不重复覆盖。stop(blocked) 交回 dispatcher 且不自动 retry；普通业务 retry 使用新 Run/session 和独占创建的新 workspace，保留 required feedback/replan/replacement；probe 一次 Run 后直接 terminal，不自动 retry，由 parent 决定本地集成或显式新 probe；允许同批多实例与后续批次的新问题，不沿用 required winner 或自动 replacement 门禁。
 - 工具条件复用一个 dispatch guard；wake 使用原生 deriveMessages 的消息 ID 判重，不承诺 provider exactly-once。submit 用 DSH exclusive 工具直接冻结 CAS，不建立进程表探测、静止检测或备用作业管理器。
 - TS 使用 ESM、严格类型、import type、本地 `.ts` 导入、包 exports、references 和 Cordis effects。新增生产依赖服务当前消费者并同步 lockfile；helper 仅承载实际重复或明确业务职责。
 
 ## 验证与证据
 
+本机当前运行和测试使用 `/home/ROXY/.local/node-v24.9.0-linux-x64/bin/node`（v24.9.0）；pnpm 11.18.0 位于 `/home/ROXY/code/bb_work/env/BB/buckyball/result/bin/pnpm`。默认 shell 的 Node 是 `/home/ROXY/.local/node-v22.23.3-linux-x64/bin/node`（v22.23.3），不满足项目要求。运行安装、构建或测试前必须显式切换 `PATH`，不得依赖默认 Node：
+
 ```bash
+export PATH="/home/ROXY/.local/node-v24.9.0-linux-x64/bin:$PATH"
+node --version
+pnpm --version
 pnpm install --frozen-lockfile
 pnpm verify
 ```
+
+版本检查应分别显示 `v24.9.0` 和 `11.18.0`。
 
 - 根 `pnpm verify` 依次检查 project、build、typecheck、lint、test；开发先跑相关检查，失败修复后复跑，集成完成跑根门禁，不机械重复验证。
 - 测试按批准后的协议迁移：删除退出后恢复/torn-tail 期待，保留业务 retry、live continuation、receipt/权限/预算/领域行为。宿主错误测试断言原始错误、原生资源结束、无新增模型请求和无虚假闭合；不能只改成宽泛通过。

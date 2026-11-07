@@ -260,6 +260,9 @@ export function snapshotSession(session: Session, pendingUnknown = true): Sessio
 export function snapshotSessionEvents(sessionId: string, events: readonly SessionEvent[], pendingUnknown = true): SessionSnapshot {
   let inputTokens = 0
   let outputTokens = 0
+  let cacheReadTokens = 0
+  let cacheWriteTokens = 0
+  let cacheComplete = true
   let steps = 0
   let unknownRequests = 0
   let failure: string | undefined
@@ -277,6 +280,13 @@ export function snapshotSessionEvents(sessionId: string, events: readonly Sessio
     // alpha2 pi-ai supplies zero counters when its endpoint omits usage.
     const input = usage === undefined ? 0 : usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
     const output = usage?.outputTokens ?? 0
+    if (Number.isSafeInteger(usage?.cacheReadTokens) && Number.isSafeInteger(usage?.cacheWriteTokens)
+      && (usage?.cacheReadTokens ?? -1) >= 0 && (usage?.cacheWriteTokens ?? -1) >= 0) {
+      cacheReadTokens += usage?.cacheReadTokens ?? 0
+      cacheWriteTokens += usage?.cacheWriteTokens ?? 0
+    } else {
+      cacheComplete = false
+    }
     if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || input < 0 || output < 0 || input + output === 0) {
       unknownRequests += 1
       continue
@@ -289,6 +299,7 @@ export function snapshotSessionEvents(sessionId: string, events: readonly Sessio
     usage: {
       inputTokens,
       outputTokens,
+      ...(steps > 0 && cacheComplete ? { cacheReadTokens, cacheWriteTokens } : {}),
       steps: steps + pending.size,
       unknownRequests: unknownRequests + (pendingUnknown ? pending.size : 0),
     },
