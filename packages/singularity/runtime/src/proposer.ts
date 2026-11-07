@@ -40,7 +40,10 @@ Skill names are DSH kebab-case machine IDs. Bind changed assets to templates
 reachable from entry (set-entry if needed); unreachable changes are no-ops.
 Author business guidance, examples, assets and bindings only. The host stamps base,
 TaskProposal schema, acceptancePolicy and learning outputs; none belongs in a patch.
-Public catalogs are separate; bind the intended tool set explicitly. Keep it within 12 KiB; help is a resource.
+Public catalogs are separate; bind the intended tool set explicitly. If a template names a
+public MCP or skill, the candidate Method must also contain that asset: read the public
+asset and include the corresponding put-mcp-server or put-skill change, or omit the binding.
+An ID that exists only in the public catalog is a dangling binding. Keep it within 12 KiB; help is a resource.
 Submit one JSON patch with rsi_submit_patch. Correct invalid arguments in this session;
 accepted submission ends the turn. Host precheck/evaluation/activation decide the result.`
 
