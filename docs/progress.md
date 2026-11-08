@@ -648,3 +648,11 @@ campaign 退出后才落地两个实际摩擦点的最小修正：MXMM/SMatMul/i
 覆盖分布为 historical 的 ledger 2 / DAG 1 份，compact 为 ledger 2 / DAG 1 份，learned 为 ledger **0** / DAG 1 份。ledger 是 sums 的近迁移，DAG 引入不同算法；learned 没有完成 ledger 脚本，跨题覆盖尤其不足。因此结论为 **`insufficient-evidence`，未证明验收编写迁移改善**。这也不支持“界面精简必然减少错误”或“加范例必然更好”；当前可确认的是固定 max 推理与 40k 输出配置下，成稿率是主要限制之一，已成稿检查仍会因自行制造无效测试输入而误拒绝。historical 仍只是字段示意，建议与完整范例的独立效果不能拆分，不能据此归因完整旧 runtime 或泛化到生产多层 workflow。
 
 目标 18 请求为 **657,443** reported tokens（含 8,642 的 provider 失败请求）；加上源学习 **50,687** 与最早独立执行的截断样本 **40,386**，迁移研究总共 **20 请求 / 748,516 reported tokens / unknown=0**。全部旧离线、Buckyball campaign 与本次迁移研究合计 **526 请求 / 100,232,464 已报告 tokens / unknown=1**，未知项仍是旧离线 deadline 中断请求。所有迁移执行的冻结资产哈希匹配，未观察到原生 `QUOTA` / `ACCOUNT_QUOTA`；不能把 generic provider 错误擅自解释成余额不足。本轮已停止追加购买，没有候选 activation。当前工程重建与定向预检/根 452 项验证完成，真实 Buckyball paired 结论为 no-improvement，验收编写迁移证据不足；实际模型自主多层 child workflow 仍未被本轮实验覆盖。
+
+### 128k 验收编写迁移补测启动（2026-11-08 18:29）
+
+用户要求“输出拉高到128k，补做”，已授权自行决定窗口/预算且余额不足即停。在全新 `/home/ROXY/code/bb_work/acceptance-transfer-20261108-128k/` 冻结 18 次独立目标请求（三组 × 两题 × 三次重复）、4,000,000 reported tokens 和北京时间 **2026-11-09 02:30** 绝对 deadline。模型 `deepseek-v4.1-flash`、max 推理、temperature 0.6、700,000 context、任务、三组提示、顺序及源学习建议保持相同，输出上限由 40,000 改为 **128,000**；仅复用原先目标任务出现前生成的源建议（SHA-256 `c15554b85286cf654160ad34f20c3c5a6271b57f4c6e5249fb2c649dda958238`），没有重新学习或提供旧目标测量/推理。旧 40k 执行根不修改、不恢复、不混入新重复。
+
+采用本 study 的原生 Cordis patch，不改变共享生产 profile。第一次零费用配置预检发现 provider 配置在原生 patch 中整体替换，部分覆盖会丢失 api；补为完整相同路由后通过。`preflight/result.json` 确认原生模型 `defaultMaxTokens=128000`、call config `maxTokens=128000`，本地 HTTP fixture 实际收到 **`max_completion_tokens:128000` / `reasoning_effort:max` / temperature 0.6**，正常 stop；付费请求为 0。runner/launcher 语法检查通过，启动前全部 16 项冻结文件哈希匹配，四个先前执行进程已退出且请求日志未见原生余额不足。
+
+补测进程 PID/SID **359356** 已启动，启动终端退出后 PPID=1，stdin 凭据注入后关闭，stdout/stderr 持久保存到 `transfer.log`；`run/route.json` 再次核对 128k 路由。max-tokens 仍单独记录编写失败，provider/host 错误停止该执行，不修补或重购初稿，余额不足立即取消并报告。当前仅为启动证据，成稿率、FA/FR、消费与迁移结论须待测量完成；新随机样本与 40k 结果的差异不能仅归因输出上限。
