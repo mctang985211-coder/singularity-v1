@@ -16,6 +16,8 @@ MXMM 调用固定为 `python3 ball/mxmm.py request.json response.json`，SMatMul
 
 每个 call 的 ELF 必须保留原始输入符号：MXMM 为 `mxmm_a_codes`、`mxmm_a_scales`、`mxmm_b_codes`、`mxmm_b_scales`；SMatMul 为 `smatmul_a`、`smatmul_b`、`smatmul_bias`（little-endian int32）。它们必须位于 ELF 的 loadable segment，大小等于输入 bytes（或末尾多一个终止字节）。编译结果放在 fresh consumer 目录内，不能指向共享基线或其它执行目录。
 
+公开的 `acceptance.py` 与 `bemu.py` 使用 `copy-to-work`，可在当前 workspace 直接阅读和执行；宿主最终验收仍物化冻结 CAS 内容，修改工作副本不会改变最终检查。checkout/bbdev 的 `project` 必须是 workspace 内的绝对路径，原生 MCP JSON Schema 在执行前拒绝相对路径。
+
 设备 stdout 接口：MXMM 输出 `MXMMSHAPE m n k`、`MXMMCROW repetition row firstColumn hexWords...`、`MXMMGUARD repetition hexWords...` 和 `MXMMDONE`；repetition 为 0、1，分别完整覆盖 C。SMatMul 输出 `SMATMULSHAPE m n k`、`SMATMULC decimalValues...` 和一行 `SMATMULGUARD hexWords...`。验收独立运行固定 BEMU，核对设备输出与 CLI 数值、guard 和数值参考，回归 ELF 也独立重跑；候选命令记录的 stdout 不能单独证明执行成功。
 
 四个 paired cases 是 long-k（公开）、smatmul-bias（公开、pebble core 0）、output-tiling（validation、poly-attention core 2）和 inventory-transfer（validation）。source 也是 MXMM/poly-attention core 2。每个 case 使用自己的 TaskSpec 和确定性 checks，不购买 LLM root review。

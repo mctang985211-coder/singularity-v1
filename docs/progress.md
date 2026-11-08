@@ -600,10 +600,31 @@ Buckyball 根脚本现在自行执行 `project.bemu` 固定的可信 poly/pebble
 
 两次误拒绝都额外要求 callable 重建 `result/response.json`，但正确交付已包含该文件，callable 的声明接口是向 stdout 输出同一 JSON；这是检查自行增加副作用要求。错误脚本、冻结标注产物和修正证据均保留，没有中途更改真值或合同。第二轮六个初稿全部通过，说明本次结果有波动，不能将错误单独归因于界面复杂度。`examples` 在本次离线试验仅增加抽象编写建议，并非完整 shell 范例；historical 不是旧 runtime 上下文的精确复刻；修正仍复用相同产物族，不能据此声称迁移。由于 deadline 导致第三轮不完整，报告只能使用实际覆盖量，不是完整三次重复对照。
 
-领域 campaign 于 **15:00:43** 在全新 `study/campaign` 根启动，PID/SID **2155153**，启动终端退出后 PPID=1，凭据仅一次性经 stdin 注入。启动前再次核对 study 冻结的 9 个文件及准备包全部 SHA-256，均匹配。该进程按冻结计划运行 source→proposal→四个 paired cases，截止 **17:30**；当前启动记录不构成 source 成功、comparison 或 activation 证据，最终以该根的 facts、requests 与 result 为准。
+领域 campaign 于 **15:00:43** 在全新 `study/campaign` 根启动，PID/SID **2155153**，启动终端退出后 PPID=1，凭据仅一次性经 stdin 注入。启动前再次核对 study 冻结的 8 个文件及准备包全部 SHA-256，均匹配。该进程按冻结计划运行 source→proposal→四个 paired cases，截止 **17:30**；当前启动记录不构成 source 成功、comparison 或 activation 证据，最终以该根的 facts、requests 与 result 为准。
 
 北京时间 **16:01** 的中间证据：source 首次 Run 经 fresh-CAS 根检查结算 **verified**，共 63 请求、13,845,393 reported tokens、959.202 秒，实际调用公共 checkout/bbdev 并完成真实 BEMU 回归。proposer 共 22 请求、3,435,161 reported tokens，第一次提交含畸形 JSON，第二次 skill 名称不符合原生 kebab-case，第三次成功并通过 precheck；原始错误和原生工具返回的格式反馈保留，没有 JSON 修补或候选语义门禁。候选含三个 skill（fresh-CAS consumer architecture、Buckyball bring-up、exact integer numeric oracle）和一个无 child bindings 的 entry template；其 Buckyball skill 带 MXMM consumer 示例，不能仅因 precheck 成功就称为通用 workflow 发现。
 
 第一个完整 paired case **long-k 两边首次 Run 均 verified**：candidate 50 请求、4,174,806 reported tokens、451.191 秒；baseline 90 请求、24,804,586 tokens、1,202.277 秒。单次样本显示质量持平、候选执行成本下降；按冻结判据，成本下降单独不能构成 improved，且总研究成本还包含 source/proposer。两边公共 MCP 均实际执行；baseline 重复遇到相对 checkout 路径落到 `/tmp` 的领域环境错误，改用 workspace 内绝对路径后继续；candidate 从学习 skill 直接使用绝对路径。baseline 还在手动拼接只读分页脚本时出现 Python 语法错误，修正后通过。当前 source/两个 long-k Task 均由 root 单层实现，没有实际 child；不能升级为多层 workflow 证据。SMatMul-bias candidate 仍运行，尚无完整 comparison 或 activation。
 
 评测边界限制：candidate long-k 为查找验收扫描共享文件系统，并读取预检 `cas-preflight/long-k/acceptance.py` 的哈希及该目录的文件名；截至上述时点未观察到读取该目录的参考 consumer 实现。预检解法未作为模型输入，但共享文件系统不是读取隔离，不能宣称 OS 级独立或隐藏部署。后续继续按实际 tool trace 核对外部读取，保留该限制，不把独立 workspace 等同于 filesystem boundary。运行中的合同、工具、代码、预算与 deadline 保持冻结。
+
+小规模验收编写的跨题迁移此前尚未完成，不能用同题修复或 Buckyball consumer 迁移代替。现新增 `acceptance-ledger-transfer.json`（带引号 CSV、有符号账户余额）与 `acceptance-dag-transfer.json`（最小字典序拓扑排序）两类新任务；每类含 2 个独立正确实现和 6 个错误 callable，静态交付均正确，必须实际调用消费者才能区分。独立参考检查在两类上均为 **0 false accepts / 0 false rejects**；空检查各放行全部 6 个负例，恒失败检查各误拒绝两个正例，预检记录为 `/home/ROXY/code/bb_work/acceptance-transfer-20261108/preflight/results.json`。
+
+新离线实验计划已在 `/home/ROXY/code/bb_work/acceptance-transfer-20261108/plan.json` 冻结：仅用先前 signed-sums/XOR 的 5 份脚本及测量反馈学习可复用建议和一个源任务完整 shell 范例；学习请求不含新任务。随后在新任务上比较 historical 示意、compact、compact 加源学习建议/范例三组，各 3 次重复，共 18 个初稿；请求无 filesystem/tools，每次消息独立，不把目标真值或反馈回灌，也不修正目标初稿。上限为 19 请求、1,500,000 reported tokens、北京时间 19:30，须前一 Buckyball 进程退出且未出现余额不足后才启动。该计划不是已完成迁移证据，也不是生产 Method activation；historical 仍为字段示意，建议与范例的独立作用不能拆分归因。
+
+本轮 Buckyball campaign 已于 **16:46:07** 正常结束（墙钟 **6,323.896 秒**），绝对 deadline 未延长。`study/campaign/result.json` 与 `study/campaign-summary.json` 证明 source verified、proposal/precheck 完成、四组全部 paired case 与独立 validation 完成；最终 comparison 为 **`no-improvement`**，aggregateDelta=0、worstRegression=0，没有候选 activation。唯一 activation fact 是启动时的空 Method。所有 9 个 Task 都首次 Run verified，均为单 root，没有实际 child；本轮不证明模型已自主发现多层 workflow，也没有生产 child 验收编写迁移证据。
+
+| case | partition | candidate requests / reported tokens / 秒 | baseline requests / reported tokens / 秒 | 根最终验收 |
+|---|---|---:|---:|---|
+| long-k | public | 50 / 4,174,806 / 451.191 | 90 / 24,804,586 / 1,202.277 | 两边 verified |
+| smatmul-bias | public | 51 / 8,758,427 / 604.075 | 82 / 17,726,922 / 958.213 | 两边 verified |
+| output-tiling | validation | 52 / 10,618,625 / 656.819 | 67 / 15,560,383 / 864.571 | 两边 verified |
+| inventory-transfer | validation | 6 / 69,557 / 29.220 | 7 / 73,713 / 24.449 | 两边 verified |
+
+paired candidate 共 **23,621,415** reported tokens，baseline **58,165,604**，单次样本成本下降 **59.39%**，质量持平。source **13,845,393**、proposer **3,435,161** 必须另计；campaign 总共 **490 请求 / 99,067,573 reported tokens / unknown=0**。加上先前离线编写实验为 **506 请求 / 99,483,948 已报告 tokens**，离线 deadline 中断的最后一次请求用量未知；这不是含后续迁移实验的最终总量。未观察到余额不足。结束后核对冻结 study 记录的 **8 个**文件与准备包 **24 项** SHA-256 全部匹配，证据为 `study/frozen-after-completion.json`。
+
+工具调用审计保存在 `study/filesystem-audit-final.json` 与 `study/filesystem-audit-review.json`。已确认 long-k candidate 在预检目录读取公开检查/输入的哈希和文件名，source/output-tiling candidate 枚举执行目录，baseline 直接搜索准备基线并在 workspace 外建立 `/tmp/probe`、`/tmp/proto`、`/tmp/bbbuild`。后面三处分别仅被一个 session 使用，未在检查到的调用中发现跨 case 复用或读取预检参考 consumer 源码。上述访问违反了 workspace 操作约束；没有 OS 读取隔离，也没有系统调用级审计，不能把冻结检查给出的 verified 升级为完全隔离部署或严格无污染实验的证明。保留原 comparison，不事后修改判据或删改失败/违规痕迹；共享文件系统与一次 trial 仍限制效率差异的因果解释。
+
+campaign 退出后才落地两个实际摩擦点的最小修正：MXMM/SMatMul/inventory 的公开 `acceptance.py` 及适用的 `bemu.py` 改为 `copy-to-work`，宿主验收仍用冻结 CAS；两个 MCP 工具的 `project` 原生 JSON Schema 加 `pattern:"^/"`，没有新增 server 分支。新零模型预检在 `/home/ROXY/code/bb_work/postcampaign-rsi-rebuild-20261108/`：5 类输入经原生 `prepareWorkspace` 全部物化且修改工作副本不改变 CAS；MCP **8/8**（两工具相对路径原生拒绝、参数失败、真实业务成功、实际子进程取消退出）。相对路径分别在 6ms、1ms 内拒绝，没有启动 Nix/checkout 子进程。预检第一份操作者脚本曾因 Buffer/Uint8Array 的类型比较失败，修正比较方式后使用全新物化目录通过；不是生产 CAS 内容变化。最终根 `pnpm verify` 全部通过，**452/452**（protocol 209、runtime 143、app 100），project/build/typecheck/lint 均通过。旧准备包与旧执行根没有改写，新配置未另购 Buckyball campaign。
+
+验收编写迁移进程已于 **16:47** 在新根的 `run/` 启动，PID/SID **121282**，启动终端退出后 PPID=1，stdin 凭据注入后关闭，持久日志为 `transfer.log`；仍须等待其完整初稿评测，不能把启动或零模型预检记成迁移结果。

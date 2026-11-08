@@ -33,13 +33,13 @@
     {
       "id": "acceptance",
       "path": "acceptance.py",
-      "access": "read",
+      "access": "copy-to-work",
       "source": "acceptance.py"
     },
     {
       "id": "bemu-tools",
       "path": "bemu.py",
-      "access": "read",
+      "access": "copy-to-work",
       "source": "bemu.py"
     }
   ],

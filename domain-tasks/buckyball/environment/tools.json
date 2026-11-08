@@ -17,7 +17,7 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "project": { "type": "string" }
+              "project": { "type": "string", "pattern": "^/" }
             },
             "required": ["project"]
           }
@@ -29,7 +29,7 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "project": { "type": "string" },
+              "project": { "type": "string", "pattern": "^/" },
               "args": { "type": "array", "items": { "type": "string" } }
             },
             "required": ["project", "args"]

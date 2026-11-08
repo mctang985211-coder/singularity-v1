@@ -28,7 +28,7 @@
     {
       "id": "acceptance",
       "path": "acceptance.py",
-      "access": "read",
+      "access": "copy-to-work",
       "source": "transfer/inventory-acceptance.py"
     }
   ],
