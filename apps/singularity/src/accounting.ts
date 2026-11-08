@@ -1,7 +1,8 @@
 import { appendFile } from 'node:fs/promises'
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { TokenUsage } from '@deepseek-ai/dsh-llm'
+import { ACCOUNT_QUOTA_EXCEEDED_CODE,QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import type { LlmFailure,TokenUsage } from '@deepseek-ai/dsh-llm'
 
 /** Observe every native outbound call, including compaction and verification. */
 export function nativeAccounting(ctx: Context, options: {
@@ -21,10 +22,17 @@ export function nativeAccounting(ctx: Context, options: {
     const id = ++usage.requests
     const startedAt = Date.now()
     let reported: TokenUsage | undefined
+    let failure: LlmFailure | undefined
     console.log(JSON.stringify({ event: 'model-request', id, sessionId: request.sessionId, purpose: request.purpose ?? 'agent' }))
     try {
       for await (const chunk of next()) {
         if (chunk.type === 'usage') reported = chunk.usage
+        if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
+          failure = chunk.reason.failure
+          if (failure.code === QUOTA_EXCEEDED_CODE || failure.code === ACCOUNT_QUOTA_EXCEEDED_CODE) {
+            options.cancellation.abort(failure)
+          }
+        }
         yield chunk
       }
     } finally {
@@ -47,7 +55,7 @@ export function nativeAccounting(ctx: Context, options: {
         usage.outputTokens += output
       }
       const record = { event: 'model-settled', id, sessionId: request.sessionId, purpose: request.purpose ?? 'agent',
-        startedAt, finishedAt: Date.now(), reported, cumulative: { ...usage } }
+        startedAt, finishedAt: Date.now(), reported, ...(failure === undefined ? {} : { failure }), cumulative: { ...usage } }
       await appendFile(options.log, `${JSON.stringify(record)}\n`)
       console.log(JSON.stringify(record))
     }

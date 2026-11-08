@@ -587,3 +587,9 @@ Buckyball 根脚本现在自行执行 `project.bemu` 固定的可信 poly/pebble
 最终使用 Node **24.9.0**、pnpm **11.18.0**，`pnpm install --frozen-lockfile` 成功且 lockfile 未变，根 **`pnpm verify` 全通过**：project/build/typecheck/lint 通过，protocol **209/209**、runtime **143/143**、app **99/99**，合计 **451/451**。首次根检查发现 experiment fixture 的新增冻结输入断言未迁移，修正后完整重跑通过；没有删除失败测试。验证日志持久存放在上述预检根的 `engineering/`。
 
 尚未覆盖：真实模型的三界面对照与修正次数、完整 base/candidate paired cases、独立 validation 和总成本结果。本轮尚未购买真实模型请求，没有新 comparison、improved/winner 或 activation 结论。按重建文档阶段 6 与第 14.5 项，工程和真实领域预检已满足启动前条件，下一步需另行固定小实验的窗口、总预算、case 数及绝对 deadline；不默认重启旧 12 小时 campaign。
+
+### 用户授权后的真实小实验（2026-11-08）
+
+用户已明确授权自行决定窗口和预算，余额不足立即停止并告知。操作者冻结 `/home/ROXY/code/bb_work/rsi-rebuild-study-20261108-1418/study.json`：先做两个离线任务 × 三种界面 × 三次重复，每次至多一次修正，最多 36 请求/300 万 reported tokens，截止北京时间 15:00；随后一轮 Buckyball source→proposal→四个完整 paired cases（含独立 validation），最多 1500 请求/1.5 亿 reported tokens、并发 2，截止北京时间 17:30。三界面对照中的 historical 仍只是复杂字段示意，不能升级为旧完整 runtime 的因果对照。新进程使用独立 OS session、持久日志与 stdin 一次性凭据，不恢复旧执行根。
+
+原生计量入口现在在收到 DSH `QUOTA`/`ACCOUNT_QUOTA` failure 时取消全局预算信号，并保存原始 failure；不新增错误文本匹配或 provider 重试。真实本地 HTTP 402→pi-ai adapter 的无费用回归确认余额不足只发出一次 HTTP 请求，下一次调用被拒绝。根 `pnpm verify` 再次全通过，protocol 209、runtime 143、app 100，共 **452 项**。这段记录的是启动准备；实际消费和实验结论以随后保存的 result 与下续记录为准。
