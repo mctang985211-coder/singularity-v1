@@ -656,3 +656,21 @@ campaign 退出后才落地两个实际摩擦点的最小修正：MXMM/SMatMul/i
 采用本 study 的原生 Cordis patch，不改变共享生产 profile。第一次零费用配置预检发现 provider 配置在原生 patch 中整体替换，部分覆盖会丢失 api；补为完整相同路由后通过。`preflight/result.json` 确认原生模型 `defaultMaxTokens=128000`、call config `maxTokens=128000`，本地 HTTP fixture 实际收到 **`max_completion_tokens:128000` / `reasoning_effort:max` / temperature 0.6**，正常 stop；付费请求为 0。runner/launcher 语法检查通过，启动前全部 16 项冻结文件哈希匹配，四个先前执行进程已退出且请求日志未见原生余额不足。
 
 补测进程 PID/SID **359356** 已启动，启动终端退出后 PPID=1，stdin 凭据注入后关闭，stdout/stderr 持久保存到 `transfer.log`；`run/route.json` 再次核对 128k 路由。max-tokens 仍单独记录编写失败，provider/host 错误停止该执行，不修补或重购初稿，余额不足立即取消并报告。当前仅为启动证据，成稿率、FA/FR、消费与迁移结论须待测量完成；新随机样本与 40k 结果的差异不能仅归因输出上限。
+
+### 128k 验收编写迁移补测完成（2026-11-08 19:46）
+
+补测于 **19:46:41** 正常结束，墙钟 **4,651.769 秒（77.53 分钟）**，进程已退出。全新 18 次目标请求（三组 × 两个未见题族 × 三次重复）全部首次成稿，**0 max-tokens / 0 provider 失败 / 0 timeout / unknown=0**；没有重购、目标反馈修正或第二次源学习。权威汇总为 `/home/ROXY/code/bb_work/acceptance-transfer-report-20261108-128k.json`，原始请求、完整初稿、逐产物测量、原生 usage 与结束结果位于 `acceptance-transfer-20261108-128k/run/`，汇总生成器归档为 `acceptance-transfer-20261108-128k/report.py`，独立审计为同根 `audit.py`。
+
+| 组别 | 请求 / 完整脚本 | 正确产物判定 / 误拒绝 | 错误产物判定 / 误放行 | reported tokens |
+|---|---:|---:|---:|---:|
+| historical 字段示意 | 6 / 6 | 12 / 0 | 36 / 0 | 232,889 |
+| compact | 6 / 6 | 12 / 0 | 36 / 0 | 265,611 |
+| compact + 源学习建议与完整范例 | 6 / 6 | 12 / 0 | 36 / 0 | 281,392 |
+
+ledger 与 DAG 在每组都各完成 3 份检查。18 份脚本在 fresh 目录完成 **36 次正确产物判定、108 次错误产物判定，合计 0 false accepts / 0 false rejects**，不再存在前轮缺失成稿造成的测量分母不足。三组质量均满分，因此冻结判据结论为 **`no-observed-improvement`**：本轮未观察到源学习建议/范例相对 compact 的额外质量提升，也未观察到精简界面相对 historical 示意的差异。learned 的总 reported tokens 比 compact 高 **5.94%**，只是本轮同样覆盖量的观察值，不据此声称稳定的成本回退。
+
+与旧 40k 目标研究分开比较：完整脚本 **7/18 → 18/18**，截断 **10 → 0**，provider 失败 **1 → 0**；native 输出计量有 **11 次超过 40,000**，最小 **26,725**、最大 **61,155**。这证明 128k 配置下本轮能够完成原计划的成稿与正误判定；两轮使用全新随机样本，不能把所有差异仅归因上限，或把旧 40k 的 2 次误拒绝下降当作学习改善。只做了两个题族、各三次重复，historical 仍是字段示意，源建议与完整范例不可拆分归因；离线满分不等同生产多层 child workflow 或一般化 RSI 能力已经证明。
+
+`postflight-audit.json` 核对 18 个请求均只含冻结公开任务和适用的原源建议，无目标标签/反馈；18 份 shell 与正常 stop 的原始文本完全一致，仅按计划剥除外层 fence；144 个 artifact 标签与冻结 fixture 一致，未改脚本或真值。已生成脚本中未匹配旧执行根、目标 fixture 宿主路径或常见网络访问字面串；这是静态检查，不冒充系统调用级隔离。plan 自身 digest 与全部 **16 项冻结文件 SHA-256** 结束后均匹配。原生模型/调用配置和本地 wire 预检确认 128,000 输出上限；共享生产 profile 没有改写。
+
+本次新增 **18 请求 / 779,892 reported tokens**（input 20,667、output 759,225、unknown=0），未见 `QUOTA` / `ACCOUNT_QUOTA`。含先前 40k 源学习/截断/目标研究，验收迁移研究合计 **38 请求 / 1,528,408 reported tokens / unknown=0**；全部离线、Buckyball campaign 与迁移研究累计 **544 请求 / 101,012,356 已报告 tokens / unknown=1**，未知项仍是最早离线 deadline 中断请求。已结束追加购买，没有新 activation。工程重建与既有根 **452/452** 验证保持完成；本次只新增独立操作者实验配置、证据及文档，原生零费用配置验证与实际 144 次产物判定完成，没有机械重跑未改变的生产门禁。
