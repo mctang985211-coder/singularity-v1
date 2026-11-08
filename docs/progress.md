@@ -553,3 +553,13 @@ Buckyball 的冻结数据存在更根本的可达成性矛盾。本次按公开 
 过期的两轮失败执行目录（清理前约 4.1 GiB + 1.2 GiB）、`/home/ROXY/singularity-next`、旧 EDA/P2E 检查目录及约 201 MiB BEMU cache 已删除；旧 one-off 启动命令也已删除。保留 canonical Buckyball、标准 MCP 依赖、实际 preparation/domain 和活动运行目录。归档根为 `/home/ROXY/archives/singularity-v1/legacy-cleanup-20261108/`，过期执行只留约 11 MB 的调度 SQLite/CAS、原生会话和结果，另留 builder/环境预检记录与 manifest，不保留 checkout/build/cache。
 
 清理中的一次命令未在压缩失败后停止，提前删除了首个旧失败根的辅助汇总；其 SQLite/CAS/原生会话完整保留并通过 SQLite integrity check。launch/round/result 已从删除前的本会话工具输出恢复，453 条辅助请求记录已恢复，其余 10 条原始辅助计量记录未恢复，但全部 **463 次原生 usage** 均仍在归档会话内。`old-buckyball-executions.manifest.json` 明列恢复来源和缺失 ID，不把恢复文件当原始字节证据；活动新轮次没有受影响。最终验证日志与本次环境核对摘要同样归入该归档根。
+
+### 新轮次中断的宿主生命周期核对（2026-11-08）
+
+此前的运行状态只适用于提交时；后续检查确认 PID 1040634 已退出，`round-1.json` 和 `result.json` 均未生成。最后一次结算请求是 649（09:40:45.333 +0800），原生 session 停在 baseline long-k 的 bash job 注册，尚无 tool/result 或 Run closure。SQLite integrity 为 ok，保留 42 条事实；source、candidate long-k 的 verified 不等于整轮 comparison。未耗尽 4000 请求预算，也未到 19:41:09.941 的截止时间。
+
+操作者当时用 Codex 临时 PTY 直接启动 Node，并在 09:40:17.194 结束回复。Codex 本机日志在 **09:41:17 +0800** 明确记录该 thread 的 teardown、Shutdown、Shutting down Codex instance 与 Agent loop exited。官方 app-server 文档说明最后订阅者离开后默认空闲 60 秒卸载 thread，与本次时间线吻合。最后 bash 子任务的 response 文件于 09:43:02 写出，不能据此把已退出的宿主进程视作仍活动。
+
+无模型 OS 实测使用同一 Node 24.9.0：关闭控制 PTY 后，附着进程以 SIGHUP 退出且未写 finally 标记；标准 `subprocess.Popen(start_new_session=True)` 配合独立 stdin 和持久 stdout/stderr，在启动 PTY 关闭后仍正常完成并写出 finally 标记。这证明启动方式的失效机制，**不等于恢复出原进程的退出信号**。最有力的解释是宿主卸载回收了附着终端，启动方式由操作者负责；尚未找到由 Singularity 代码修改触发的异常，也不能仅凭测试通过排除所有代码缺陷。
+
+证据存放于 `/home/ROXY/archives/singularity-v1/legacy-cleanup-20261108/campaign-interruption-20261108/`，包括原始 shutdown 日志摘录、无模型 PTY 对照和带限制说明的 assessment。README 与施工约束补充了独立 OS session 和持久日志要求；没有改动调度代码，没有新增静态门禁、自动重启或恢复机制，也没有在本次诊断中购买新模型请求。退出的执行根保持原样，仅供归档分析。

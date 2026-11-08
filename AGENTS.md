@@ -10,6 +10,7 @@
 
 - 使用 Node >=24.9.0、pnpm 11.18.0、DSH 0.2.2-alpha.2 和固定 lockfile。启动前固定 provider/model/profile、凭据、可信 MCP/skill 资产、验收、预算和绝对 deadline。
 - 一个执行根归一个进程；运行中不重启，不让 supervisor 自动重启。退出后的根只作归档，下一次执行使用新根和新 IDs，不建立 crash resume/reconcile/灾备产品。
+- 经 Agent 终端启动长运行时，使用独立 OS session，持久重定向 stdout/stderr，完成凭据输入后关闭 stdin；不能把临时 PTY 的 PID 当作脱离对话生命周期的证明。该准备归操作者，不给 runtime 增加守护或恢复逻辑。
 - app 在 profile boot 前验证剩余预算并 exclusive create 输出根；Run 在模型创建前验证冻结资源、provider identity 并准备输入。真实 scoped prompt/MCP surface 在 setup、第一模型请求前完成校验；固定 profile 只启用原生 skill registry/loader，Singularity 自产冻结 skills 注册到 Agent scope；项目原有 skills 只用 root 提示中的参考文档路径暴露，不逐字段重读自检。
 - 操作者提供健康存储和干净 launch env。可信公开任务沿现有本地 profile 执行；隐藏数据或不可信代码先用现成 OS/容器/broker 建立真实读写/网络/进程边界。cwd、HOME、chmod、loopback URL 和 manifest capability 声明均不能代替这些边界。
 - profile 不挂载任意 filesystem/global skill provider，不在执行中修改共享 registry；全局公开资源先冻结再注册到当前 scope。MCP 的 HOME/TMP/XDG 路径由部署环境提供，框架不创建或重定向。可信 bundle 的 capability 列表只作描述，manifest/config 只解析消费字段，不设 exact-key/能力白名单门禁；实际 surface 对比保留。

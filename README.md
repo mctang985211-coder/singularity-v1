@@ -26,6 +26,8 @@ node apps/singularity/src/domain.ts <fresh-execution-root> <fresh-preparation-ro
 
 An execution root belongs to one live process. Exit archives it; start new work with a new root. Configure trusted assets, provider, budgets, deadline and deployment permissions before launch. Private fixtures and untrusted code require a real OS/container/broker boundary supplied by the deployment. Local public fixtures do not establish that boundary.
 
+For long runs started through an agent terminal, use an independent OS session (for example, `setsid`) and persistent stdout/stderr files. Finish credential input and close stdin before leaving the launch session. An attached tool terminal can be torn down when its chat unloads; returning a process ID does not establish that the execution will survive. This is a deployment concern, with no automatic restart or reuse of an exited execution root.
+
 Domain executions use the generic host entry point above. Domain directories are data-only bundles; they do not ship a TypeScript adapter, verifier, comparator, scheduler, or activation loop. A domain CLI is exposed to the model only through a standard MCP server declared by the bundle, while root checks are run by the host against frozen CAS inputs and outputs.
 
 [Buckyball MXMM Ball task preparation](docs/buckyball-mxmm-ball.md) defines a bounded executable tiling task, frozen cases and correctness-qualified RSI cost comparison. The model authors its implementation, workflow and non-root checks; real environment preflight is separate from model success.
