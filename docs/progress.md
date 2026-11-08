@@ -535,3 +535,21 @@ Buckyball 的冻结数据存在更根本的可达成性矛盾。本次按公开 
 同时清除了 protocol/runtime 的平台探索示例中遗留的 inventory `records/aggregation/totals` 工作流和固定提交输出；示例现在只展示中性的“声明输入 → 可调用 consumer → 父级集成”接口。领域算法不会再从通用 Task 工具 schema 或 explore-child 示例进入模型提示。
 
 本次后续复核没有增加静态门禁。清理了磁盘上被忽略的旧 inventory/domain 与旧入口构建产物；Buckyball MCP 冻结 source 统一使用 `environment/server.cjs`，删除重复的 `environment-source/` 副本。env-builder 仍以新目录独占创建，现会先创建缺失的父目录，保留已有目录即失败的 fresh-root 语义。完整 workspace 测试为 444/444（protocol 209、runtime 140、app 95），build、typecheck、lint 通过；本机 Node 22.23.3 运行 `verify:project` 仅因仓库要求 Node >=24.9.0 失败。
+
+### Node 24 全量验证、环境清理与新 RSI 轮次（2026-11-08）
+
+本次固定 `/home/ROXY/.local/node-v24.9.0-linux-x64/bin/node` 和 pnpm 11.18.0 后，根 `pnpm verify` 全部通过：**444/444**（protocol 209、runtime 140、app 95），0 fail/skip，project/build/typecheck/lint 全部通过。最终集成发现 Summary fixture 仍要求 session 名包含原 Run ID，与 `ce757ed` 的短身份修复相冲突；已改为以超过文件名长度的真实 Run ID 执行原生 Summary 持久化，并验证完整来源身份仍保存在 metadata，usage 与缓存消费不变。定向 Summary 2/2 及随后全量验证均成功，没有增加静态门禁。
+
+当前领域资产只通过通用 `domain.ts` 装载；protocol/runtime/app 生产源码没有 Buckyball、MXFP8、SMatMul 或 inventory 的算法和调度分支。准备材料为根目标/交付物、冻结 source/public/validation 数据、独立可执行验收，以及有消费者时才提供的标准 MCP manifest/config/source 和预装依赖。最小预填目录是 `domain-tasks/template/`；Buckyball 参考目录为 `domain-tasks/buckyball/`，实际准备目录为 `/home/ROXY/code/bb_work/preparation/domain`，MCP SDK 依赖单独保留在 `/home/ROXY/code/bb_work/env/mcp-dependencies`。根验收沿 `domain-tasks/ACCEPTANCE.md` 的统一文件/退出状态接口执行，不给领域脚本调度 authority。
+
+实际 Buckyball 目录可装载，但此前 builder 会话在 30 次请求后中断，未生成 `builder.json`，该准备目录由操作者补齐，不能冒充 builder 完整交付证据。随后使用当前代码、预填 inventory 模板和现成 loader 在全新根完成真实 builder 实测：**17.726 秒、4 次请求、19,078 reported input + 2,452 output tokens、unknown=0**，生成 `builder.json`，source/transfer/validation 装载成功。这证明现成模板的正常准备路径，不证明任意复杂工程都能在相同成本内完成；Buckyball 的 Nix、编译器/BEMU 与商业 EDA 依赖仍由操作者预装。
+
+实际准备配置已注入服务器指南中的 Synopsys VCS W-2024.09-SP1、DC R-2020.09-SP5、PT W-2024.09-SP1 和 `26000@127.0.0.1`。再次通过相同配置进入项目 `nix develop`，确认 `bbdev` 以及 `vcs`/`dc_shell`/`pt_shell` 均解析到预期入口，license 环境保留。没有商业配置的流程沿项目默认环境，focused BEMU 仍使用 Nix。零模型预检的 checkout、bbdev 业务成功、参数失败、取消退出及四个 MXMM 回归均通过，记录在 `/home/ROXY/archives/singularity-v1/buckyball/20261108T-cleanup/preflight-20261108/`；SMatMul 两个真实 PASS 日志已归档到 `buckyball/20261107T165001Z/records/singularity-v1-artifacts/smatmul-consumer-preflight-20261107/`。
+
+新运行根 `/home/ROXY/code/bb_work/execution-buckyball-20261108T-final` 于 **2026-11-08 07:41:09.941 +0800** 启动，绝对截止 **19:41:09.941 +0800**，PID 1040634。使用 `deepseek-flash`、reasoning=max、500k context、40k output，API base URL 为 `https://api.agicto.cn/v1`；凭据只经标准输入注入启动进程，没有写入领域或仓库。预算为 1 Round、12 小时、10 亿 reported tokens、4000 requests、maxActive=4；不恢复失败根或热改活动环境。
+
+截至本次提交前，source 已 verified；fresh `/tmp` 验收实际执行 **5 个 frozen MXFP8 calls 和 4 个 focused-BEMU regressions，EXIT=0**。该过程发现 bbdev 的 `$HOME` 路径限制，source 的交付 consumer 已对自己的独立副本处理，并通过外部临时目录验收；没有改动活动共享基线。RSI proposer 的候选已通过 precheck，candidate long-k 已 verified，当前执行 paired baseline long-k；SMatMul 和两个 validation 还没有完整对照，尚无最终 `round-1.json`/`result.json`、comparison 或 activation，不能声称 RSI 改善。完整 suite 包含 MXMM 长 K/输出分块、不同算子 SMatMul 和不同任务 inventory，足以开展迁移实验，其收益仍须由完整 paired 结果证明。
+
+过期的两轮失败执行目录（清理前约 4.1 GiB + 1.2 GiB）、`/home/ROXY/singularity-next`、旧 EDA/P2E 检查目录及约 201 MiB BEMU cache 已删除；旧 one-off 启动命令也已删除。保留 canonical Buckyball、标准 MCP 依赖、实际 preparation/domain 和活动运行目录。归档根为 `/home/ROXY/archives/singularity-v1/legacy-cleanup-20261108/`，过期执行只留约 11 MB 的调度 SQLite/CAS、原生会话和结果，另留 builder/环境预检记录与 manifest，不保留 checkout/build/cache。
+
+清理中的一次命令未在压缩失败后停止，提前删除了首个旧失败根的辅助汇总；其 SQLite/CAS/原生会话完整保留并通过 SQLite integrity check。launch/round/result 已从删除前的本会话工具输出恢复，453 条辅助请求记录已恢复，其余 10 条原始辅助计量记录未恢复，但全部 **463 次原生 usage** 均仍在归档会话内。`old-buckyball-executions.manifest.json` 明列恢复来源和缺失 ID，不把恢复文件当原始字节证据；活动新轮次没有受影响。最终验证日志与本次环境核对摘要同样归入该归档根。
