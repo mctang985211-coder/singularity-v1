@@ -700,3 +700,11 @@ ledger 与 DAG 在每组都各完成 3 份检查。18 份脚本在 fresh 目录�
 公开领域冻结 ready/valid popcount 接口、W16/32/64/48、固定向量和工艺/时钟条件，用真实 VCS W-2024.09-SP1 测功能/周期，再用 DC R-2020.09-SP5 / SMIC180 标准单元库测面积/时序。首选 IO 库无逻辑映射、VCS 误用 PATH 的 GCC15、参数化 elaborate 后重复 current_design 名称等预检问题已保留原始失败并在购买前修正。有效参考的 mapped area 4574.1696/5678.668779/7850.035142/6719.19356 um²，延迟与 II 为17/33/65/49周期，全部时序通过；独立并行实现面积1021.708813/1968.15363/3746.265664/2799.820847 um²、延迟与II均1，得分12.1782/17.9445/27.5425/23.0512，参考复测为1。原生 verifier 再从CAS独立重测得到12.1782，stdout与7998字节stderr均未截断；不能把这些已知实现的评测器预检当成模型学习提升。
 
 公式为 `(Aref/A)^0.25*(Lref/L)^0.375*(T/Tref)^0.375`，正确性、完成映射、固定时钟非负slack是硬约束。power report 为默认活动率综合估计，留存而不计分；未声称 post-layout 完整PPA。方法调研、接口和测量定义见 `docs/rsi-performance-evaluation-20261108.md`；领域、原始EDA报告及后续新鲜实验位于 `/home/ROXY/code/bb_work/performance-rsi-study-20261108/`。自主多层 workflow 仍未由本轮证明。
+
+### 新鲜连续性能 RSI 试验启动（2026-11-08 21:29）
+
+已完成负例预检：错误功能无数值且 exit1；0.5ns 不可行时钟实际 slack=-1.691ns 被拒绝；缺少冻结 DC 工具返回无 metric 的 invalid JSON，由宿主按 invalid 处理，不能填入性能0。最初负例选用5ns和2ns时DC均通过自动优化满足了更紧时序，分别得到正slack；这是负例前提不成立，原日志保留，最终以实测违规约束验证拒绝路径。领域时钟始终20ns，参考及模型任务未改。
+
+在提交 `5b25950` 的生产实现上冻结 **382 项**源码、实际dist消费者、领域输入、reference、库与操作者脚本，计划为 `/home/ROXY/code/bb_work/performance-rsi-study-20261108/plan.json`。付费前本地 HTTP fixture 确认128,000输出与max推理，paidRequests=0。新根 `run-performance-20261108`，一个空Method source、proposer/precheck、W32/W64 public与W48 validation，两臂各两次fresh trial（计划13roots，不预设child）。public几何平均相对改善须≥1%，所有case不回退；预算 **1000请求 / 80,000,000 reported tokens**，绝对deadline **2026-11-09 03:00北京时间**，余额不足立即取消后续购买。若满足完整冻结判据，只允许移动本隔离campaign的Method head，不涉及外部部署。
+
+PID/SID **113994** 已通过独立session启动，凭据只经stdin一次注入后关闭，输出持久保存run.log；新根不能退出后恢复。当前是启动证据，试验完成量、性能差异与activation以最终result和facts为准。固定串行reference=1不代表fresh空Method也只得1，两臂均可独立选择更快设计；不能把reference到并行的巨大加速冒充Method学习收益。
