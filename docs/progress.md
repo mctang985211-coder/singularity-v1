@@ -628,3 +628,23 @@ paired candidate 共 **23,621,415** reported tokens，baseline **58,165,604**，
 campaign 退出后才落地两个实际摩擦点的最小修正：MXMM/SMatMul/inventory 的公开 `acceptance.py` 及适用的 `bemu.py` 改为 `copy-to-work`，宿主验收仍用冻结 CAS；两个 MCP 工具的 `project` 原生 JSON Schema 加 `pattern:"^/"`，没有新增 server 分支。新零模型预检在 `/home/ROXY/code/bb_work/postcampaign-rsi-rebuild-20261108/`：5 类输入经原生 `prepareWorkspace` 全部物化且修改工作副本不改变 CAS；MCP **8/8**（两工具相对路径原生拒绝、参数失败、真实业务成功、实际子进程取消退出）。相对路径分别在 6ms、1ms 内拒绝，没有启动 Nix/checkout 子进程。预检第一份操作者脚本曾因 Buffer/Uint8Array 的类型比较失败，修正比较方式后使用全新物化目录通过；不是生产 CAS 内容变化。最终根 `pnpm verify` 全部通过，**452/452**（protocol 209、runtime 143、app 100），project/build/typecheck/lint 均通过。旧准备包与旧执行根没有改写，新配置未另购 Buckyball campaign。
 
 验收编写迁移进程已于 **16:47** 在新根的 `run/` 启动，PID/SID **121282**，启动终端退出后 PPID=1，stdin 凭据注入后关闭，持久日志为 `transfer.log`；仍须等待其完整初稿评测，不能把启动或零模型预检记成迁移结果。
+
+首个验收编写迁移执行于 **16:55:06** 退出：源学习正常完成（50,687 reported tokens），随后 historical/ledger 初稿达到原生 **max-tokens=40,000**，可见脚本文本为 0 字符；驱动按非正常完成停止。结果 `acceptance-transfer-20261108/run/result.json` 为 **insufficient-evidence**，2 请求 / **91,073** reported tokens，无余额不足。这次失败没有进入 artifact FA/FR 分母，不能按空脚本当作六次误放行，也不能声称已生成一份验收。
+
+随后在全新 `/home/ROXY/code/bb_work/acceptance-transfer-20261108-1656/run/`、全新请求 IDs 启动独立的 18 初稿对照，PID/SID **146762**，PPID=1。只复用目标任务出现前已经生成的源建议/范例（SHA-256 `c15554b85286cf654160ad34f20c3c5a6271b57f4c6e5249fb2c649dda958238`），没有重新购买源学习，不向任何目标请求提供目标测量或前次推理；先前截断样本单独保留，不合并到新三次重复。新计划在首次购买前冻结：18 请求、1,400,000 reported tokens、原 19:30 deadline；原生 max-tokens 单独记为 authoringFailure 并继续剩余独立请求，provider/host 错误仍停止，不重购或修补单个初稿。存在编写失败时仍不给 artifact 质量改善结论，避免将缺失测量误记成 0 错误。
+
+### 小规模验收编写跨题迁移结果（2026-11-08 18:03）
+
+计划内 **18 次目标编写请求均已发出并结束**，但只有 **7 份完整脚本**：10 次达到原生 40,000 输出上限而未成稿，1 次由 provider 返回 `finish_reason:error` / `PI_AI_ERROR`。原第二执行在第 17 次请求后按 provider 错误边界退出，其 result 保持 `complete:false`；随后在独立新根 `acceptance-transfer-20261108-final-slot` 仅发出从未购买的最后一个 learned/DAG 样本，没有重购失败的 compact 请求、恢复旧 session 或修改旧结果。最后一份也达到 max-tokens，18:02:57 结束。可审计汇总为 `/home/ROXY/code/bb_work/acceptance-transfer-report-20261108.json`，原始计划、请求、文本、脚本、逐产物检查和原生 usage 保存在其列出的三个独立执行根。
+
+| 组别 | 计划请求 / 完整脚本 | 输出截断 / provider 失败 | 正确产物判定 / 误拒绝 | 错误产物判定 / 误放行 | 目标请求 reported tokens |
+|---|---:|---:|---:|---:|---:|
+| historical 字段示意 | 6 / 3 | 3 / 0 | 6 / 0 | 18 / 0 | 224,206 |
+| compact | 6 / 3 | 2 / 1 | 6 / 0 | 18 / 0 | 183,198 |
+| compact + 源学习建议与完整范例 | 6 / 1 | 5 / 0 | 2 / 2 | 6 / 0 | 250,039 |
+
+7 份脚本总共在 fresh 目录完成 **14 个正确产物 / 42 个错误产物**判定，合计 **0 false accepts / 2 false rejects**；截断和 provider 失败没有完整验收，不能混入 FA/FR 分母或按 0 错误计算。两次误拒绝出自同一份 learned/DAG 检查：它自行构造的 `unicode-empty` 测试把顶点 `a` 放入两次，违反唯一顶点的公开前提；脚本自身在执行消费者前拒绝该测试，两个独立正确实现都因此被拒。没有事后改正这一初稿或把测量反馈回灌其它请求。检查到的完整脚本没有旧执行根或目标 fixture 文件路径依赖。
+
+覆盖分布为 historical 的 ledger 2 / DAG 1 份，compact 为 ledger 2 / DAG 1 份，learned 为 ledger **0** / DAG 1 份。ledger 是 sums 的近迁移，DAG 引入不同算法；learned 没有完成 ledger 脚本，跨题覆盖尤其不足。因此结论为 **`insufficient-evidence`，未证明验收编写迁移改善**。这也不支持“界面精简必然减少错误”或“加范例必然更好”；当前可确认的是固定 max 推理与 40k 输出配置下，成稿率是主要限制之一，已成稿检查仍会因自行制造无效测试输入而误拒绝。historical 仍只是字段示意，建议与完整范例的独立效果不能拆分，不能据此归因完整旧 runtime 或泛化到生产多层 workflow。
+
+目标 18 请求为 **657,443** reported tokens（含 8,642 的 provider 失败请求）；加上源学习 **50,687** 与最早独立执行的截断样本 **40,386**，迁移研究总共 **20 请求 / 748,516 reported tokens / unknown=0**。全部旧离线、Buckyball campaign 与本次迁移研究合计 **526 请求 / 100,232,464 已报告 tokens / unknown=1**，未知项仍是旧离线 deadline 中断请求。所有迁移执行的冻结资产哈希匹配，未观察到原生 `QUOTA` / `ACCOUNT_QUOTA`；不能把 generic provider 错误擅自解释成余额不足。本轮已停止追加购买，没有候选 activation。当前工程重建与定向预检/根 452 项验证完成，真实 Buckyball paired 结论为 no-improvement，验收编写迁移证据不足；实际模型自主多层 child workflow 仍未被本轮实验覆盖。
