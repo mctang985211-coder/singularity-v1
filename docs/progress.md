@@ -601,3 +601,9 @@ Buckyball 根脚本现在自行执行 `project.bemu` 固定的可信 poly/pebble
 两次误拒绝都额外要求 callable 重建 `result/response.json`，但正确交付已包含该文件，callable 的声明接口是向 stdout 输出同一 JSON；这是检查自行增加副作用要求。错误脚本、冻结标注产物和修正证据均保留，没有中途更改真值或合同。第二轮六个初稿全部通过，说明本次结果有波动，不能将错误单独归因于界面复杂度。`examples` 在本次离线试验仅增加抽象编写建议，并非完整 shell 范例；historical 不是旧 runtime 上下文的精确复刻；修正仍复用相同产物族，不能据此声称迁移。由于 deadline 导致第三轮不完整，报告只能使用实际覆盖量，不是完整三次重复对照。
 
 领域 campaign 于 **15:00:43** 在全新 `study/campaign` 根启动，PID/SID **2155153**，启动终端退出后 PPID=1，凭据仅一次性经 stdin 注入。启动前再次核对 study 冻结的 9 个文件及准备包全部 SHA-256，均匹配。该进程按冻结计划运行 source→proposal→四个 paired cases，截止 **17:30**；当前启动记录不构成 source 成功、comparison 或 activation 证据，最终以该根的 facts、requests 与 result 为准。
+
+北京时间 **16:01** 的中间证据：source 首次 Run 经 fresh-CAS 根检查结算 **verified**，共 63 请求、13,845,393 reported tokens、959.202 秒，实际调用公共 checkout/bbdev 并完成真实 BEMU 回归。proposer 共 22 请求、3,435,161 reported tokens，第一次提交含畸形 JSON，第二次 skill 名称不符合原生 kebab-case，第三次成功并通过 precheck；原始错误和原生工具返回的格式反馈保留，没有 JSON 修补或候选语义门禁。候选含三个 skill（fresh-CAS consumer architecture、Buckyball bring-up、exact integer numeric oracle）和一个无 child bindings 的 entry template；其 Buckyball skill 带 MXMM consumer 示例，不能仅因 precheck 成功就称为通用 workflow 发现。
+
+第一个完整 paired case **long-k 两边首次 Run 均 verified**：candidate 50 请求、4,174,806 reported tokens、451.191 秒；baseline 90 请求、24,804,586 tokens、1,202.277 秒。单次样本显示质量持平、候选执行成本下降；按冻结判据，成本下降单独不能构成 improved，且总研究成本还包含 source/proposer。两边公共 MCP 均实际执行；baseline 重复遇到相对 checkout 路径落到 `/tmp` 的领域环境错误，改用 workspace 内绝对路径后继续；candidate 从学习 skill 直接使用绝对路径。baseline 还在手动拼接只读分页脚本时出现 Python 语法错误，修正后通过。当前 source/两个 long-k Task 均由 root 单层实现，没有实际 child；不能升级为多层 workflow 证据。SMatMul-bias candidate 仍运行，尚无完整 comparison 或 activation。
+
+评测边界限制：candidate long-k 为查找验收扫描共享文件系统，并读取预检 `cas-preflight/long-k/acceptance.py` 的哈希及该目录的文件名；截至上述时点未观察到读取该目录的参考 consumer 实现。预检解法未作为模型输入，但共享文件系统不是读取隔离，不能宣称 OS 级独立或隐藏部署。后续继续按实际 tool trace 核对外部读取，保留该限制，不把独立 workspace 等同于 filesystem boundary。运行中的合同、工具、代码、预算与 deadline 保持冻结。
