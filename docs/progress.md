@@ -572,4 +572,18 @@ Buckyball 的冻结数据存在更根本的可达成性矛盾。本次按公开 
 
 ### amendment 027 重建实施（2026-11-08）
 
-用户要求按重建文档施工，第 14 节 1–4 已授权：保留动态 child 验收，删除模板固定 criteria/outputs，公共资源统一组合，持续展示当前合同关键事实，旧 Method 只归档。已从审计 HEAD 新建 codex/rsi-workflow-rebuild-20261108 分支；保留原工作区规划与进度记录。工程与领域预检正在实施，尚未购买新模型请求。真实实验须在检查后固定窗口、预算及绝对 deadline。
+用户要求按重建文档施工，第 14 节 1–4 已授权：保留动态 child 验收，删除模板固定 criteria/outputs，公共资源统一组合，持续展示当前合同关键事实，旧 Method 只归档。已从审计 HEAD 新建 `codex/rsi-workflow-rebuild-20261108` 分支，保留原工作区规划与进度记录。上节“只新增审计规划”描述的是此前写入时的历史状态；本节记录授权后的实际实现。
+
+工程重建已完成：TaskTemplate/TemplateDraft 严格拒绝 `requiredCriteria/requiredOutputs`，child 固定交付 required `result/` tree，实际 criteria 全由 parent 的非空 acceptanceCriteria 冻结而来；root 仍使用领域合同。公共 skills/MCP 在所有层由 host 组合，候选 `tools:[]` 不移除公共能力，自有与公共身份冲突被拒绝。MethodPatch precheck 使用同一公共目录检查。required children 目录不强制展开；一旦 Task 选过某 required 职责，其义务跨 parent Run 保留，但 winner 必须来自决定性 Run，旧 winner 不继承。NodeView 持续显示冻结 deliverable、required criteria 文字与输入路径，长 check 仍按需读取。
+
+worker 在实施前检查验收是否测量正确结果，通过现有 acceptance-concern/replyTo/blocked 与新 Task 修正合同，复用完整 CAS InputRef；parent 真实消费产物并负责本级集成。proposer 删除公共资产复制与 source-specific consumer checks 的引导，改为可迁移能力和职责接口。既有 required retry/replacement、澄清不改合同、错误合同 blocked 后新 Task 消费旧产物、真实 parent 集成等回归保留。没有新增 reviewer 链、scheduler、消息系统或恢复机制。
+
+Buckyball 根脚本现在自行执行 `project.bemu` 固定的可信 poly/pebble BEMU，不以候选命令记录或 stdout 为执行权威；冻结的 `bemu.py` 通过原生 readelf 和 ELF loadable segments 核对实际原始输入符号，独立重放每个 call 与回归 ELF，比较设备 C/guard 和数值 oracle。新接口与操作者准备步骤见 `domain-tasks/buckyball/README.md`。真实零模型预检保存在 `/home/ROXY/code/bb_work/preflight-rsi-rebuild-20261108/`：`results.json` 的 **15 项全部符合预期**，包含 MXMM source/long-k/output-tiling、有限性（最大 log2 上界 61.615）、完整 SMatMul+bias CLI/两个回归、inventory 正负例，以及缺输出、错误数值/guard、缺真实执行/回归、输入变异负例。`verify-altered-byte.log` 进一步确认尺寸正确的 ELF 仅变异一个载入输入 byte 仍被拒绝；`mcp-results.json` 的 **6 项**记录 checkout/bbdev 各自的真实业务成功、参数失败和观察到的子进程全部取消退出。`SHA256SUMS` 固定脚本及执行器身份。领域数学单测明确只证明 numeric verifier，host-only 命令报告不能通过根最终验收。
+
+新的领域准备根为 `/home/ROXY/code/bb_work/preparation-rsi-rebuild-20261108/`，含当前领域合同、各 case 的原始 dataRule、稳定可信 BEMU 副本和 SHA-256；`loadDomainPackage` 已零模型加载 source 与全部四个 cases，MXMM/SMatMul 均绑定 `bemu-tools`。已知正确参考实现只留在独立预检根，没有进入领域包。旧准备目录和归档执行根未修改。默认原生 profile/env-builder/experiment 已同步用户提供的 `deepseek-v4.1-flash`、max、700000 context、40000 output；凭据仍由 launchEnvironment 注入，没有写入仓库或准备包。
+
+离线验收编写工具为 `scripts/acceptance-eval.py`，fixtures 为 app 测试目录下的 `acceptance-sums.json` 和 `acceptance-bytes.json`，覆盖 signed/zero sums 与不同的 binary XOR callable。`python3 scripts/acceptance-eval.py <fixture> prompt --interface historical|compact|examples` 仅输出目标、公开输入和编写界面，不输出标注产物；`... evaluate --check <saved-check.sh>` 在独立临时目录测试正确/错误产物，记录错误接受、错误拒绝、timeout、原始退出/输出、接受/拒绝率与耗时。两类独立正确检查均为 **0 false accepts / 0 false rejects**；空检查在 sums 放行全部 6 个负例，错误 workspace 路径拒绝正确产物。host 异常直接失败，不伪装模型或实现失败。`historical` 只是复杂字段的接口示意，并非旧模型完整上下文的精确复刻；报告明确 `modelEvidence:null`。这些确定性 fixture 证明测量路径，尚不能归因模型验收能力或证明泛化改善。
+
+最终使用 Node **24.9.0**、pnpm **11.18.0**，`pnpm install --frozen-lockfile` 成功且 lockfile 未变，根 **`pnpm verify` 全通过**：project/build/typecheck/lint 通过，protocol **209/209**、runtime **143/143**、app **99/99**，合计 **451/451**。首次根检查发现 experiment fixture 的新增冻结输入断言未迁移，修正后完整重跑通过；没有删除失败测试。验证日志持久存放在上述预检根的 `engineering/`。
+
+尚未覆盖：真实模型的三界面对照与修正次数、完整 base/candidate paired cases、独立 validation 和总成本结果。本轮尚未购买真实模型请求，没有新 comparison、improved/winner 或 activation 结论。按重建文档阶段 6 与第 14.5 项，工程和真实领域预检已满足启动前条件，下一步需另行固定小实验的窗口、总预算、case 数及绝对 deadline；不默认重启旧 12 小时 campaign。

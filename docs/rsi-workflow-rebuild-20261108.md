@@ -523,14 +523,14 @@ pnpm verify
 
 工程重建完成不要求伪造一个正向 RSI 结果。若实验无改善，应诚实保留 no-improvement，并继续从具体失败链分析，而不是扩大门禁或 prompt。
 
-## 14. 需要用户确认的公开协议决定
+## 14. 公开协议授权与实验边界
 
-以下不是本次文档写入已经批准的变更：
+2026-11-08 用户已要求按本文实施，以下 1–4 已进入 amendment 027；第 5 项仍按阶段 6 在工程检查完成后固定。
 
-1. **TemplateDraft**：是否删除 `requiredCriteria/requiredOutputs`，同时保留 `TaskProposal.acceptanceCriteria`，并统一 child 的简单 `result/` 交付。建议批准。
-2. **公共资源**：是否让公共领域 MCP 始终由 host 组合，Method 只携带自有增量。建议批准。
-3. **模型可见视图**：是否把当前 deliverable、required criteria 和待消费结果持续放入精简的当前节点视图。建议批准，复用冻结合同，不新增摘要模型。
-4. **兼容策略**：旧 Method 只归档、不为删除字段保留双格式输入。建议批准。
+1. **TemplateDraft**：删除 `requiredCriteria/requiredOutputs`，同时保留 `TaskProposal.acceptanceCriteria`，并统一 child 的简单 `result/` 交付。本轮已授权。
+2. **公共资源**：公共领域 MCP 始终由 host 组合，Method 只携带自有增量。本轮已授权。
+3. **模型可见视图**：把当前 deliverable、required criteria 和待消费结果持续放入精简的当前节点视图。本轮已授权，复用冻结合同，不新增摘要模型。
+4. **兼容策略**：旧 Method 只归档、不为删除字段保留双格式输入。本轮已授权。
 5. **真实实验**：窗口、预算、case 数和 deadline 另行确认，本次文档不授权新付费 campaign。
 
 动态编写 child 验收、领域只提供根最终验收和可选工具、不恢复预制 workflow，是本文已经明确固定、不再反复询问的重建前提。
