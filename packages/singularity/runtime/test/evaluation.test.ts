@@ -7,8 +7,8 @@ import test from 'node:test'
 import { canonicalize, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
 import type { Ref, RoundPlan, TaskRunState, TaskState } from '@singularity/protocol'
 
-import { compareEvaluation, compareVerifiedFraction, frozenEvaluationSlots, readEvaluationManifest } from '../src/evaluation.ts'
-import type { EvaluationComparator, EvaluationManifest, EvaluationSlotResult, EvaluationUsage } from '../src/evaluation.ts'
+import { compareEvaluation, compareMetricScores, compareVerifiedFraction, frozenEvaluationSlots, readEvaluationManifest } from '../src/evaluation.ts'
+import type { EvaluationComparator, EvaluationManifest, PublicEvaluationEvidence, EvaluationSlotResult, EvaluationUsage } from '../src/evaluation.ts'
 import { CommandService } from '../src/service.ts'
 
 const ref = (id: string): Ref => ({ id, digest: `sha256:${'a'.repeat(64)}` })
@@ -181,4 +181,41 @@ void test('verified-fraction comparison needs every quality trial but never conv
   assert.equal(compareVerifiedFraction(plan, evidence.map(value => ({ ...value, verdict: 'failed' }))).aggregateDelta, 0)
   assert.equal(compareVerifiedFraction(plan, evidence.map(value => value.arm === 'candidate' ? { ...value, verdict: 'failed' } : value)).aggregateDelta, -1)
   assert.equal(compareVerifiedFraction(plan, evidence.map(value => ({ ...value, usage: { ...value.usage, complete: false } }))).comparable, true)
+})
+
+void test('continuous performance uses every public trial, remains uncapped, and keeps validation separate', () => {
+  const receiptPayload = (receipt: PublicEvaluationEvidence['receipt']) => { const { digest, ...payload } = receipt; assert.ok(digest); return payload }
+  const policy = { ...plan, metric: { criterion: 'quality', name: 'quality', unit: 'points' }, thresholds: { minDelta: 0.01, maxRegression: 0 } }
+  const input = manifest(policy)
+  const measured = (publicScore: number, validationScore = 1, baselineScore = 1) => input.slots.flatMap(slot => {
+    if (slot.publicEvidence === undefined) return []
+    const value = slot.slot.arm === 'baseline' ? baselineScore : slot.slot.partition === 'validation' ? validationScore : publicScore
+    return [{ ...slot.publicEvidence, receipt: sealPublicReceipt({ ...receiptPayload(slot.publicEvidence.receipt),
+      criteria: [{ id: 'quality', verdict: 'pass' as const, reason: 'Measured by the frozen checker.', metric: { name: 'quality', unit: 'points', value } }] }) }]
+  })
+  const metricComparator: EvaluationComparator = { asset: policy.comparator,
+    describeMetric: () => ({ name: 'quality', direction: 'higher-is-better', unit: 'points', costObjective: false }), compare: compareMetricScores }
+  const compare = (evidence: ReturnType<typeof measured>) => compareEvaluation('round', ref('plan'), policy,
+    { ...input, slots: input.slots.map((slot, index) => ({ ...slot, publicEvidence: evidence[index] })) }, metricComparator)
+  assert.ok(Math.abs((compareMetricScores(policy, measured(100)).aggregateDelta ?? 0) - 99) < 1e-10)
+  assert.equal(compare(measured(2)).outcome, 'improved')
+  assert.equal(compare(measured(1, 100)).outcome, 'no-improvement', 'held-out gain cannot raise the public objective')
+  assert.equal(compare(measured(2, 0.9)).outcome, 'no-improvement', 'public gain cannot hide held-out regression')
+  assert.equal(compare(measured(1)).outcome, 'no-improvement')
+  assert.ok(Math.abs((compareMetricScores(policy, measured(2, 2, 0.5)).aggregateDelta ?? 0) - 3) < 1e-10)
+  assert.equal(compareMetricScores(policy, measured(2).slice(1)).comparable, false)
+  const wrong = measured(100).map((value, index) => index === 0 ? { ...value, verdict: 'failed' as const } : value)
+  assert.equal(compare(wrong).outcome, 'no-improvement', 'incorrect artifacts cannot earn a large performance score')
+  const missing = measured(2).map(value => ({ ...value, receipt: sealPublicReceipt({ ...receiptPayload(value.receipt),
+    criteria: [{ id: 'quality', verdict: 'pass' as const, reason: 'Missing measurement.' }] }) }))
+  assert.equal(compareMetricScores(policy, missing).comparable, false)
+  const badUnit = measured(2).map(value => ({ ...value, receipt: sealPublicReceipt({ ...receiptPayload(value.receipt),
+    criteria: [{ id: 'quality', verdict: 'pass' as const, reason: 'Wrong unit.', metric: { name: 'quality', unit: 'ms', value: 2 } }] }) }))
+  assert.equal(compareMetricScores(policy, badUnit).comparable, false)
+})
+
+void test('validation-only verified-fraction gain is never averaged into public quality', () => {
+  const evidence = manifest().slots.flatMap(slot => slot.publicEvidence === undefined ? [] : [{ ...slot.publicEvidence,
+    verdict: slot.slot.partition === 'validation' && slot.slot.arm === 'candidate' ? 'verified' as const : 'failed' as const }])
+  assert.equal(compareVerifiedFraction(plan, evidence).aggregateDelta, 0)
 })

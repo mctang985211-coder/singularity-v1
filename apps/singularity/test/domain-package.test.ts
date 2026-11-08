@@ -132,6 +132,27 @@ void test('domain loader rejects duplicate IDs and check acceptance without a fr
   await assert.rejects(loadDomainPackage(directory), /duplicate case/)
 })
 
+void test('performance domains require a frozen metric check in source and every transfer case', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'singularity-performance-domain-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const metric = { criterion: 'performance', name: 'speedup', unit: 'ratio' }
+  const draft = { goal: { summary: 'Optimize a correct implementation.', deliverable: 'result', scope: [], constraints: [] },
+    criteria: [{ id: 'performance', statement: 'Measure the correct result.', required: true, check: 'python3 measure.py', checkOutput: 'metric-json' }], inputs: [], outputs: [] }
+  await writeFile(join(directory, 'domain.json'), JSON.stringify({ v: 1, id: 'performance', task: 'task.json', acceptance: 'checks', metric,
+    source: {}, cases: [{ id: 'transfer', description: 'Transfer.', inputs: {}, task: 'transfer.json' }] }))
+  await writeFile(join(directory, 'task.json'), JSON.stringify(draft))
+  await writeFile(join(directory, 'transfer.json'), JSON.stringify(draft))
+  const domain = await loadDomainPackage(directory)
+  assert.deepEqual(domain.metric, metric)
+  assert.equal(domain.cases[0]?.task.criteria[0]?.checkOutput, 'metric-json')
+  await writeFile(join(directory, 'transfer.json'), JSON.stringify({ ...draft,
+    criteria: [{ ...draft.criteria[0], checkOutput: undefined }] }))
+  await assert.rejects(loadDomainPackage(directory), /required metric-json check/)
+  await writeFile(join(directory, 'task.json'), JSON.stringify({ ...draft,
+    criteria: [{ ...draft.criteria[0], check: undefined }] }))
+  await assert.rejects(loadDomainPackage(directory), /check/)
+})
+
 void test('MXMM numeric reference accepts exact values and rejects wrong values; command-only consumer fails final acceptance', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'singularity-buckyball-consumer-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

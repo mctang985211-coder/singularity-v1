@@ -534,3 +534,6 @@ pnpm verify
 5. **真实实验**：窗口、预算、case 数和 deadline 另行确认，本次文档不授权新付费 campaign。
 
 动态编写 child 验收、领域只提供根最终验收和可选工具、不恢复预制 workflow，是本文已经明确固定、不再反复询问的重建前提。
+
+
+2026-11-08 续测补充：用户要求采用实际性能比例评分，已授权 amendment 028；连续评测设计和 EDA 工具预检见 `docs/rsi-performance-evaluation-20261108.md`。它扩展领域指标，不改变本文 parent 编写验收和领域/宿主边界。工程完成、离线迁移验收、真实 paired 性能试验、自主多层 workflow 的证据等级继续分开记录于 `docs/progress.md`。

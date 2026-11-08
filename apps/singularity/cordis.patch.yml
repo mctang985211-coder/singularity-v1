@@ -45,7 +45,7 @@
               - id: deepseek-v4.1-flash
                 name: DeepSeek V4.1 Flash
                 contextWindow: 700000
-                maxTokens: 40000
+                maxTokens: 128000
                 input: [text]
                 reasoningEfforts:
                   max: max

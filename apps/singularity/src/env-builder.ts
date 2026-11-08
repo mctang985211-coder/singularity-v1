@@ -14,7 +14,12 @@ import { bootSpikeProfile } from './host-composition.ts'
 const ENV_BUILDER_CARD = `Prepare an independent domain directory from the operator's materials.
 Write domain.json, task.json and frozen case inputs in the current directory.
 The root goal states the external problem and deliverable. Criteria check real
-consumer outcomes. Freeze actual input bytes or exact reconstruction rules for
+consumer outcomes. For optimization tasks, define a positive continuous score:
+reference=1, higher is better, no artificial ceiling. The frozen evaluator owns
+the formula, measurement conditions, correctness checks and raw reports. Set
+checkOutput="metric-json" on the measured criterion; its successful stdout is
+one {name,unit,value} JSON object. Set domain.json metric={criterion,name,unit}
+to select it. Invalid correctness cannot earn performance. Freeze actual input bytes or exact reconstruction rules for
 source, public transfer and validation cases; paired arms must receive the same
 inputs and acceptance. Keep constraints to external invariants and deployment.
 Use executable checks for deterministic root outcomes. Use acceptance="review"

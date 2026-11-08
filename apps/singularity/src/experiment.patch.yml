@@ -3,7 +3,7 @@
     auto: true
     thresholdRatio: 0.75
     retainRatio: 0.16
-    maxTokens: 40000
+    maxTokens: 128000
     compactionRetries: 0
     maxOverflowRetries: 0
 

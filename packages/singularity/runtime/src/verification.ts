@@ -7,10 +7,12 @@ Evidence,
 ExecutionRecord,
 JsonValue,
 PublicReceipt,
+PublicCriterionResult,
 PublicReceiptValidation,
 Ref,
 SessionCut,
 TaskContract,
+TaskCriterion,
 UsageRecord,
 VerifyRequest,
 } from '@singularity/protocol'
@@ -19,6 +21,7 @@ canonicalize,
 errorMessage,
 executionRecordPayloadSchema,
 parseProtocolValue,
+publicMetricSchema,
 seal,
 sealEvidence,
 sealPublicReceipt,
@@ -143,9 +146,11 @@ export async function verifyRunSubmission(
     if (input.verifier.checksOnly === true) {
       receipt = sealPublicReceipt({ v: 1, provider: input.contract.acceptance, operationId,
         contractDigest: input.contract.digest, inputDigests: input.inputs.map(ref => ref.digest), outputDigests: input.outputs.map(ref => ref.digest),
-        criteria: [...checks].map(([id, check]) => ({ id,
-          verdict: check.exitCode === 0 && !check.timedOut && check.signal === null ? 'pass' : 'fail',
-          reason: `Frozen check: ${JSON.stringify(check)}` })), exit: { code: 0, signal: null }, timedOut: false })
+        criteria: input.contract.spec.criteria.flatMap(criterion => {
+          const check = checks.get(criterion.id)
+          return check === undefined ? [] : [checkCriterionResult(criterion, check)]
+        }),
+        exit: { code: 0, signal: null }, timedOut: false })
     } else {
       receipt = await input.verifier.verify({
         operationId,
@@ -166,6 +171,14 @@ export async function verifyRunSubmission(
       void digest
       receipt = sealPublicReceipt({ ...payload, criteria: receipt.criteria.map(criterion => {
         const check = checks.get(criterion.id)
+        const definition = input.contract.spec.criteria.find(value => value.id === criterion.id)
+        if (check !== undefined && definition?.checkOutput === 'metric-json') {
+          const measured = checkCriterionResult(definition, check)
+          const reason = `${criterion.reason}\n${measured.reason}`
+          return measured.verdict === 'pass' && criterion.verdict !== 'pass'
+            ? { id: criterion.id, verdict: criterion.verdict, reason }
+            : { ...measured, reason }
+        }
         return check === undefined ? criterion : { ...criterion,
           verdict: check.exitCode === 0 && !check.timedOut && check.signal === null ? criterion.verdict : 'fail',
           reason: `${criterion.reason}\nFrozen check: ${JSON.stringify(check)}` }
@@ -214,6 +227,22 @@ export async function verifyRunSubmission(
     receipt: validation.receipt,
     receiptRef,
   }
+}
+
+function checkCriterionResult(criterion: TaskCriterion, check: ShellRunResult): PublicCriterionResult {
+  const result = { id: criterion.id,
+    verdict: check.exitCode === 0 && !check.timedOut && check.signal === null ? 'pass' as const : 'fail' as const,
+    reason: `Frozen check: ${JSON.stringify(check)}` }
+  if (result.verdict !== 'pass' || criterion.checkOutput !== 'metric-json') return result
+  if (check.stdout.truncated) return { ...result, verdict: 'invalid', reason: 'Frozen metric output was truncated' }
+  let value: unknown
+  try { value = JSON.parse(check.stdout.text) } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    return { ...result, verdict: 'invalid', reason: `Frozen check did not emit one metric JSON value: ${error.message}` }
+  }
+  const metric = publicMetricSchema.safeParse(value)
+  return metric.success ? { ...result, metric: metric.data }
+    : { ...result, verdict: 'invalid', reason: `Frozen check emitted an invalid metric: ${metric.error.message}` }
 }
 
 /** Reuse native shell lifecycle; only CAS inputs and outputs enter the fresh check directory. */

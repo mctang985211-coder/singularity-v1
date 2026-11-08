@@ -10,6 +10,7 @@ export const acceptanceCriterionSchema = closedObject({
   id: z.string(),
   statement: z.string(),
   check: z.string().regex(/\S/),
+  checkOutput: z.literal('metric-json').optional(),
 })
 
 export type AcceptanceCriterion = z.infer<typeof acceptanceCriterionSchema>
@@ -36,6 +37,11 @@ export const taskCriterionSchema = closedObject({
   statement: z.string(),
   required: z.boolean(),
   check: z.string().regex(/\S/).optional(),
+  checkOutput: z.literal('metric-json').optional(),
+}).superRefine((criterion, ctx) => {
+  if (criterion.checkOutput !== undefined && criterion.check === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['checkOutput'], message: 'metric output requires a frozen check' })
+  }
 })
 
 export type TaskCriterion = z.infer<typeof taskCriterionSchema>

@@ -98,6 +98,43 @@ void test('check-only acceptance uses native CAS checks without a domain reviewe
   })
 })
 
+void test('frozen metric checks bind uncapped measurements to CAS outputs and reject malformed or failed reports', async () => {
+  await withHarness(() => { throw new Error('Metric checks must not request a model') }, async ({ spike, storeRoot }) => {
+    const scenario = await makeScenario(storeRoot, spike.ctx, { taskId: 'metric-verifier', maxRuns: 1 })
+    const service = await CommandService.open({ root: storeRoot, actor: { kind: 'runtime', id: 'metric-fixture' }, clock: Date.now })
+    try {
+      const output = await service.putObject('metric-check:output:result', new TextEncoder().encode('12.5'))
+      const measure = `python3 -c 'import json; from pathlib import Path; print(json.dumps({"name":"speedup","unit":"ratio","value":float(Path("${OUTPUT_PATH}").read_text())}))'`
+      const invalids = ['true', "echo junk", `echo '{"name":"speedup","unit":"ratio","value":1e999}'`, `echo '{"name":"speedup","unit":"ratio","value":12.5,"extra":1}'`]
+      for (const command of [measure, ...invalids, `${measure}\nexit 1`]) {
+        const contract = sealTaskContract({ ...contractPayload(scenario.contract), spec: { ...scenario.contract.spec,
+          criteria: [{ id: 'performance', statement: 'Measure the frozen artifact.', required: true, check: command, checkOutput: 'metric-json' }] } })
+        const result = await verifyRunSubmission({ shell: spike.ctx.shell, contract, runId: 'metric-check',
+          inputs: contract.spec.inputs.map(input => input.object), outputs: [output], reader: service, writer: service,
+          verifier: { provider: contract.acceptance, checksOnly: true } })
+        assert.equal(result.verdict, command === measure ? 'verified' : invalids.includes(command) ? 'invalid' : 'failed')
+        if (result.verdict === 'verified') assert.deepEqual(result.receipt.criteria[0].metric, { name: 'speedup', unit: 'ratio', value: 12.5 })
+        if (result.verdict === 'failed') assert.equal(result.receipt.criteria[0].metric, undefined)
+      }
+      for (const verdict of ['pass', 'fail', 'invalid'] as const) {
+        const contract = sealTaskContract({ ...contractPayload(scenario.contract), spec: { ...scenario.contract.spec,
+          criteria: [{ id: 'performance', statement: 'Measure the frozen artifact.', required: true, check: measure, checkOutput: 'metric-json' }] } })
+        const result = await verifyRunSubmission({ shell: spike.ctx.shell, contract, runId: 'metric-check',
+          inputs: contract.spec.inputs.map(input => input.object), outputs: [output], reader: service, writer: service,
+          verifier: { provider: contract.acceptance, verify: request => Promise.resolve(sealPublicReceipt({ v: 1,
+            provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,
+            inputDigests: request.inputs.map(input => input.digest), outputDigests: [output.digest],
+            criteria: [{ id: 'performance', verdict, reason: 'Independent review.',
+              ...(verdict === 'pass' ? { metric: { name: 'self-report', unit: 'ratio', value: 999 } } : {}) }],
+            exit: { code: 0, signal: null }, timedOut: false })) } })
+        assert.equal(result.verdict, verdict === 'pass' ? 'verified' : verdict === 'fail' ? 'failed' : 'invalid')
+        if (result.verdict === 'verified') assert.equal(result.receipt.criteria[0].metric?.value, 12.5, 'host measurement replaces reviewer self-report')
+        if (result.verdict === 'failed') assert.equal(result.receipt.criteria[0].metric, undefined)
+      }
+    } finally { await service.close() }
+  })
+})
+
 for (const mode of ['required', 'probe', 'failed-probe'] as const) {
   void test(`S4 ${mode} subsequent batch receives frozen output and integrates without reusing a winner or fabricating replacement`, { timeout: 240_000 }, async () => {
     const secondBinding = mode === 'required' ? 'second' : 'first'

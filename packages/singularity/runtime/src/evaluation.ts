@@ -4,6 +4,7 @@ import {
   computeDigest,
   cancellationCutSchema,
   evidenceSchema,
+  evaluationMetricSchema,
   executionRecordSchema,
   parseProtocolValue,
   publicReceiptSchema,
@@ -493,9 +494,48 @@ export function compareVerifiedFraction(plan: RoundPlan, evidence: readonly Publ
     const before = mean(baseline), after = mean(candidate)
     cases.push({ caseRef, baseline: before, candidate: after, verdict: after > before ? 'improved' : after < before ? 'regression' : 'equal' })
   }
+  const publicCases = cases.slice(0, plan.cases.length)
+  return { comparable: true as const, cases,
+    aggregateDelta: publicCases.reduce((sum, value) => sum + value.candidate - value.baseline, 0) / publicCases.length,
+    cost: pairedTokenCost(evidence) }
+}
+
+/** Domain checks own normalization and measurement; validation only guards regression. */
+export function compareMetricScores(plan: RoundPlan, evidence: readonly PublicEvaluationEvidence[]) {
+  const selected = evaluationMetricSchema.safeParse(plan.metric)
+  if (!selected.success) return { comparable: false as const, reason: 'invalid-metric-selector' }
+  const cases: ComparedCase[] = []
+  for (const caseRef of [...plan.cases, ...plan.validationCases]) {
+    const scores = { baseline: [] as number[], candidate: [] as number[] }
+    for (const arm of ['baseline', 'candidate'] as const) {
+      const trials = evidence.filter(value => same(value.caseRef, caseRef) && value.arm === arm)
+      if (trials.length !== plan.trialsPerCase) return { comparable: false as const, reason: 'missing-metric-trial' }
+      for (const trial of trials) {
+        if (trial.verdict === 'failed') { scores[arm].push(0); continue }
+        const metric = trial.receipt.criteria.find(value => value.id === selected.data.criterion)?.metric
+        if (metric === undefined || metric.name !== selected.data.name || metric.unit !== selected.data.unit
+          || !Number.isFinite(metric.value) || metric.value <= 0) {
+          return { comparable: false as const, reason: 'missing-or-invalid-performance-metric' }
+        }
+        scores[arm].push(metric.value)
+      }
+    }
+    const baseline = geometricMean(scores.baseline), candidate = geometricMean(scores.candidate)
+    cases.push({ caseRef, baseline, candidate, verdict: candidate > baseline ? 'improved' : candidate < baseline ? 'regression' : 'equal' })
+  }
+  const publicCases = cases.slice(0, plan.cases.length)
+  const baseline = geometricMean(publicCases.map(value => value.baseline)), candidate = geometricMean(publicCases.map(value => value.candidate))
+  return { comparable: true as const, cases,
+    aggregateDelta: baseline === 0 ? candidate : candidate / baseline - 1,
+    cost: pairedTokenCost(evidence) }
+}
+
+function geometricMean(values: readonly number[]): number {
+  return values.some(value => value === 0) ? 0 : Math.exp(values.reduce((sum, value) => sum + Math.log(value), 0) / values.length)
+}
+
+function pairedTokenCost(evidence: readonly PublicEvaluationEvidence[]): ComparisonCost {
   const tokens = (arm: 'baseline' | 'candidate') => evidence.filter(value => value.arm === arm)
     .reduce((sum, value) => sum + value.usage.inputTokens + value.usage.outputTokens, 0)
-  return { comparable: true as const, cases,
-    aggregateDelta: cases.reduce((sum, value) => sum + value.candidate - value.baseline, 0) / cases.length,
-    cost: { baseline: tokens('baseline'), candidate: tokens('candidate'), unit: 'reported-tokens' } }
+  return { baseline: tokens('baseline'), candidate: tokens('candidate'), unit: 'reported-tokens' }
 }

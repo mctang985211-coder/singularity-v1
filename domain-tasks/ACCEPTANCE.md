@@ -32,3 +32,13 @@ The checker inspects the submitted ELF's loadable input symbols and independentl
 replays that ELF with the pinned binary; candidate command records do not select
 the trusted executable. These are domain checks, with no Buckyball branches in
 the host. See `buckyball/README.md` for the device output interface and preparation.
+
+For performance objectives, domain.json can select `metric: {criterion, name,
+unit}`. That required criterion declares `checkOutput: "metric-json"`; its
+successful stdout is exactly one `{name, unit, value}` JSON object. The trusted
+frozen check independently measures the submitted consumer, including correctness,
+and owns the baseline, formula, workloads, tool versions and raw reports. A fixed
+reference scores 1; positive finite scores are higher-is-better with no artificial
+ceiling. Missing/truncated/malformed measurements are invalid. Failed correctness
+cannot earn performance. The host aggregates all public measurements geometrically
+and keeps validation separate; domain bundles do not own RSI control or activation.

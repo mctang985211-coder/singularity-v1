@@ -6,7 +6,7 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GlobalResourceSnapshot,JsonValue,Ref,RoundPlan,TaskContract,TaskLimits,TaskSpec } from '@singularity/protocol'
 import { admitRootTask,canonicalize,computeDigest,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseProtocolValue,resolveTemplateView,sealMethodRevision } from '@singularity/protocol'
 import type { EvaluationTaskRequest } from '@singularity/runtime'
-import { activateRoundCandidate,AGENT_REVIEW_POLICY,createAgentVerifier,compareVerifiedFraction,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,resourceAssetCatalog,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
+import { activateRoundCandidate,AGENT_REVIEW_POLICY,createAgentVerifier,compareMetricScores,compareVerifiedFraction,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,resourceAssetCatalog,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
 
 import { bootSpikeProfile,buildSingleRunComposition } from './host-composition.ts'
 import { nativeAccounting } from './accounting.ts'
@@ -21,6 +21,7 @@ export const EXPERIMENT_BUDGET = {
   maxReportedTokens,
   maxRequests: 4000,
   rounds: 3,
+  trialsPerCase: 1,
   maxActive: 4,
   reviewMaxSteps: 128,
   maxOutputBytes: 256 * 1024 * 1024,
@@ -35,7 +36,7 @@ export const EXPERIMENT_BUDGET = {
 const actor = { kind: 'runtime', id: 'singularity-experiment' } as const
 const bytes = (value: unknown) => value instanceof Uint8Array ? value : new TextEncoder().encode(typeof value === 'string' ? value : canonicalize(value))
 /** Operator host for any public domain bundle; domains own no Task or Round state. */
-export async function runExperiment(root: string, domain: ExperimentDomain, budget = EXPERIMENT_BUDGET) {
+export async function runExperiment(root: string, domain: ExperimentDomain, budget = EXPERIMENT_BUDGET, host: { readonly apiKey?: string; readonly patchFiles?: readonly string[] } = {}) {
   const startedAt = Date.now(), deadlineAt = startedAt + budget.maxWallClockMs
   const campaignId = `experiment:${basename(root).replace(/[^A-Za-z0-9_-]/g, '-')}`
   const id = (suffix: string) => `${campaignId}:${suffix}`
@@ -43,7 +44,7 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
   const cancellation = new AbortController()
   const patch = join(root, 'compaction.patch.yml')
   await copyFile(new URL('./experiment.patch.yml', import.meta.url), patch)
-  const spike = await bootSpikeProfile({ home: join(root, 'dsh'), patchFiles: [patch] })
+  const spike = await bootSpikeProfile({ home: join(root, 'dsh'), apiKey: host.apiKey, patchFiles: [patch, ...host.patchFiles ?? []] })
   const accounting = nativeAccounting(spike.ctx, { ...budget, deadlineAt, cancellation, log: join(root, 'requests.jsonl') })
   const service = await CommandService.open({ root: join(root, 'domain'), actor, clock: Date.now })
   const timer = setTimeout(() => { cancellation.abort('campaign-deadline') }, Math.max(0, deadlineAt - Date.now()))
@@ -53,12 +54,15 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
   const outcomes: unknown[] = []
   let failure: string | undefined
   const failures: unknown[] = []
-  const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
+  const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 128000 }
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
     const provider = await put(id('acceptance'), { v: 1, kind: 'independent-contract-review', policy: AGENT_REVIEW_POLICY })
     const checkProvider = await put(id('frozen-check-acceptance'), { v: 1, kind: 'frozen-contract-checks' })
-    const comparatorAsset = await put(id('comparator'), { v: 1, kind: 'paired-consumer-quality', metric: 'verified-fraction' })
+    const metric = domain.metric ?? { name: 'consumer-quality', aggregate: 'mean-verified-fraction' }
+    const metricDescription = domain.metric === undefined ? 'Mean verified consumer fraction, higher is better.'
+      : `Geometric mean of domain-normalized ${domain.metric.name} (${domain.metric.unit}); reference=1, higher is better, uncapped. Correctness is required. Public cases determine relative gain; validation must not regress.`
+    const comparatorAsset = await put(id('comparator'), { v: 1, kind: 'paired-consumer-quality', metric })
     const baseTools = await Promise.all(['bash', 'job_output', 'job_list', 'job_kill'].map(name => put(`${campaignId}:base-tool:${name}`, { v: 1, name })))
     const protocol = await put(id('task-protocol'), taskProtocolReference)
     const tools = domain.tools === undefined ? [] : await freezeDomainTools(service, domain.tools)
@@ -66,7 +70,7 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
       documents: [{ id: 'task-protocol', description: 'Task planning, decomposition, schemas and resource usage.', object: protocol }] }
     const snapshot = await freezeGlobalResources(service, id('global-resources'), snapshotValue)
     const seed = await put(id('seed'), { v: 1, name: domain.id })
-    const profile = await put(id('profile'), { v: 1, options, compaction: { threshold: 0.75, maxTokens: 40000 }, budget })
+    const profile = await put(id('profile'), { v: 1, options, compaction: { threshold: 0.75, maxTokens: 128000 }, budget })
     const methodId = id('method-empty')
     const method = await service.putObject(methodId, bytes(sealMethodRevision({ v: 1, id: methodId, templates: [], skills: [], tools: [] })), 'method')
     await commit('method/registered', { revision: method }, id('register-empty'))
@@ -133,20 +137,20 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
       if (!accounting.available()) break
       const remaining = Math.max(1, deadlineAt - Date.now())
       const plan = { v: 1 as const, cases: cases.filter(value => !value.validation).map(value => value.ref), validationCases: cases.filter(value => value.validation).map(value => value.ref),
-        metric: { name: 'consumer-quality', aggregate: 'mean-verified-fraction' },
-        thresholds: { minDelta: 0.01, maxRegression: 0, maxRelativeCostIncrease: 1 }, trialsPerCase: 1,
+        metric,
+        thresholds: { minDelta: 0.01, maxRegression: 0, ...(domain.metric === undefined ? { maxRelativeCostIncrease: 1 } : {}) }, trialsPerCase: budget.trialsPerCase,
         proposerBudget: { ...budget.proposerBudget, maxWallClockMs: remaining }, budget: { ...budget.evaluationBudget, maxWallClockMs: remaining },
         validation: 'required-by-domain' as const, claim: 'domain-evaluation' as const, comparator: comparatorAsset, sourceSeed: seed, expectedPreviousActiveMethod: active }
       await openRsiRound({ service, actor, roundId, sourceTrace: trace.trace, baseMethod: active, plan, proposerSessionId: `${roundId}:proposer` })
       const workspace = join(root, 'proposers', String(index + 1)); await mkdir(workspace, { recursive: true })
       const proposal = await executeRsiProposer({ ctx: spike.ctx, service, actor, roundId, workspace, agentOptions: options,
         publicEvaluation: { goal: 'Improve reusable reasoning, workflow and interfaces across different real consumer tasks. Instance outputs stay in Task results.',
-          metric: 'Mean verified consumer fraction per paired case, higher is better. Validation quality must not regress; report total tokens and elapsed time separately.',
-          thresholds: ['Mean consumer-quality delta at least 0.01 with no per-case regression; total reported token cost at most 2x baseline. Token reduction alone is not an improvement.'], validationPolicy: 'required-by-domain',
+          metric: `${metricDescription} Report total tokens and elapsed time separately.`,
+          thresholds: [domain.metric === undefined ? 'Public quality gain at least 0.01 with no per-case regression; reported token cost at most 2x baseline.' : 'Public geometric-mean performance gain at least 1% with no per-case regression. Generation costs are reported separately.'], validationPolicy: 'required-by-domain',
           publicCases: domain.cases.filter(value => !value.validation).map(value => ({ id: value.id, description: value.description })) } })
       const precheck = proposal.proposalRef === undefined ? undefined : await precheckMethodPatch({ service, actor, roundId })
       const evaluation = precheck?.accepted === true ? await evaluateRsiCandidate({ service, actor, roundId,
-        comparator: { asset: comparatorAsset, describeMetric: () => ({ name: 'consumer-quality', direction: 'higher-is-better', unit: 'verified-fraction', costObjective: false }), compare: compareVerifiedFraction },
+        comparator: { asset: comparatorAsset, describeMetric: () => ({ name: domain.metric?.name ?? 'consumer-quality', direction: 'higher-is-better', unit: domain.metric?.unit ?? 'verified-fraction', costObjective: false }), compare: domain.metric === undefined ? compareVerifiedFraction : compareMetricScores },
         async runTask(slot) { const value = cases.find(value => value.ref.id === slot.slot.caseRef.id); if (value === undefined) throw new Error('Missing frozen case'); await runTask(await contractFor(slot.slot.taskId, value.spec, slot.slot.method, 'evaluation', slot.requestRef, value.acceptanceKind), slot) },
       }) : undefined
       let activation

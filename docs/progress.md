@@ -684,3 +684,19 @@ ledger 与 DAG 在每组都各完成 3 份检查。18 份脚本在 fresh 目录�
 计划冻结在 `/home/ROXY/code/bb_work/workflow-quality-study-20261108/plan.json`：一个空 Method source、原生 proposer/precheck、两个 public 与一个独立 validation case 的 base/candidate 各一次，共计划 7 个 root Task；不强制分解。原模型/max/700k/128k 路由，经本地 wire fixture 再次确认 `max_completion_tokens=128000`，零付费。使用 study 内只调整启动配置和诊断说明的既有 experiment host 副本，生产协议、runtime、验收权威及主比较规则没有改写。上限 **1000 请求 / 40,000,000 reported tokens**，北京时间 **2026-11-09 03:00** 绝对 deadline；单 Task 最多两次 Run，单 Run 96 steps，maxActive=2，原生余额不足立即取消且停止后续购买。
 
 新执行根为 `workflow-quality-study-20261108/run-workflow-quality-20261108`，ID 前缀随新 basename 产生。进程 PID/SID **1178193**，启动终端退出后 PPID=1、stdin 注入后关闭、stdout/stderr 持久保存为 `run.log`，首次请求前 27 项冻结哈希匹配。若需定向引导父子协议测试，另用全新根和冻结计划，并明确它不证明空 Method 自主发现多层 workflow。本节仅为启动与诊断证据，实际完成量和结论以结束记录为准。
+
+### workflow 续测结束与统计更正（2026-11-08 21:15 审计）
+
+`workflow-quality-study-20261108` 已完成一个 source、proposal/precheck 和六个 paired slots：**7 root / 0 child**，所有终局根及全部八项业务检查通过，两臂均满分，冻结主比较为 **no-improvement**。没有实际 child、feedback 或候选 activation；增加业务检查粒度提高了负例诊断能力，没有为这次满分比较创造性能信号。新增 **144 请求 / 5,355,692 reported tokens**（input 5,157,458 / output 198,234），unknown=0，未见余额不足。含既有研究累计 **688 请求 / 106,368,048 reported tokens / unknown=1**。
+
+修正操作者 `summarize.py`：旧脚本错误匹配不存在的 task/root-admitted，并把 CAS Ref 当合同；实际 task/admitted 的 contract 经 CAS 解析后是 7 roots，而不是旧 report 的 0。原始 facts、plan、result 不改。旧汇总保存在 `report-initial-20261108-2036.json`，SHA `e22a64c06c9e3642f7ac83b33488b8eca1ab14f369a144cc97a0dbe01c573204`；它记录 20:36 结束检查时全部冻结文件匹配。纠正后的 report 将该历史检查与当前源码哈希分开：本轮评分代码已经修改，所以当前 live hashes 不全匹配，不能冒称旧实验是在新实现上完成。
+
+### 连续性能评分实现与零模型 EDA 验证（2026-11-08）
+
+用户明确要求参考 KernelBench、基线为 1、按照性能比例无上限评分，并使用现成 EDA 数据，形成 amendment 028。旧通过率饱和结论保持；新增连续评分、metric-json 冻结 check 与 manifest metric selector，复用现有 receipt，不新增领域调度器。普通质量任务保留 verified fraction，public 与 validation 聚合分开。主机默认输出与原生 compaction/profile 更新为 **128,000**，保持 max / 700,000 context；操作者可在既有 host 显式注入凭据/原生 patch 并冻结重复次数。
+
+根 **pnpm verify 全部 456/456 通过**（protocol209 / runtime145 / app102），包括正数无上限、所有 trial、正确性失败、缺失/错误测量、validation 独立约束、真实 DSH CAS-only shell 测量，以及 review fail/invalid 不被数值放行、模型自报 999 被宿主实测 12.5 替换。定向预检到根验证过程中修正了测试重封 receipt 包含旧 digest、非空断言与未使用变量；最终 build/typecheck/lint/test 全通过，日志位于 `performance-rsi-study-20261108/verify-final.log`。
+
+公开领域冻结 ready/valid popcount 接口、W16/32/64/48、固定向量和工艺/时钟条件，用真实 VCS W-2024.09-SP1 测功能/周期，再用 DC R-2020.09-SP5 / SMIC180 标准单元库测面积/时序。首选 IO 库无逻辑映射、VCS 误用 PATH 的 GCC15、参数化 elaborate 后重复 current_design 名称等预检问题已保留原始失败并在购买前修正。有效参考的 mapped area 4574.1696/5678.668779/7850.035142/6719.19356 um²，延迟与 II 为17/33/65/49周期，全部时序通过；独立并行实现面积1021.708813/1968.15363/3746.265664/2799.820847 um²、延迟与II均1，得分12.1782/17.9445/27.5425/23.0512，参考复测为1。原生 verifier 再从CAS独立重测得到12.1782，stdout与7998字节stderr均未截断；不能把这些已知实现的评测器预检当成模型学习提升。
+
+公式为 `(Aref/A)^0.25*(Lref/L)^0.375*(T/Tref)^0.375`，正确性、完成映射、固定时钟非负slack是硬约束。power report 为默认活动率综合估计，留存而不计分；未声称 post-layout 完整PPA。方法调研、接口和测量定义见 `docs/rsi-performance-evaluation-20261108.md`；领域、原始EDA报告及后续新鲜实验位于 `/home/ROXY/code/bb_work/performance-rsi-study-20261108/`。自主多层 workflow 仍未由本轮证明。

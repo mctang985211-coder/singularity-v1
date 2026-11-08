@@ -2038,7 +2038,7 @@ outcome = improved | no-improvement | insufficient-evidence
 
 tokenCosts 按 arm 汇总整棵 Task 子树及失败尝试；inputTokens 仍是含 cache 的总口径，uncachedInputTokens=inputTokens-cacheReadTokens-cacheWriteTokens。只有 complete 且所有相关 provider 都报告 cache 字段时 cacheComplete=true；否则 cache 三项为 null，不当作 0。费用比较和质量结论是独立输出，不能由 token 下降反推能力提升。
 
-通用实验以 paired verified consumer fraction 为质量指标，只有真实 consumer 通过率提高且各 case/validation 不回退才可能 improved；token 只作分列成本与冻结上限，token 下降本身是 no-improvement。领域 bundle 只能通过冻结公开 criteria 和 case 数据表达业务质量，不能注入自定义 comparator、aggregate、minimum sample、threshold 或调度回调；这些通用规则由 host 固定。source replay 只验证协议链路，不能作为领域改进或自动发布依据。
+未声明性能指标的通用实验以 paired verified consumer fraction 为质量指标；性能优化按 §19.3 使用连续指标。public 主目标须提高且各 case/validation 不回退才可能 improved；token 只作分列成本与已冻结上限，token 下降本身不构成主目标改善。领域 bundle 只能通过冻结公开 criteria 和 case 数据表达业务质量，不能注入自定义 comparator、aggregate、minimum sample、threshold 或调度回调；这些通用规则由 host 固定。source replay 只验证协议链路，不能作为领域改进或自动发布依据。
 
 validation=required-by-domain 时，本轮必须按预先冻结的独立 validation/holdout cases 与预算完成验证；未完成则 insufficient-evidence，不产生可发布的 improved。validation=none 可以做 source replay，结论必须标注 claim=source-replay，只验证协议链路，不自动激活 production head。单题变好而领域 validation 退化、成本阈值失败或任一冻结回归条件不满足，不能判为 improved。
 
@@ -2210,6 +2210,14 @@ T15 若 domain evaluation 和发布门槛均满足，操作者以 CAS 授权 act
 
 这个例子不固定 child 数或树深。长链任务按职责、产物与检查边界组织直属 workflow；已收敛为有界、可直接验证单元的叶节点直接完成。它展示了从零发现 workflow、形成资产、下一版固定绑定的边界；实际 domain 不需要为此修改 core。
 
+### 19.3 连续性能评测（amendment 028）
+
+优化领域必须在准备时明确用户目标、正确性与资源约束、测量条件及性能函数。领域可在 domain.json 声明 `metric:{criterion,name,unit}`，选择一个 required criterion 的宿主测量值；该 criterion 的 `checkOutput:"metric-json"` 要求冻结 check 正常退出后，stdout 恰为一个 `{name,unit,value}` JSON 对象。宿主复用 `PublicMetric` schema 校验并绑定到现有 PublicReceipt；截断、缺失、非有限值、类型/格式错误是 invalid，不生成虚假 Evidence，也不回退为通过率。普通 check 未声明此字段时继续按进程结果结算。parent 的 acceptanceCriteria 可用相同字段，随实际 child 合同冻结；不改变验收先于实现和 root authority。
+
+性能函数由领域冻结脚本实现，例如固定参考延迟/实测延迟、实测吞吐/固定参考吞吐，或指定权重的功耗/面积/时延比值乘积。参考实现分数为 1，正确产物的分数须为有限正数、越大越好、无人工上限；测量为零/未完成不能伪造无限加速。正确性、工艺角、频率、精度和资源上限属于领域问题。宿主只组合公开数据和通用比较，不包含 CUDA、BEMU、PPA 算法或工具配置；模型自报分数不是测量证据。
+
+通用性能比较读取冻结 PublicReceipt 的指定 criterion metric，全部正确的 public trials/cases 使用几何平均；aggregateDelta 为 candidate/baseline−1（baseline 因功能失败为 0 时，仅以 candidate 的有限值表示从不可用到可用）。有真实 failed Evidence 的产物得 0；missing/invalid evidence 或正确产物缺测量一律 insufficient-evidence，不能跳过难题、只平均变快样本或把缺失当 0。独立 validation 不计入 public 聚合，仅承担逐 case 不回退检查；普通 verified-fraction 比较同样不把 validation 的增益平均进 public 分数。Token、费用与研究时间单独报告，性能任务不默认用旧的 2× token 约束替代性能目标；操作者预算/截止仍正常生效。旧冻结实验不追溯改判。
+
 ## 20. Protocol conformance 场景
 
 随当前可运行路径验证对应 scenario，未覆盖项标为 unproven。以下清单用于记录协议证据，正常功能沿依赖继续推进；启动与同进程续接遵循 §19.1。
@@ -2367,6 +2375,7 @@ C-24 single-case gain with validation regression is not improved
 | 026 | 2026-11-07 用户明确批准关键激进减量、Buckyball 根合同修正及 RSI 评测重做；已纳入 §4/§6/§7/§9/§15/§17/§18/§19 | PlanningSketchDraft 仅含业务字段，host 盖章 task/run/contract/epoch；MethodPatchDraft 不含 base，host 派生 acceptancePolicy、默认 TaskProposal schema 和 learning outputs，删除模型抄写及旧 instanceSchema 门禁。probe 一次 Run 后 terminal，parent 决定集成或新 probe；required retry/replacement 保留。case 可覆盖 TaskSpec/acceptance，通用质量比较采用真实 consumer verified fraction，cache read/write 与 uncached cost 分列且未知为 null。保留 CAS、真实绑定、receipt 和 required join，不增加兼容输入或新 fact。 |
 
 | 027 | 2026-11-08 用户要求按详细重建文档实施；已纳入 §4/§5/§6/§12/§17/§19 | 删除 TaskTemplate/TemplateDraft 的 requiredCriteria、requiredOutputs；实际 child 验收只由 parent 编写并冻结，统一 required result/ tree。公共环境在所有层由 host 组合，Method 只含自有增量，冲突显式拒绝。NodeView 持续展示交付物、required criteria 文字与输入路径。旧 Method/CAS 仅归档，不保留双格式。验收疑义先 feedback；replyTo 不改合同，blocked 后新 Task 复用旧 CAS。离线正误产物评测不加入生产准入；质量、独立 validation 与总成本分别报告。真实模型实验仍在工程和真实领域预检后单独固定预算、窗口与 deadline。 |
+| 028 | 2026-11-08 用户要求参考 KernelBench 以性能比例持续评分并继续测试；已纳入 §19.3 | 冻结 check 可声明 metric-json 并通过现有 PublicMetric/PublicReceipt 返回宿主测量；领域声明业务指标选择和公式，参考=1、正数且无人工上限。通用比较全部 public trials/cases 的几何平均和相对增益，validation 独立不回退；功能失败为0、缺失/invalid不得填0。性能主目标不默认受2×生成tokens约束；成本另报。没有新增调度器、领域算法或模型自报评分 authority。 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

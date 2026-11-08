@@ -2,8 +2,8 @@ import { readFile,readdir } from 'node:fs/promises'
 import { join,resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import type { JsonValue,Ref,TaskSpec,ToolAsset } from '@singularity/protocol'
-import { canonicalize,closedObject,parseJsonText,parseProtocolValue,seal,taskSpecSchema,toolAssetSchema,workspaceRelativePathSchema,z } from '@singularity/protocol'
+import type { EvaluationMetric,JsonValue,Ref,TaskSpec,ToolAsset } from '@singularity/protocol'
+import { canonicalize,closedObject,evaluationMetricSchema,parseJsonText,parseProtocolValue,seal,taskSpecSchema,toolAssetSchema,workspaceRelativePathSchema,z } from '@singularity/protocol'
 import type { CasObjectWriter } from '@singularity/runtime'
 
 import { runExperiment } from './experiment.ts'
@@ -22,6 +22,7 @@ export interface ExperimentDomain {
   }[]
   readonly tools?: { readonly root: string; readonly manifest: string }
   readonly acceptance?: 'review' | 'checks'
+  readonly metric?: EvaluationMetric
 }
 
 /** A loaded domain is data, not an executable adapter. These checks are the
@@ -60,6 +61,7 @@ const domainManifestSchema = closedObject({
     task: file.optional(), acceptance: z.enum(['review', 'checks']).optional(), validation: z.boolean().optional(),
   })),
   tools: file.optional(),
+  metric: evaluationMetricSchema.optional(),
 })
 export type TaskDraft = z.infer<typeof taskDraftSchema>
 const toolDraftSchema = toolAssetSchema.extend({
@@ -74,6 +76,7 @@ export async function loadDomainPackage(directory: string): Promise<ExperimentDo
   const manifest = parseProtocolValue(domainManifestSchema, await readJson(join(root, 'domain.json')))
   const draft = parseProtocolValue(taskDraftSchema, await readJson(join(root, manifest.task)))
   validateTaskDraft(manifest.task, draft, manifest.acceptance ?? 'review')
+  validateMetric(draft)
   const caseIds = new Set<string>()
   const cases = []
   for (const definition of manifest.cases) {
@@ -82,6 +85,7 @@ export async function loadDomainPackage(directory: string): Promise<ExperimentDo
     const selected = definition.task === undefined ? draft
       : parseProtocolValue(taskDraftSchema, await readJson(join(root, definition.task)))
     validateTaskDraft(definition.task ?? manifest.task, selected, definition.acceptance ?? manifest.acceptance ?? 'review')
+    validateMetric(selected)
     cases.push({
       id: definition.id, description: definition.description,
       ...(definition.validation === undefined ? {} : { validation: definition.validation }),
@@ -97,6 +101,14 @@ export async function loadDomainPackage(directory: string): Promise<ExperimentDo
     cases,
     ...(manifest.tools === undefined ? {} : { tools: { root, manifest: manifest.tools } }),
     acceptance: manifest.acceptance ?? 'review',
+    ...(manifest.metric === undefined ? {} : { metric: manifest.metric }),
+  }
+
+  function validateMetric(task: TaskDraft) {
+    if (manifest.metric !== undefined && !task.criteria.some(criterion => criterion.id === manifest.metric?.criterion
+      && criterion.required && criterion.check !== undefined && criterion.checkOutput === 'metric-json')) {
+      throw new Error('Domain performance metric requires a required metric-json check in every case')
+    }
   }
 }
 
