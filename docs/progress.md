@@ -674,3 +674,13 @@ ledger 与 DAG 在每组都各完成 3 份检查。18 份脚本在 fresh 目录�
 `postflight-audit.json` 核对 18 个请求均只含冻结公开任务和适用的原源建议，无目标标签/反馈；18 份 shell 与正常 stop 的原始文本完全一致，仅按计划剥除外层 fence；144 个 artifact 标签与冻结 fixture 一致，未改脚本或真值。已生成脚本中未匹配旧执行根、目标 fixture 宿主路径或常见网络访问字面串；这是静态检查，不冒充系统调用级隔离。plan 自身 digest 与全部 **16 项冻结文件 SHA-256** 结束后均匹配。原生模型/调用配置和本地 wire 预检确认 128,000 输出上限；共享生产 profile 没有改写。
 
 本次新增 **18 请求 / 779,892 reported tokens**（input 20,667、output 759,225、unknown=0），未见 `QUOTA` / `ACCOUNT_QUOTA`。含先前 40k 源学习/截断/目标研究，验收迁移研究合计 **38 请求 / 1,528,408 reported tokens / unknown=0**；全部离线、Buckyball campaign 与迁移研究累计 **544 请求 / 101,012,356 已报告 tokens / unknown=1**，未知项仍是最早离线 deadline 中断请求。已结束追加购买，没有新 activation。工程重建与既有根 **452/452** 验证保持完成；本次只新增独立操作者实验配置、证据及文档，原生零费用配置验证与实际 144 次产物判定完成，没有机械重跑未改变的生产门禁。
+
+### 评分饱和诊断与真实 workflow 续测启动（2026-11-08 20:01）
+
+用户要求继续测试，并检查 `no-improvement` 是否来自领域评分粒度。核对 `compareVerifiedFraction` 与原冻结 plan：旧 Buckyball 比较只把根最终 verified 计为 1，四个 case 的 baseline/candidate 全为 1，质量分上界也是 1；minDelta=0.01 且 costObjective=false，故质量 delta=0 必然是 no-improvement。paired token 下降 59.39% 是单次观察到的效率差异，不能按旧规则改记质量改善。新增 `/home/ROXY/code/bb_work/workflow-quality-study-20261108/scoring-audit.json` 记录该结论，旧结果不改。更细的业务检查有助诊断与暴露未覆盖错误；把同样满分拆成更多项不会产生提升，也不能给 child 数量、树深或审查次数加分来制造正向结果。候选 templates.children=[] 在当前协议下仍继承公共探索 binding，不是模型被禁止分解的证据。
+
+新公开可信本地领域为 reconciliation workbench，要求账本 CSV 精确整数/Unicode、最小字典序 DAG/重复边/环诊断及 manifest-relative batch 集成，领域只规定外部 CLI 和最终验收，不规定 Task 树。根最终验收分 **8 个独立 required 业务项**；主比较继续使用完整 root verified fraction，逐项结果、首轮/最终成功、父子合同/反馈/产物消费和 token/time 单独报告。操作者第一次零模型预检发现“写相邻文件”负例未被检查捕获，补入预先存在的 sentinel 文件保全检查后重新完成：4 个 case × 2 个独立参考实现 × 8 项，共 **64/64 正例检查通过**，7 类错误 consumer 全被至少一个业务项拒绝；配置和所有样本在付费前冻结。`preflight.json` 记录实际负例失败项。
+
+计划冻结在 `/home/ROXY/code/bb_work/workflow-quality-study-20261108/plan.json`：一个空 Method source、原生 proposer/precheck、两个 public 与一个独立 validation case 的 base/candidate 各一次，共计划 7 个 root Task；不强制分解。原模型/max/700k/128k 路由，经本地 wire fixture 再次确认 `max_completion_tokens=128000`，零付费。使用 study 内只调整启动配置和诊断说明的既有 experiment host 副本，生产协议、runtime、验收权威及主比较规则没有改写。上限 **1000 请求 / 40,000,000 reported tokens**，北京时间 **2026-11-09 03:00** 绝对 deadline；单 Task 最多两次 Run，单 Run 96 steps，maxActive=2，原生余额不足立即取消且停止后续购买。
+
+新执行根为 `workflow-quality-study-20261108/run-workflow-quality-20261108`，ID 前缀随新 basename 产生。进程 PID/SID **1178193**，启动终端退出后 PPID=1、stdin 注入后关闭、stdout/stderr 持久保存为 `run.log`，首次请求前 27 项冻结哈希匹配。若需定向引导父子协议测试，另用全新根和冻结计划，并明确它不证明空 Method 自主发现多层 workflow。本节仅为启动与诊断证据，实际完成量和结论以结束记录为准。
