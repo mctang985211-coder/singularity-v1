@@ -563,3 +563,13 @@ Buckyball 的冻结数据存在更根本的可达成性矛盾。本次按公开 
 无模型 OS 实测使用同一 Node 24.9.0：关闭控制 PTY 后，附着进程以 SIGHUP 退出且未写 finally 标记；标准 `subprocess.Popen(start_new_session=True)` 配合独立 stdin 和持久 stdout/stderr，在启动 PTY 关闭后仍正常完成并写出 finally 标记。这证明启动方式的失效机制，**不等于恢复出原进程的退出信号**。最有力的解释是宿主卸载回收了附着终端，启动方式由操作者负责；尚未找到由 Singularity 代码修改触发的异常，也不能仅凭测试通过排除所有代码缺陷。
 
 证据存放于 `/home/ROXY/archives/singularity-v1/legacy-cleanup-20261108/campaign-interruption-20261108/`，包括原始 shutdown 日志摘录、无模型 PTY 对照和带限制说明的 assessment。README 与施工约束补充了独立 OS session 和持久日志要求；没有改动调度代码，没有新增静态门禁、自动重启或恢复机制，也没有在本次诊断中购买新模型请求。退出的执行根保持原样，仅供归档分析。
+
+### 动态 workflow 与可信验收重建计划（2026-11-08）
+
+倒查 `0a0d280` 及其前后提交、最近真实执行和验收消费者后，形成[动态 workflow 与可信验收重建计划](rsi-workflow-rebuild-20261108.md)。计划明确保留 parent 在 child 准入前动态编写并冻结验收的职责，领域只提供根最终验收和可选验收工具；建议收缩公共资源绑定与 Method 固定合同，利用现有父子对话、负例和真实消费者提高验收可信度，并以离线正确/错误产物区分框架引导与模型能力。
+
+本次只新增审计规划及此入口，没有批准 amendment 027、修改协议或代码、启动新付费实验。TemplateDraft 字段删除、公共资源自动组合、模型可见视图和兼容策略仍需用户明确确认；当前有效协议继续以 `framework.md` 及其 `spec-lock.json` 为准。
+
+### amendment 027 重建实施（2026-11-08）
+
+用户要求按重建文档施工，第 14 节 1–4 已授权：保留动态 child 验收，删除模板固定 criteria/outputs，公共资源统一组合，持续展示当前合同关键事实，旧 Method 只归档。已从审计 HEAD 新建 codex/rsi-workflow-rebuild-20261108 分支；保留原工作区规划与进度记录。工程与领域预检正在实施，尚未购买新模型请求。真实实验须在检查后固定窗口、预算及绝对 deadline。

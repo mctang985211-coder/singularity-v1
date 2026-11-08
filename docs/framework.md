@@ -299,21 +299,21 @@ base outputs
 → __mcp-drafts（tree, role='mcp-draft', required=false）
 ~~~
 
-- base 顺序严格保留（root: operator/domain 授权 outputs；child: template.requiredOutputs）；local 顺序严格保留；drafts 永远最后，固定 skill 在前、MCP 在后。
+- base 顺序严格保留（root: operator/domain 授权 outputs；child: 固定 required result/ tree）；local 顺序严格保留；drafts 永远最后，固定 skill 在前、MCP 在后。
 - root 也追加两个 drafts，保持“每个 TaskContract”一致；`includeLearningDrafts` 只控制提交时是否冻结实际目录，不控制是否声明 drafts。
-- 合并后 `id`、`path` 必须唯一；重复 → `INVALID_ARGUMENT`，不覆盖、不去重。base/local 不得使用保留 ID `__skill-drafts`/`__mcp-drafts` 或保留 path `learning-drafts`/`learning-drafts/`；template 使用 draft role/path 在 Method precheck/admission 拒绝。
-- `spec.criteria` 保留模板义务在前、parent acceptanceCriteria 在后的声明顺序；inputs 保留 proposal 顺序，acceptance provider 仍由 host 解析。
+- 合并后 `id`、`path` 必须唯一；重复 → `INVALID_ARGUMENT`，不覆盖、不去重。base/local 不得使用保留 ID `__skill-drafts`/`__mcp-drafts` 或保留 path `learning-drafts`/`learning-drafts/`；localOutputs 不得声明 draft role/path。
+- child `spec.criteria` 只来自 parent acceptanceCriteria，全部为 required 并保留声明顺序；inputs 保留 proposal 顺序，acceptance provider 仍由 host 解析。
 - 失败发生在 append fact 之前：不产生 child、fact 或预算预留。seal 不重排、不追加；admission guard 验证 tail 恰好是两个 drafts。
 
 ### 4.3 AcceptanceRef 的权威
 
 Root 的 criteria、验收类型和冻结输入来自用户授权的 domain case/operator；verifier、check runner 与 scorer 由 host 按统一接口提供，不属于 Method。
 
-Child 的 goal、完整 inputs、输出接口和 acceptanceCriteria 由 parent 在派发前编写。新增测试代码可直接内联在 check 中，使用冻结输入和声明输出相对路径，从 workspace 根执行。host 仅校验合同结构、授权与冻结身份，不判断自然语言测试充分性；独立领域 review 仍可因未覆盖的目标缺陷否决。模板的继承义务保留，root 评分标准不可被 child 或 RSI 放宽。
+Child 的 goal、完整 inputs、输出接口和 acceptanceCriteria 由 parent 在派发前编写。新增测试代码可直接内联在 check 中，使用冻结输入和声明输出相对路径，从 workspace 根执行。host 仅校验合同结构、授权与冻结身份，不判断自然语言测试充分性；独立领域 review 仍可因未覆盖的目标缺陷否决。root 评分标准不可被 child 或 RSI 放宽。
 
 `TaskContract.acceptance` 是 `object` domain 的 `AcceptanceRef`，冻结 acceptance policy 与 provider identity；领域装载结果不得使用未列 domain 或裸 digest。宿主解析出的 provider 必须与 `PublicReceipt.provider`、`Evidence.verification.provider` 在 `id` 和 `digest` 上完全一致；不匹配按 `invalid` 结算，不能补写 closure。`AcceptanceRef` 的对象 schema 仍由领域发布声明，本规范只冻结 ref domain、身份比较和 receipt 绑定规则。
 
-因此 RSI 可以改 child template 的目标、预填 criteria、输出结构和分解关系；**不能改已经准入的 Task，不能改 root case、root acceptance 或 host 的验收/比较实现**。不得把“不能修改 live contract”误解成“不能改未来 child template 的验收描述”。
+因此 RSI 可以改可迁移 guidance、示例、能力与可选直属职责目录；实际 child 的目标和验收仍由 parent 针对当前输入与消费者编写。**不能改已经准入的 Task、root case、root acceptance 或 host 的验收/比较实现**。
 
 Child contract 的 schema 合法不证明子任务自然语言目标一定足够支持父目标。最终仍由 parent 的独立验收负责，框架不声称能做语义蕴含证明。
 
@@ -336,12 +336,6 @@ interface TaskTemplate {
   readonly guidance: ObjectRef
   readonly example: ObjectRef
   readonly instanceSchema: JsonSchema       // 仅校验可填写的 TaskProposal
-  readonly requiredCriteria: readonly {
-    readonly id: string
-    readonly statement: string
-    readonly required: boolean
-  }[]
-  readonly requiredOutputs: readonly OutputSpec[]
   readonly acceptancePolicy: AssetRef
   readonly skills: readonly string[]
   /** MCP server asset IDs; each server may expose multiple domain tools. */
@@ -388,7 +382,7 @@ interface ToolAsset {
 - 允许有界递归引用，例如一般 design task 再分解成 design task；实际执行必受深度、Task 数和祖先预算约束。
 - 实例 Task 总有唯一父节点，形成责任树；模板目录可以复用。两者不能混为一种 graph。
 - 每层只有自己的 guidance；不设一段对所有 descendants 自动注入的全局 Method 长 prompt。公共方法说明应做 skill，显式绑定到需要的层。
-- 一个模板的 skills/tools/children 都由 Method 固定。这里的 tools 是完整 MCP server asset 的绑定；server 自己呈现其工具集合。Task worker 不能改绑定，RSI proposer 可以通过下一 revision 修改。
+- 模板的 skills/tools 只绑定 Method 自有能力；公共领域 skills/MCP 由 host 在所有层自动组合，含带 children 的层。tools:[] 不移除公共能力；公共环境只由 operator/deployment 修改。自有与公共资产身份冲突显式拒绝，不能静默覆盖。children 是可选直属职责目录，required 仅约束已选择职责的 winner/join。
 - method-empty 是 templates/skills/tools 均为空、entryTemplateId 缺省的合法 Method。不是偷偷预装一个领域 workflow。
 - 平台 fallback ID 和 Task/RSI/DSH 基础 tool 名称是保留命名空间；Method 资产不得重名覆盖，实际注册前拒绝冲突。
 
@@ -461,7 +455,7 @@ explore-child 创建的 child                    → 开始时再独立获得同
 
 所以“只一级”是**每个模型只组织自己的直接下一层**，不是“任务树总深度只能为一”。fallback 可递归，仍受根 maxDepth/maxTasks 限制。
 
-平台 explore-child 不预制 child 验收。parent 在准入前编写非空 acceptanceCriteria，形成 required 合同项；host verifier/check runner 对照该 child 的冻结目标与接口独立检查，命令失败不能被 review 放行。每个探索 child 继承 required deliverable `{id:'result', path:'result', kind:'tree'}`，将产物放入 result/ 并以 output ID result 提交；localOutputs 只追加 supporting 输出。root 仍使用 operator/domain 定义的验收与输出。
+平台 explore-child 不预制 child 验收。parent 在准入前编写非空 acceptanceCriteria，形成 required 合同项；host verifier/check runner 对照该 child 的冻结目标与接口独立检查，命令失败不能被 review 放行。每个 child 固定 required deliverable `{id:'result', path:'result', kind:'tree'}`，将产物放入 result/ 并以 output ID result 提交；localOutputs 只追加 supporting 输出。root 仍使用 operator/domain 定义的验收与输出。
 
 平台 `explore-child` fallback 的默认 join 是 `probe`；只有 root/domain admission 明确把该 fallback binding 固定为 required 时，才建立 required obligation。模型不能把 fallback 从 probe 改成 required。
 
@@ -480,7 +474,7 @@ MCP servers → { name, exposed tools, manifest digest, bundle digest }
 
 探索层首次自动获得以上资源的摘要列表；正文按需读。这里的“未绑定”指没有绑定到 Method 模板，**并不等于任意宿主资源**。
 
-普通层只获得自己的冻结 bindings；探索层额外获得 snapshot 中由部署许可的公开能力。探索层实际调用的 global skill/MCP server/tool ID 都进 DSH trace，供 RSI 决定下一版应绑定什么。
+所有层自动组合 snapshot 中由部署许可的公共能力与自身 Method bindings；baseline/candidate 使用同一 snapshot。公共资源不复制进 Method，实际调用身份继续进入 DSH trace。
 
 公开集合由 domain/operator 明确配置。静态资产在注册/precheck 时按各自上限校验；NodeView 在实际渲染时校验 8 KiB，不在 admission 模拟未来动态视图。渲染超限返回明确错误，调整公开集合后运行，不静默隐藏条目。
 
@@ -1155,7 +1149,7 @@ Root closed 后停止/排空其所有 owned executions，确定 DSH 最终日志
 | 可调用 tools schema | DSH tools provider | 每步实际可调用集合 | 领域资产可改 |
 | 子结果 | direct child summary +只读输出挂载 | child terminal 后 | 仅是事实 |
 
-self 返回完整授权 InputRef（含 object.id/digest）和所有 criterion/check，沿既有分页；每页 data 都是同一 JSON 文本，连续拼接后解析，不在单页对象与分页字符串之间切换。criteria 只出现一次，acceptanceProvider 单独保存 provider Ref，不重复 criteria。child 从真实返回复制输入。完整 TaskSpec 不被永久截成一句摘要。NodeView 只包含 goal 摘要时，obligations.readSelf=true，所有工作写工具/领域执行/分解/submit 都 gate 在 self read 后；读完仍保留 compact view，全文保存在 transcript，可按需重读。
+self 返回完整授权 InputRef（含 object.id/digest）和所有 criterion/check，沿既有分页；每页 data 都是同一 JSON 文本，连续拼接后解析，不在单页对象与分页字符串之间切换。criteria 只出现一次，acceptanceProvider 单独保存 provider Ref，不重复 criteria。child 从真实返回复制输入。完整 TaskSpec 不被永久截成一句摘要。NodeView 持续从冻结合同派生 goalSummary、deliverable、required criteria 的 id/statement 和输入路径（不携带长 check）；直属待消费输出继续由 recentChildResults 与 children cursor 展示。首步 obligations.readSelf=true，所有工作写工具/领域执行/分解/submit 都 gate 在 self read 后；读完仍保留 compact view，全文保存在 transcript，可按需重读。
 
 读取证明在同进程 yielded-parent 续接中从原 DSH session 读取；contextEpoch 直接绑定 session identity、原生 firstLiveSeq 和 surface.replaceGeneration。原生 session 重新装配或消息面 replacement 后重新要求 self read；普通消息追加不改变 epoch。不自行配对 compaction/start/end 或 replay 日志。child preview 必须处于当前可见 epoch，不能使用被压缩掉的旧摘要冒充完整用例。
 
@@ -1179,6 +1173,9 @@ interface NodeView {
     readonly runId: string
     readonly parentId?: string
     readonly goalSummary: string
+    readonly deliverable: string
+    readonly criteria: readonly { readonly id: string; readonly statement: string }[]
+    readonly inputs: readonly { readonly id: string; readonly path: string }[]
     readonly contractDigest: Digest
     readonly phase: 'working' | 'waiting-children' | 'integrating'
     readonly mode: 'guided' | 'exploration'
@@ -2363,6 +2360,8 @@ C-24 single-case gain with validation regression is not improved
 | 025 | 2026-11-06 用户要求核查全部模型可见信息、真实工具调用与冗余代码；已纳入 §2/§6/§12/§14 | self 统一 JSON 文本且只保留一份 criteria；Summary/Proposer 清除无工具提示；空 MCP resource surface 可由部署关闭，SUMMARY_PENDING 给出后续重读动作；保留有实际调用的 status/feedback/jobs/RSI 工具，bbdev 明确直接 MCP 入口。无新增状态、兼容分支或无消费者 helper。 |
 | 026 | 2026-11-07 用户明确批准关键激进减量、Buckyball 根合同修正及 RSI 评测重做；已纳入 §4/§6/§7/§9/§15/§17/§18/§19 | PlanningSketchDraft 仅含业务字段，host 盖章 task/run/contract/epoch；MethodPatchDraft 不含 base，host 派生 acceptancePolicy、默认 TaskProposal schema 和 learning outputs，删除模型抄写及旧 instanceSchema 门禁。probe 一次 Run 后 terminal，parent 决定集成或新 probe；required retry/replacement 保留。case 可覆盖 TaskSpec/acceptance，通用质量比较采用真实 consumer verified fraction，cache read/write 与 uncached cost 分列且未知为 null。保留 CAS、真实绑定、receipt 和 required join，不增加兼容输入或新 fact。 |
 
+| 027 | 2026-11-08 用户要求按详细重建文档实施；已纳入 §4/§5/§6/§12/§17/§19 | 删除 TaskTemplate/TemplateDraft 的 requiredCriteria、requiredOutputs；实际 child 验收只由 parent 编写并冻结，统一 required result/ tree。公共环境在所有层由 host 组合，Method 只含自有增量，冲突显式拒绝。NodeView 持续展示交付物、required criteria 文字与输入路径。旧 Method/CAS 仅归档，不保留双格式。验收疑义先 feedback；replyTo 不改合同，blocked 后新 Task 复用旧 CAS。离线正误产物评测不加入生产准入；质量、独立 validation 与总成本分别报告。真实模型实验仍在工程和真实领域预检后单独固定预算、窗口与 deadline。 |
+
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 
 ### 23.3 实现与验证
@@ -2390,3 +2389,4 @@ C-24 single-case gain with validation regression is not improved
 DSH 类型核对提供接口依据；实现沿当前路径验证 wake、compaction 后阅读义务、工具权限、sandbox/read isolation、原生取消与实际 prompt 大小。启动前置条件、宿主错误退出和同进程续接遵循 §19.1。第 19.2 节是协议演示，真实领域运行结果见 `docs/progress.md`。
 
 本节记录 V1 规范发布时的交付范围：规范及文档一致性检查。当前实现进度、运行证据和未验证项统一见 `docs/progress.md`；历史通过 Git 追溯。
+
