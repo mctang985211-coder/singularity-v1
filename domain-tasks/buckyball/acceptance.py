@@ -8,6 +8,8 @@ import struct
 import subprocess
 import sys
 
+from bemu import environment, mxmm_output, replay
+
 BLOCK = 32
 GUARD = 0x5A5A5A5A
 REGRESSIONS = (
@@ -155,8 +157,10 @@ def check_command(command, name, regression=False):
     assert isinstance(argv, list) and all(isinstance(part, str) for part in argv)
     # Accept the native argv form and the documented single option-string form.
     tokens = [token for part in argv for token in shlex.split(part)]
-    assert 'bebop-bemu' in tokens and '--sim' in tokens
-    assert option_value(tokens, '--chip') == 'poly'
+    direct = option_value(tokens, '--elf') is not None
+    assert ('bemu' in Path(argv[0]).name and direct) or ('bebop-bemu' in tokens and '--sim' in tokens)
+    if not direct:
+        assert option_value(tokens, '--chip') == 'poly'
     assert option_value(tokens, '--core-index') == '2'
     if regression:
         assert any(name in token for token in tokens)
@@ -202,16 +206,19 @@ def verify_response(project, request, response):
 def main():
     root = Path.cwd()
     project = json.loads((root / 'project.json').read_text())
+    environment(project, 'poly')
     request = build_request(project)
     request_path = root / 'request.json'
     response_path = root / 'response.json'
     request_path.write_text(json.dumps(request, separators=(',', ':')))
+    request_text = request_path.read_text()
     try:
         completed = subprocess.run(
             [sys.executable, 'ball/mxmm.py', str(request_path), str(response_path)],
             cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True, timeout=6 * 60 * 60,
         )
+        assert request_path.read_text() == request_text, 'consumer modified frozen request bytes'
     finally:
         remove_if_present(request_path)
     if completed.returncode != 0:
@@ -220,6 +227,14 @@ def main():
         raise SystemExit(completed.returncode)
     response = json.loads(response_path.read_text())
     verify_response(project, request, response)
+    for call, result in zip(request['calls'], response['calls']):
+        raw = decode_bytes(call)
+        names = ('mxmm_a_codes', 'mxmm_a_scales', 'mxmm_b_codes', 'mxmm_b_scales')
+        stdout = replay(project, result['command'], 'poly', 2, dict(zip(names, raw)))
+        actual = mxmm_output(stdout, call)
+        assert all(struct.pack('<f', a) == struct.pack('<f', b) for a, b in zip(actual, result['c'])), 'CLI C differs from independently replayed device C'
+    for command in response['regressions']:
+        replay(project, command, 'poly', 2, regression=True)
     print(f"verified {len(request['calls'])} frozen MXFP8 calls and {len(REGRESSIONS)} focused-BEMU regressions")
 
 

@@ -235,10 +235,10 @@ void test('generic experiment admits empty Method, independently reviews frozen 
   }
   assert.ok(launch.sourceSpec.goal.constraints.some(value => value.includes('project.json')))
   assert.equal(launch.sourceSpec.goal.constraints.some(value => value.includes('Singularity')), false)
-  assert.deepEqual(launch.sourceSpec.inputs.map(value => value.id), ['project', 'acceptance'])
+  assert.deepEqual(launch.sourceSpec.inputs.map(value => value.id), ['project', 'acceptance', 'bemu-tools'])
   assert.equal(launch.cases.length, 4)
   for (const [index, { spec }] of launch.cases.entries()) {
-    assert.deepEqual(spec.inputs.map(value => value.id), index === 3 ? ['records', 'acceptance'] : ['project', 'acceptance'])
+    assert.deepEqual(spec.inputs.map(value => value.id), index === 3 ? ['records', 'acceptance'] : ['project', 'acceptance', 'bemu-tools'])
   }
   const receipts = glob(`${root}/reviews/*/receipt.json`)
   for await (const path of receipts) {
@@ -283,7 +283,7 @@ void test('Buckyball cases freeze deterministic input data for paired acceptance
   assert.ok(cases.every(value => value.data.dataRule === source.dataRule))
   assert.deepEqual(domain.cases.map(value => value.id), ['long-k', 'output-tiling', 'smatmul-bias', 'inventory-transfer'])
   const object = { id: 'input', digest: `sha256:${'0'.repeat(64)}` }
-  const spec = bindDomainTask(domain.sourceTask, { project: object, acceptance: object })
+  const spec = bindDomainTask(domain.sourceTask, { project: object, acceptance: object, 'bemu-tools': object })
   assert.equal(spec.criteria.length, 1)
   assert.match(spec.criteria[0]?.statement ?? '', /deterministic fresh-CAS consumer/)
 })

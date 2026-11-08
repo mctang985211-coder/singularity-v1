@@ -25,3 +25,10 @@ It may implement domain mathematics and invoke a prepared external consumer,
 but its process contract is always the one above. New domains only provide
 their task JSON and check command; they do not add a scheduler, verifier Agent,
 retry policy, budget, or experiment entry point.
+
+The Buckyball example freezes `bemu.py` alongside `acceptance.py`. The operator
+pins focused BEMU executable paths in `project.bemu` before loading the domain.
+The checker inspects the submitted ELF's loadable input symbols and independently
+replays that ELF with the pinned binary; candidate command records do not select
+the trusted executable. These are domain checks, with no Buckyball branches in
+the host. See `buckyball/README.md` for the device output interface and preparation.

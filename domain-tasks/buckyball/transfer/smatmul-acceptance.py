@@ -5,6 +5,9 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import struct
+
+from bemu import environment, records, replay
 
 GUARD = 0x5A5A5A5A
 REGRESSIONS = ('smatmul_16x16x32_test', 'smatmul_bias_accumulate_test')
@@ -61,8 +64,10 @@ def check_command(command, name, regression=False):
     argv = command['argv']
     assert isinstance(argv, list) and all(isinstance(part, str) for part in argv)
     tokens = [token for part in argv for token in shlex.split(part)]
-    assert 'bebop-bemu' in tokens and '--sim' in tokens
-    assert option_value(tokens, '--chip') == 'pebble'
+    direct = option_value(tokens, '--elf') is not None
+    assert ('bemu' in Path(argv[0]).name and direct) or ('bebop-bemu' in tokens and '--sim' in tokens)
+    if not direct:
+        assert option_value(tokens, '--chip') == 'pebble'
     assert option_value(tokens, '--core-index') == '0'
     assert any('smatmul' in token for token in tokens)
     if regression:
@@ -84,16 +89,19 @@ def verify_response(request, response):
 def main():
     root = Path.cwd()
     project = json.loads((root / 'project.json').read_text())
+    environment(project, 'pebble')
     request = build_request(project)
     request_path = root / 'request.json'
     response_path = root / 'response.json'
     request_path.write_text(json.dumps(request, separators=(',', ':')))
+    request_text = request_path.read_text()
     try:
         completed = subprocess.run(
             [sys.executable, 'ball/smatmul.py', str(request_path), str(response_path)],
             cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True, timeout=60 * 60,
         )
+        assert request_path.read_text() == request_text, 'consumer modified frozen request bytes'
     finally:
         remove_if_present(request_path)
     if completed.returncode != 0:
@@ -102,6 +110,16 @@ def main():
         raise SystemExit(completed.returncode)
     response = json.loads(response_path.read_text())
     verify_response(request, response)
+    raw = {'smatmul_a': base64.b64decode(request['a'], validate=True),
+           'smatmul_b': base64.b64decode(request['b'], validate=True),
+           'smatmul_bias': b''.join(struct.pack('<i', value) for value in request['bias'])}
+    stdout = replay(project, response['command'], 'pebble', 0, raw)
+    assert records(stdout, 'SMATMULSHAPE') == [[str(request[key]) for key in ('m', 'n', 'k')]]
+    values = [int(word) for row in records(stdout, 'SMATMULC') for word in row]
+    guards = records(stdout, 'SMATMULGUARD')
+    assert values == response['c'] and len(guards) == 1 and [int(word, 16) for word in guards[0]] == request['guard'], 'independent SMatMul device result mismatch'
+    for command in response['regressions']:
+        replay(project, command, 'pebble', 0, regression=True)
     print('verified frozen int8 SMatMul with bias and both focused-BEMU regressions')
 
 

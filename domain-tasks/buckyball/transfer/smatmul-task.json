@@ -10,13 +10,14 @@
       "Run: python3 ball/smatmul.py request.json response.json. Return exact int32 C, eight unchanged int32 guard words and the real focused-BEMU command record in the machine format implemented by acceptance.py.",
       "Use the pinned pebble configuration and actual SMatMul ISA; the focused core is global index 0. Do not replace the frozen bytes with another example or a host-only mathematical calculation.",
       "Use only the current Task workspace for inspection, edits, builds and outputs. Access the prepared baseline only through the mounted Buckyball checkout tool; do not inspect other preparation or execution roots and do not create sibling/global run directories.",
-      "Work in an independent prepared checkout, preserve the baseline and distinguish BEMU evidence from RTL correctness."
+      "Work in an independent prepared checkout, preserve the baseline and distinguish BEMU evidence from RTL correctness.",
+      "project.bemu supplies operator-pinned focused BEMU executables. The final checker independently replays each built ELF and regression, reads raw input symbols and compares device output. All ELFs must be built below the fresh consumer directory; command records alone cannot pass. See bemu.py for the device text interface."
     ]
   },
   "criteria": [
     {
       "id": "smatmul-consumer",
-      "statement": "The deterministic fresh-CAS consumer runs ball/smatmul.py on the exact frozen int8 bytes, independently checks every C element and guard, and requires successful focused-BEMU execution plus both named SMatMul regression command records.",
+      "statement": "The deterministic fresh-CAS consumer runs ball/smatmul.py on the exact frozen int8 bytes, independently checks every C element and guard, and requires successful focused-BEMU execution plus both named SMatMul regression command records. Independently replay real RISC-V ELFs using project.bemu, check original input bytes in loadable symbols, device C/guard output and real regression exits.",
       "required": true,
       "check": "python3 acceptance.py"
     }
@@ -32,6 +33,12 @@
       "path": "acceptance.py",
       "access": "read",
       "source": "transfer/smatmul-acceptance.py"
+    },
+    {
+      "id": "bemu-tools",
+      "path": "bemu.py",
+      "access": "read",
+      "source": "bemu.py"
     }
   ],
   "outputs": [

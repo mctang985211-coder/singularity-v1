@@ -24,9 +24,11 @@ python3 ball/mxmm.py request.json response.json
 
 `request` 是 `{v:1,calls:[...]}`。每个 call 包含 `id,m,n,k,aCodes,aScales,bCodes,bScales,guard`；codes/scales 为 base64 原始 bytes，guard 是八个 `0x5a5a5a5a` FP32 words。`acceptance.py` 从 `project.json` 生成请求，最后一个向量原样再调用一次。
 
-`response` 是 `{v:1,calls:[...],regressions:[...]}`。每项 call result 只含 `id,c,guard,command`；C 是 row-major 有限 FP32 JSON 数值。command 只含 `name,argv,cwd,exit,stdout,stderr`，必须记录真实 `["bbdev","bebop-bemu","--sim","--chip","poly","--core-index","2","--binary",...]` 成功执行。`regressions` 恰好记录 `mxmm_bank_capacity_test`、`mxmm_window_test`、`mxmm_window_chain_test`、`mxmm_window_rows_test` 四条真实命令。BEMU 证据不冒充 RTL 正确性。
+`response` 是 `{v:1,calls:[...],regressions:[...]}`。每项 call result 只含 `id,c,guard,command`；C 是 row-major 有限 FP32 JSON 数值。command 只含 `name,argv,cwd,exit,stdout,stderr`，记录真实 bbdev `bebop-bemu --sim --chip poly --core-index 2 --binary ...` 或原生 BEMU `--elf ... --core-index 2` 成功执行。`regressions` 恰好记录 `mxmm_bank_capacity_test`、`mxmm_window_test`、`mxmm_window_chain_test`、`mxmm_window_rows_test` 四条真实命令。BEMU 证据不冒充 RTL 正确性。
 
 根验收只有 `mxfp8-consumer` 一项，执行 `python3 acceptance.py` 一次，而不是四个 criteria 各自重跑完整 BEMU。验收器从冻结规则独立重建原始 bytes，按 E4M3/E8M0 语义做精确整数块点积，优先比较单次 RNE FP32 结果，其余使用覆盖任意累加顺序的保守 FP32 误差界；同时检查输出 guard、重复调用和全部命令记录。缺文件、非有限值、fold/scale 投影、换输入或缺失回归均失败。没有 LLM root review，也不读取 worker 工作区、旧 transcript 或候选自报 verdict。
+
+2026-11-08 重建后，命令记录仅作描述。操作者在 `project.bemu` 固定 poly/pebble 的可信可执行文件绝对路径；冻结的 `bemu.py` 通过 `readelf` 和 ELF loadable segments 直接核对实际输入符号，再独立运行每个 call 与回归 ELF。CLI 的 C 必须与独立设备输出逐个 FP32 word 相同，设备 guard 必须保留。MXMM/SMatMul 的原始符号与设备 stdout 标记见 `domain-tasks/buckyball/README.md`；这些接口是领域交付合同，不规定模型如何分解或求解。
 
 `ball/` 必须包含 `mxmm.py` 入口、适用的源码补丁和独立复现资产。算法、子任务、内部源码结构和非 root 检查由模型产生；领域不预写这些 workflow 决策。
 
@@ -38,6 +40,8 @@ python3 ball/mxmm.py request.json response.json
 - `inventory-transfer` 是独立 validation 的不同非加速器任务。冻结 CSV 要求准确 rowCount、SKU 覆盖、signed 整数聚合和升序输出；`transfer/inventory-acceptance.py` 是确定性真实 consumer。
 
 SMatMul 的零模型预检在独立 checkout 中实际构建并运行两个现有 ELF/BEMU 测试，日志均包含 PASS：`artifacts/smatmul-consumer-preflight-20261107/smatmul_16x16x32.run.log` 和 `smatmul_bias_accumulate.run.log`。poly-attention 的 generated config 不包含 SMatMul，不能把芯片级 UVM 列表误当成该 core 的支持证据。这些预检只证明环境可运行，不证明模型已经实现新 CLI，更不证明 RSI 收益。
+
+重建后的全量零模型预检位于 `/home/ROXY/code/bb_work/preflight-rsi-rebuild-20261108/`。`results.json` 的 15 项记录全部符合预期：三个 MXMM case 真实通过，有限性上界 log2 最大 61.615；缺输出、错误数值/guard、缺执行/回归和 altered ELF 输入被拒绝；完整 SMatMul+bias CLI、两个回归及 inventory 正负例通过。`mcp-results.json` 记录 checkout/bbdev 的真实业务成功、参数失败和取消后进程退出，`SHA256SUMS` 固定验收与 BEMU 身份。已知正确实现仅留在独立预检目录，不进入领域包或模型输入。这些记录没有真实模型调用，不证明 RSI 迁移改善。
 
 ## RSI 判据与证据边界
 

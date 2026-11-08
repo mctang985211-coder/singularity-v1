@@ -132,7 +132,7 @@ void test('domain loader rejects duplicate IDs and check acceptance without a fr
   await assert.rejects(loadDomainPackage(directory), /duplicate case/)
 })
 
-void test('Buckyball freezes finite source bytes and its deterministic consumer rejects altered outputs', async t => {
+void test('MXMM numeric reference accepts exact values and rejects wrong values; command-only consumer fails final acceptance', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'singularity-buckyball-consumer-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const domain = await loadDomainPackage(fileURLToPath(new URL('../../../domain-tasks/buckyball', import.meta.url)))
@@ -144,7 +144,9 @@ void test('Buckyball freezes finite source bytes and its deterministic consumer 
   await mkdir(join(directory, 'ball'))
   await writeFile(join(directory, 'project.json'), JSON.stringify(project))
   await writeFile(join(directory, 'acceptance.py'), domain.source.acceptance as Uint8Array)
+  await writeFile(join(directory, 'bemu.py'), domain.source['bemu-tools'] as Uint8Array)
   await writeFile(join(directory, 'ball/mxmm.py'), `import json, runpy, struct, sys
+sys.path.insert(0, '.')
 contract = runpy.run_path('acceptance.py')
 request = json.load(open(sys.argv[1]))
 results = []
@@ -160,10 +162,18 @@ for call in request['calls']:
 regressions = [{'name': name, 'argv': ['bbdev', 'bebop-bemu', '--sim', '--chip', 'poly', '--core-index', '2', '--binary', name], 'cwd': '.', 'exit': 0, 'stdout': '', 'stderr': ''} for name in contract['REGRESSIONS']]
 json.dump({'v': 1, 'calls': results, 'regressions': regressions}, open(sys.argv[2], 'w'))
 `)
-  await execute('python3', ['acceptance.py'], { cwd: directory })
+  const numericOnly = `import json, runpy, subprocess, sys
+c = runpy.run_path('acceptance.py')
+p = json.load(open('project.json')); r = c['build_request'](p)
+json.dump(r, open('request.json', 'w'))
+subprocess.run([sys.executable, 'ball/mxmm.py', 'request.json', 'response.json'], check=True)
+c['verify_response'](p, r, json.load(open('response.json')))
+`
+  await execute('python3', ['-c', numericOnly], { cwd: directory })
+  await assert.rejects(execute('python3', ['acceptance.py'], { cwd: directory }), /bemu/)
   const source = await readFile(join(directory, 'ball/mxmm.py'), 'utf8')
   await writeFile(join(directory, 'ball/mxmm.py'), source.replace('values.append(struct.unpack', 'values.append(1e30 if row == 0 and column == 0 else struct.unpack'))
-  await assert.rejects(execute('python3', ['acceptance.py'], { cwd: directory }))
+  await assert.rejects(execute('python3', ['-c', numericOnly], { cwd: directory }))
 })
 
 void test('transfer cases keep distinct TaskSpecs and execute SMatMul and inventory acceptance', async t => {
@@ -186,7 +196,9 @@ void test('transfer cases keep distinct TaskSpecs and execute SMatMul and invent
   await mkdir(join(smatmulRoot, 'ball'), { recursive: true })
   await writeFile(join(smatmulRoot, 'project.json'), smatmul.input.project as Uint8Array)
   await writeFile(join(smatmulRoot, 'acceptance.py'), smatmul.input.acceptance as Uint8Array)
+  await writeFile(join(smatmulRoot, 'bemu.py'), smatmul.input['bemu-tools'] as Uint8Array)
   const runner = `import json, runpy, sys
+sys.path.insert(0, '.')
 contract = runpy.run_path('acceptance.py')
 request = json.load(open(sys.argv[1]))
 expected = contract['expected'](request)
@@ -195,9 +207,16 @@ regressions = [{'name': name, 'argv': ['bbdev', 'bebop-bemu', '--sim', '--chip',
 json.dump({'v': 1, 'c': expected, 'guard': request['guard'], 'command': command, 'regressions': regressions}, open(sys.argv[2], 'w'))
 `
   await writeFile(join(smatmulRoot, 'ball/smatmul.py'), runner)
-  await execute('python3', ['acceptance.py'], { cwd: smatmulRoot })
+  const numericOnly = `import json, runpy, subprocess, sys
+c = runpy.run_path('acceptance.py'); r = c['build_request'](json.load(open('project.json')))
+json.dump(r, open('request.json', 'w'))
+subprocess.run([sys.executable, 'ball/smatmul.py', 'request.json', 'response.json'], check=True)
+c['verify_response'](r, json.load(open('response.json')))
+`
+  await execute('python3', ['-c', numericOnly], { cwd: smatmulRoot })
+  await assert.rejects(execute('python3', ['acceptance.py'], { cwd: smatmulRoot }), /bemu/)
   await writeFile(join(smatmulRoot, 'ball/smatmul.py'), runner.replace("'c': expected", "'c': [expected[0] + 1] + expected[1:]"))
-  await assert.rejects(execute('python3', ['acceptance.py'], { cwd: smatmulRoot }))
+  await assert.rejects(execute('python3', ['-c', numericOnly], { cwd: smatmulRoot }))
 
   const inventoryRoot = join(directory, 'inventory')
   await mkdir(inventoryRoot)
