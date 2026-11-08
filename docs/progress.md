@@ -595,3 +595,9 @@ Buckyball 根脚本现在自行执行 `project.bemu` 固定的可信 poly/pebble
 原生计量入口现在在收到 DSH `QUOTA`/`ACCOUNT_QUOTA` failure 时取消全局预算信号，并保存原始 failure；不新增错误文本匹配或 provider 重试。真实本地 HTTP 402→pi-ai adapter 的无费用回归确认余额不足只发出一次 HTTP 请求，下一次调用被拒绝。根 `pnpm verify` 再次全通过，protocol 209、runtime 143、app 100，共 **452 项**。这段记录的是启动准备；实际消费和实验结论以随后保存的 result 与下续记录为准。
 
 离线真实进程 PID/SID 635680 于北京时间 14:19 启动，启动终端退出后 PPID=1，持久日志为该 study 根的 `offline.log`。最初两个 signed-sums 试验（historical 示意、compact）均为 0 错误接受/拒绝，合计已报告 44,093 tokens；后续试验仍运行，不能把这个中间状态当作三界面对照结论。额外的 fresh consumer 预检也已完成：`cas-preflight/results.json` 的 source、long-k、output-tiling、SMatMul-bias **4/4** 通过；每个目录起初只有冻结 project/acceptance/bemu 与参考 ball 交付，consumer 自行从固定基线创建私有 checkout、生成 ISA 并编译，消除了依赖旧预检 build 的歧义。参考源码没有进入领域模型输入。
+
+离线实验于 **15:00 按绝对 deadline 结束**，未延长窗口或恢复执行根。`offline/result.json` 保存完整结果：18 个计划初稿完成 **13 个**（historical 4、compact 4、examples 5），共 **0 false accepts / 2 false rejects**；两次误拒绝分别来自 compact 和 examples 的 binary-XOR 初稿，均在一次反馈修正后变为 0/0。16 次请求中 15 次正常完成，最后一次由 deadline 原生取消，failure 为 `ABORTED`；已报告 input 7,395、output 408,980，合计 **416,375 tokens**，最后一次用量未知（unknown=1）。未观察到余额不足。分组总 reported tokens（含修正）为 historical 121,639、compact 128,341、examples 166,395；样本数量不同，不能直接据此比较界面成本。
+
+两次误拒绝都额外要求 callable 重建 `result/response.json`，但正确交付已包含该文件，callable 的声明接口是向 stdout 输出同一 JSON；这是检查自行增加副作用要求。错误脚本、冻结标注产物和修正证据均保留，没有中途更改真值或合同。第二轮六个初稿全部通过，说明本次结果有波动，不能将错误单独归因于界面复杂度。`examples` 在本次离线试验仅增加抽象编写建议，并非完整 shell 范例；historical 不是旧 runtime 上下文的精确复刻；修正仍复用相同产物族，不能据此声称迁移。由于 deadline 导致第三轮不完整，报告只能使用实际覆盖量，不是完整三次重复对照。
+
+领域 campaign 于 **15:00:43** 在全新 `study/campaign` 根启动，PID/SID **2155153**，启动终端退出后 PPID=1，凭据仅一次性经 stdin 注入。启动前再次核对 study 冻结的 9 个文件及准备包全部 SHA-256，均匹配。该进程按冻结计划运行 source→proposal→四个 paired cases，截止 **17:30**；当前启动记录不构成 source 成功、comparison 或 activation 证据，最终以该根的 facts、requests 与 result 为准。
