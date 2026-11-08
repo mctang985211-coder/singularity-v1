@@ -39,6 +39,7 @@ function makeView(): NodeView {
       id: 'task',
       runId: 'run',
       goalSummary: 'goal',
+      deliverable: 'result/', criteria: [], inputs: [],
       contractDigest: digestA,
       phase: 'working',
       mode: 'guided',

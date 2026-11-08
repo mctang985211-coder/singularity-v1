@@ -46,7 +46,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       return { toolCalls: ['public-resources', 'authoring'].map(kind => ({ id: `read-${kind}`, name: 'rsi_read', arguments: JSON.stringify({ kind }) })), usage: fixtureUsage(index) }
     }
     if (index === 5) {
-      for (const field of ['requiredCriteria', 'requiredOutputs', 'guidance', 'exampleText', 'files', 'set-entry', 'templateId']) assert.ok(messageTexts(request).join('\n').includes(field), `authoring must display ${field}`)
+      for (const field of ['guidance', 'exampleText', 'files', 'set-entry', 'templateId']) assert.ok(messageTexts(request).join('\n').includes(field), `authoring must display ${field}`)
       return { toolCalls: [{ id: 'read-children', name: 'rsi_read', arguments: JSON.stringify({ kind: 'trace-page', id: 'children' }) }], usage: fixtureUsage(index) }
     }
     if (index === 6) return { toolCalls: [{ id: 'private-denied', name: 'rsi_read', arguments: JSON.stringify({ kind: 'asset', id: 'private-validation-case' }) }], usage: fixtureUsage(index) }
@@ -143,8 +143,8 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       const template = scenario.method.templates[0]
       assert.ok(template)
       const businessTemplate = {
-        id: template.id, brief: template.brief, requiredCriteria: template.requiredCriteria,
-        requiredOutputs: template.requiredOutputs, skills: template.skills, tools: template.tools, children: template.children,
+        id: template.id, brief: template.brief,
+        skills: template.skills, tools: template.tools, children: template.children,
       }
       patch = {
         v: 1, hypothesis: 'Reuse a local review skill for the declared output.',
@@ -153,7 +153,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
             'SKILL.md': '# Review\n\nRead the frozen criteria. Do not invent a score. Check the declared output.',
           } } },
           { op: 'put-template', template: {
-            ...businessTemplate, requiredOutputs: [],
+            ...businessTemplate,
             guidance: 'Read the criteria, produce the output and check it with the bound review skill.',
             example: { goal: { summary: 'Produce result.txt with the requested content.', deliverable: 'result.txt', scope: ['Write the requested text.'], constraints: ['Use the declared output path.'] }, acceptanceCriteria: [{ id: 'requested-text', statement: 'The result contains the requested text.', check: 'test -s result.txt' }], inputs: [{ id: 'request', exampleText: 'Write the requested text.' }] },
             skills: ['skill:s5-review'],

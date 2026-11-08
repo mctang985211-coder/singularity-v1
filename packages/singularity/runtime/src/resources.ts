@@ -66,17 +66,15 @@ export interface FrozenMethodResources {
 /** Asset lookup is a read-only catalog, never a replacement Method revision. */
 export function resourceAssetCatalog(resources: Pick<FrozenMethodResources, 'method' | 'exploration'>): Pick<MethodRevision, 'skills' | 'tools'> {
   if (resources.exploration === undefined) return resources.method
-  for (const [owned, global] of [[resources.method.skills, resources.exploration.skills], [resources.method.tools, resources.exploration.tools]]) {
-    for (const asset of global) {
-      const duplicate = owned.find(own => own.id === asset.id)
-      if (duplicate !== undefined && canonicalize(duplicate) !== canonicalize(asset)) {
-        throw new MethodResourceError('method', 'CONTRACT_INVALID', `public asset ${JSON.stringify(asset.id)} conflicts with the pinned Method`)
-      }
+  const ownedIds = new Set([...resources.method.templates, ...resources.method.skills, ...resources.method.tools].map(asset => asset.id))
+  for (const asset of [...resources.exploration.skills, ...resources.exploration.tools]) {
+    if (ownedIds.has(asset.id)) {
+      throw new MethodResourceError('method', 'CONTRACT_INVALID', `public asset ${JSON.stringify(asset.id)} conflicts with the pinned Method`)
     }
   }
   return {
-    skills: [...resources.method.skills, ...resources.exploration.skills.filter(asset => !resources.method.skills.some(own => own.id === asset.id))],
-    tools: [...resources.method.tools, ...resources.exploration.tools.filter(asset => !resources.method.tools.some(own => own.id === asset.id))],
+    skills: [...resources.method.skills, ...resources.exploration.skills],
+    tools: [...resources.method.tools, ...resources.exploration.tools],
   }
 }
 

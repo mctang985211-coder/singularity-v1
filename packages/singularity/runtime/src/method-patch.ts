@@ -1,10 +1,9 @@
 import type {
-FactActor,JsonValue,MethodPatch,MethodRevision,Ref,TaskTemplate,
+FactActor,GlobalResourceSnapshot,JsonValue,MethodPatch,MethodRevision,Ref,TaskTemplate,
 } from '@singularity/protocol'
 import { isSkillName } from '@deepseek-ai/dsh-skill'
 import {
 AdmissionError,
-assertTaskTemplateInterface,
 canonicalize,
 computeDigest,
 computeDigestBytes,
@@ -25,7 +24,7 @@ import { MethodResourceError } from './errors.ts'
 
 import { readMcpServers } from './mcp-resources.ts'
 import { readTreeBundle } from './resource-bundle.ts'
-import { METHOD_GUIDANCE_MAX_BYTES,TASK_EXAMPLE_MAX_BYTES } from './resources.ts'
+import { METHOD_GUIDANCE_MAX_BYTES,TASK_EXAMPLE_MAX_BYTES,resourceAssetCatalog } from './resources.ts'
 import type { CommandService } from './service.ts'
 import { readSkills,sameRef } from './skill-resources.ts'
 import { readPublicTrace } from './trace.ts'
@@ -99,7 +98,7 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
   let candidate: MethodRevision
   try {
     if (!sameRef(patch.base, opened.data.baseMethod)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')
-    candidate = await applyPatch(service, base, patch, defaultAcceptance)
+    candidate = await applyPatch(service, base, patch, defaultAcceptance, exploration)
   } catch (error) {
     if (!(error instanceof MethodPatchRejection || error instanceof MethodResourceError || error instanceof AdmissionError || error instanceof ZodError)) throw error
     const reason = error instanceof Error ? error.message : String(error)
@@ -131,7 +130,7 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
 }
 
 async function applyPatch(
-  service: CommandService, base: MethodRevision, patch: MethodPatch, defaultAcceptance: Ref,
+  service: CommandService, base: MethodRevision, patch: MethodPatch, defaultAcceptance: Ref, exploration?: GlobalResourceSnapshot,
 ): Promise<MethodRevision> {
   const templates = new Map(base.templates.map(template => [template.id, template]))
   const skills = new Map(base.skills.map(skill => [skill.id, skill]))
@@ -194,10 +193,10 @@ async function applyPatch(
     templates: [...templates.values()], skills: [...skills.values()], tools: [...tools.values()],
   })
   if (entry !== undefined && !templates.has(entry)) throw new MethodPatchRejection('Method entry template is dangling')
+  const catalog = resourceAssetCatalog({ method: candidate, ...(exploration === undefined ? {} : { exploration }) })
   const assetIds = [...templates.keys(), ...skills.keys(), ...tools.keys()]
   if (new Set(assetIds).size !== assetIds.length || assetIds.some(id => id.length === 0)) throw new MethodPatchRejection('Method asset IDs must be nonempty and unique')
   for (const template of candidate.templates) {
-    assertTaskTemplateInterface(template)
     assertUnique(template.skills, 'template skill bindings')
     assertUnique(template.tools, 'template tool bindings')
     assertUnique(template.children.map(binding => binding.bindingId), 'child binding IDs')
@@ -218,11 +217,11 @@ async function applyPatch(
   // Reuse the same deterministic catalog/bundle schema checks as normal Task composition.
   const catalogTemplate: TaskTemplate = {
     id: 'catalog-check', brief: '', guidance: patch.base, example: patch.base,
-    instanceSchema: {}, requiredCriteria: [], requiredOutputs: [], acceptancePolicy: patch.base,
-    skills: candidate.skills.map(skill => skill.id), tools: candidate.tools.map(tool => tool.id), children: [],
+    instanceSchema: {}, acceptancePolicy: patch.base,
+    skills: catalog.skills.map(skill => skill.id), tools: catalog.tools.map(tool => tool.id), children: [],
   }
-  await readSkills(service, candidate, catalogTemplate, candidate.skills.map(skill => skill.bundle))
-  await readMcpServers(service, candidate, catalogTemplate, candidate.tools.map(tool => tool.server.bundle))
+  await readSkills(service, catalog, catalogTemplate, catalog.skills.map(skill => skill.bundle))
+  await readMcpServers(service, catalog, catalogTemplate, catalog.tools.map(tool => tool.server.bundle))
   if (canonicalize(await effectiveContent(service, candidate)) === canonicalize(await effectiveContent(service, base))) throw new MethodPatchRejection('MethodPatch is a no-op')
   return candidate
 }

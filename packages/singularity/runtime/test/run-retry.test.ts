@@ -141,8 +141,8 @@ async function buildScenario(
       guidance,
       example,
       instanceSchema: {},
-      requiredCriteria: [],
-      requiredOutputs: [],
+
+
       acceptancePolicy,
       skills: [],
       tools: [],

@@ -4,17 +4,6 @@ import { digestSchema, seal, verifyDigest } from './digest.ts'
 import { jsonObjectSchema } from './json.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
-import { outputSpecSchema, taskCriterionSchema } from './task.ts'
-
-/**
- * Method templates declare business outputs only. Learning-draft outputs are
- * appended by host admission and therefore cannot be authored in a template.
- */
-export const templateOutputSpecSchema = outputSpecSchema.extend({
-  role: z.enum(['deliverable', 'supporting']),
-})
-
-export type TemplateOutputSpec = z.infer<typeof templateOutputSpecSchema>
 
 /** Static child binding from docs/framework.md §5. */
 export const childBindingSchema = closedObject({
@@ -33,8 +22,6 @@ export const taskTemplateSchema = closedObject({
   guidance: refSchema,
   example: refSchema,
   instanceSchema: jsonObjectSchema,
-  requiredCriteria: z.array(taskCriterionSchema),
-  requiredOutputs: z.array(outputSpecSchema),
   acceptancePolicy: refSchema,
   skills: z.array(z.string()),
   tools: z.array(z.string()),

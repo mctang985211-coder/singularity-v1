@@ -285,11 +285,11 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
       const childId = childScenario.contract.taskId
       const first = selfReadAndPlan(request, index - 4, childScenario, childId, `${childId}:run`)
       if (first !== undefined) return first
-      if (index === 6) return { toolCalls: [{ id: 'child-write', name: 'bash', arguments: JSON.stringify({ command: 'printf sample > notes.txt' }) }], usage: fixtureUsage(index) }
+      if (index === 6) return { toolCalls: [{ id: 'child-write', name: 'bash', arguments: JSON.stringify({ command: 'mkdir -p result && printf sample > notes.txt && cp notes.txt result/notes.txt' }) }], usage: fixtureUsage(index) }
       return {
         toolCalls: [{
           id: 'child-submit', name: 'singularity_submit',
-          arguments: JSON.stringify({ outputIds: ['s4b2-child-note'], includeLearningDrafts: false }),
+          arguments: JSON.stringify({ outputIds: ['result', 's4b2-child-note'], includeLearningDrafts: false }),
         }],
         usage: fixtureUsage(index),
       }
@@ -473,6 +473,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
           required: output.required,
         })),
         [
+          { id: 'result', role: 'deliverable', required: true },
           { id: 's4b2-child-note', role: 'supporting', required: false },
           { id: '__skill-drafts', role: 'skill-draft', required: false },
           { id: '__mcp-drafts', role: 'mcp-draft', required: false },

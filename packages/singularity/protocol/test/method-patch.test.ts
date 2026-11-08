@@ -30,10 +30,9 @@ void test('MethodPatch caps operations and canonical UTF-8 bytes', () => {
   assert.throws(() => parseMethodPatch({ ...patch, hypothesis: '中'.repeat(100_000) }), /256 KiB/)
 })
 
-void test('MethodPatch templates cannot author host-owned learning-draft outputs', () => {
+void test('MethodPatch templates reject removed output fields, including host-owned learning drafts', () => {
   const template = {
     id: 'template:root', brief: 'Use the reusable result.',
-    requiredCriteria: [],
     requiredOutputs: [{ id: '__skill-drafts', path: 'learning-drafts/skills', kind: 'tree', role: 'skill-draft', required: false }],
     skills: [], tools: [], children: [], guidance: 'Use the result.',
     example: { goal: { summary: 'Produce a result.', deliverable: 'result/', scope: [], constraints: [] },

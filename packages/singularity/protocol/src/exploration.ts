@@ -54,8 +54,6 @@ export function explorationTemplate(snapshot: GlobalResourceSnapshot): TaskTempl
     guidance: EXPLORE_GUIDANCE_REF,
     example: EXPLORE_EXAMPLE_REF,
     instanceSchema: structuredClone(DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA),
-    requiredCriteria: [],
-    requiredOutputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
     acceptancePolicy: snapshot.fallbackAcceptance,
     skills: snapshot.skills.map(skill => skill.id),
     tools: snapshot.tools.map(tool => tool.id),
@@ -69,12 +67,12 @@ export function resolveTemplateView(method: MethodRevision, templateId: string, 
   if (templateId === EXPLORE_TEMPLATE_ID) return snapshot === undefined ? undefined : explorationTemplate(snapshot)
   const matches = method.templates.filter(candidate => candidate.id === templateId)
   const template = matches.length === 1 ? matches[0] : undefined
-  if (template === undefined || snapshot === undefined || template.children.length > 0) return template
+  if (template === undefined || snapshot === undefined) return template
   const fallback = explorationTemplate(snapshot)
   return {
     ...template,
     skills: [...new Set([...template.skills, ...fallback.skills])],
     tools: [...new Set([...template.tools, ...fallback.tools])],
-    children: fallback.children,
+    children: template.children.length === 0 ? fallback.children : template.children,
   }
 }

@@ -30,6 +30,13 @@ export const taskProtocolReference: JsonValue = {
   },
   decompose: protocolJsonSchema(decomposeCommitSchema),
   examples: taskToolExamples,
+  acceptance: {
+    authoring: 'Before dispatch, write checks for this actual goal, frozen inputs and consumer. Examples are references, never inherited obligations.',
+    positive: 'python3 tools/check_consumer.py --input project.json --output result/response.json',
+    negative: 'cp result/response.json bad.json\npython3 tools/mutate_response.py bad.json\nif python3 tools/check_consumer.py --input project.json --output bad.json; then echo "checker accepted invalid output" >&2; exit 1; fi',
+    concern: 'Before implementation, explain what the check measures, what the parent needs, a reproducible difference and a suggested check via acceptance-concern. replyTo clarifies; stop(blocked) then a new Task changes the contract. Reuse complete frozen output InputRefs.',
+    integration: 'A child checks its local result; the parent invokes the actual consumer and verifies integration against original inputs. The root checks the complete goal.',
+  },
   handoffExample: [
     'Illustration: the parent owns final integration; the example child owns one complete consumer stage. Discover the actual stages for your Task.',
     'Read self, plan, prepare explore-child, then commit the consumer contract with the authorized InputRef. Replace illustrative identities with actual returned values. Each child discovers its own workflow and may organize direct children.',
@@ -37,7 +44,7 @@ export const taskProtocolReference: JsonValue = {
     'Prepare a later integration batch. Copy the supporting output InputRef fields id/object/path/access unchanged into that child inputs. Its goal defines the external output interface and report format; author checks that compare the final consumer with those inputs. An access:read input is read with singularity_read(kind="resource", id=...), not a sibling workspace path.',
     'Read the consumer result, integrate it into this Task outputs and test the actual end-to-end consumer against the original declared input and this Task acceptance. Local passes do not replace this integration check. A failed interface leads to corrected work or a new contract through feedback.',
   ],
-  method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Bind changed assets into entry-reachable templates; unreachable additions are no-ops. Public exploration assets are a separate catalog. Required join comes from the binding, not TaskProposal.',
+  method: 'Templates and bindings are editable by RSI for future roots. Read the pinned guidance/example assets before replacing them. Bind changed assets into entry-reachable templates; unreachable additions are no-ops. The host composes the same frozen public capabilities for all templates; bind only Method-owned additions. Required join comes from the binding, not TaskProposal.',
   skills: 'Bound skills use native DSH discovery; directory resources include frozen relative files. Use the path returned by the skill tool for bundled scripts.',
   results: 'Children pages include goalSummary/deliverable for integration. Read evidence by child/result Ref or lastAttempt.runId and join ALL data pages into {outputs,result,publicReceipt?}; outputs are complete InputRefs. Resolve remaining contract findings without creating another review layer. Prior transcripts and private receipts are not exposed.',
 }
@@ -59,7 +66,7 @@ export const planningInputSchema: ToolDefinition['parameters'] = {
 export const decomposeParameters = {
   action: { type: 'string', required: true, description: '"prepare" reads an example; "commit" admits a prepared batch.' },
   bindingId: { type: 'string', description: 'NodeView childOptions bindingId for prepare.' },
-  children: { type: 'json', description: 'ackPreview=previewRef.digest; copy InputRefs unchanged. Checks use bash -e -o pipefail with captured streams and only frozen inputs/outputs. Required outputs are inherited; localOutputs adds supporting files/trees or is omitted/[].' },
+  children: { type: 'json', description: 'ackPreview=previewRef.digest; copy InputRefs unchanged. Checks use bash -e -o pipefail with captured streams and only frozen inputs/outputs. Every child delivers the required result/ tree; localOutputs adds supporting files/trees or is omitted/[].' },
 } as const
 
 const parameters = parameterSchemaSpecToJsonSchema(decomposeParameters)

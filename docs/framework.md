@@ -12,7 +12,7 @@
 - C2：首次调用某子模板的分解指令后，自动展示其预填写用例；模型确认阅读后才能准入。
 - C3：没有 Method 指引时可用固定 explore-child 分解；新 skill/tool 先成为产物，由后续 RSI 注册。
 
-本版本吸收 C1–C3、A–F 与已批准 amendment 001–026 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
+本版本吸收 C1–C3、A–F 与已批准 amendment 001–027 的确认意见：多层 PlanningSketch 但只准创建 direct children；按需祖先查询；结构化 feedback 和 parent replan；原生 MCP server 工具；正向模型引导；模型侧百分比预算；可连续执行并提供有界公开反馈的 RSI Round；acceptance receipt 与 submission manifest 的 strict schema、host 分类和证据边界。其配套字段、状态、guard 和符合性场景在本文中一并冻结。
 
 实现默认采用能完成当前任务的最短正常路径，直接组合 DSH 公开能力。内部复用已验证的类型、投影和结果；边界校验对应实际输入、合同、权限和验收。实现细节由施工者按现有职责完成；改变公开协议与 authority 时提出 amendment。模型/领域拒绝沿业务协议结束；宿主存储、会话、provider、资源或原生清理异常抛给调用方，结束本次进程尝试，不伪造业务 invalid。运行与隔离条件在启动前由操作者建立，见 §19.1。
 
@@ -219,7 +219,7 @@ interface TaskContract {
 }
 ~~~
 
-TaskSpec 是已解析的目标、冻结验收与输入输出。parent 在 TaskProposal.acceptanceCriteria 提交非空数组，每项包含 id、statement 和自包含 shell check；宿主将其作为 required=true 的 criteria 追加到模板义务之后，重复 ID 拒绝。root 验收由 operator/domain 固定，child 局部验收由派发模型编写，不能修改已准入合同或根验收。localOutputs 只追加 supporting 输出。删除 localCriteria/localGuidance 路径，不兼容旧字段。
+TaskSpec 是已解析的目标、冻结验收与输入输出。parent 在 TaskProposal.acceptanceCriteria 提交非空数组，每项包含 id、statement 和自包含 shell check；宿主将其作为 child 的全部 required=true criteria，重复 ID 拒绝。root 验收由 operator/domain 固定，child 局部验收由派发模型编写，不能修改已准入合同或根验收。localOutputs 只追加 supporting 输出。删除 localCriteria/localGuidance 路径，不兼容旧字段。
 
 准入后任何字段变化都需要另一个 Task；同一 Task 的 retry 不改变目标或验收，也不悄悄读取“最新 Method”。整次 root 执行及 descendants pin 同一个 Method revision。新 revision 只影响新 root。
 
@@ -564,9 +564,9 @@ Summary Worker 的工具面只有读取已注入合同和提交摘要对象；�
 
 ### 7.1 required 与 probe
 
-join 在 Method 的 child binding 上固定，Task worker 不能在 commit 中改。每一个 `required` binding 是当前 parent Run 的一个 obligation，按 `bindingId` 计算；模板若不需要该义务必须把 binding 声明为 `probe` 或不提供该 binding：
+join 在 Method 的 child binding 上固定，Task worker 不能在 commit 中改。目录本身不要求分解；本 Task 实际选择过的 `required` binding 才形成 obligation，按 `bindingId` 计算。新 parent Run 仍须为已选择职责重新建立本 Run 的 winner，不继承旧 verdict：
 
-- required：该 binding 必须有一个 verified winner，parent 才能提交成功。
+- required：已选择的该 binding 必须有一个 verified winner，parent 才能提交成功。
 - probe：探索性尝试，失败不自动否定 parent；parent 仍要通过自己的验收。一个 probe Task 只有一个 Run，非 verified closure 后按同一 retry policy 直接 terminal，不自动购买新 Run。parent 读取这次公开结果，决定本地集成、继续其它工作或显式创建一个修正后的新 probe。相同 probe binding 可在同一 batch 创建多个独立 Task，也可在后续 batch 承接新的子问题；多个实例可确认同一个已交付的 preview；已有 verified child 不锁定该入口，新 probe 不自动替换或 supersede 历史 child。winner 与自动 replacement 限制仅适用于 required obligation。
 - 一个 required obligation 的 winner 是同一 parent Run 中、该 binding 下、已 terminal、`closed(verified)` 且未被 replacement supersede 的 child Task。一个 obligation 同时最多有一个 active child；替换只在旧 child terminal 后发生。
 - 所有已准入 child Task 都须 terminal 后，parent 才能提交或成功关闭；失败/取消记录必须保留。
@@ -663,7 +663,7 @@ core + adapter 的准入顺序：
 1. active Run、当前 epoch 的 PlanningSketch receipt、预算、深度、Task 数和“当前无 active batch”检查。
 2. 每个 bindingId 确实是本层可见 child binding 或已准入 fallback；同批 required binding 只出现一次，probe binding 可重复实例化。
 3. ackPreview 必须等于当前 Run **已经持久交付**的 previewRef.digest，且对应同一 prepare result；必须在后续模型 step，不能在同一次 tool batch 中猜测 ack。
-4. 校验 instanceSchema、非空 acceptanceCriteria、完整输入授权、路径和资源总额；合并模板义务及 parent 的 required 验收和 supporting 输出，再冻结 child 合同。模型不能选择 provider/scorer、required 属性、deliverable role 或越过既有输入输出命名边界。
+4. 校验 instanceSchema、非空 acceptanceCriteria、完整输入授权、路径和资源总额；组合 parent 的 required 验收、固定 result/ tree 和 supporting 输出，再冻结 child 合同。模型不能选择 provider/scorer、required 属性、deliverable role 或越过既有输入输出命名边界。
 5. 由宿主生成 TaskSpec、taskId、parentId、parentRunId、batchId、Method/template refs、bindings、acceptance；taskId 由 parentTaskId、batchId、bindingId 和 children 数组内的 index 确定，同命令重放稳定、同批实例不同；若该 batch 是 feedback replan，host 根据 binding 和已 terminal failure 派生 `feedbackRef` 与 `supersedesChildIds`，模型不能提交这两个字段。
 6. append 一个 task/children-admitted fact，含完整 children contracts、join 规则、预算预留。
 7. parent 进入 waiting-children 投影，当前 turn 结束；释放执行槽。
@@ -1123,12 +1123,12 @@ Task 可以成功关闭，当且仅当：
 
 ~~~text
 决定性 Run closed(verified)
-AND 决定性 Run 的每个 required binding 都有一个非 superseded 的 verified winner
+AND 本 Task 已选择的每个 required binding 在决定性 Run 都有一个非 superseded 的 verified winner
 AND 决定性 Run 已创建的所有 children 均 terminal
 AND Task 未取消
 ~~~
 
-winner 只在决定性 Run 的 required obligations 中计算；旧 parent Run 的 child verdict 不自动成为 retry Run 的 winner。replacement 的旧 child 仍计入“已创建 children”并保持 terminal。probe 的失败记录必须保留。parent 自己的 verifier 不因为 child verified 而跳过，也不接收 child 对 root 的“自评分”。
+未选择过的目录 binding 不产生 obligation。已选择职责从本 Task 的历史 children 派生，跨 parent Run 保留；winner 只在决定性 Run 中计算，旧 parent Run 的 child verdict 不自动成为 retry Run 的 winner。replacement 的旧 child 仍计入“已创建 children”并保持 terminal。probe 的失败记录必须保留。parent 自己的 verifier 不因为 child verified 而跳过，也不接收 child 对 root 的“自评分”。
 
 Root closed 后停止/排空其所有 owned executions，确定 DSH 最终日志 cut、usage、child evidence refs，然后 append rsi/trace-sealed。这是“从现实任务到一次可供 RSI 消费轨迹”的完成点。
 
@@ -1272,30 +1272,32 @@ children/<taskId>/<outputId>/...
 profile 使用中性身份；worker、summary、proposer、reviewer 在原生 scoped persona section 设置各自角色，composition 使用同一 worker 身份。worker persona 与 card、探索追加合计不超过 2 KiB。下列 worker card 为 V1 规范的完整平台正文。它提供当前目标、可执行动作和下一步；schema、guard 和结算负责协议约束。模板 guidance 和 skill 与该 card 冲突时，平台义务优先。
 
 ~~~text
-Read singularity_read(kind="self") through every page, then singularity_plan.
-Sketch 0=self, 1=direct children, 2=possible deeper work. Inspect inputs/source
-and refine dependencies, consumers, evidence and cost/uncertainty in purpose/assumptions.
-Own this level's implementation and integration. Children produce frozen outputs
-you will consume, not reviews of delivered work; the host verifies submissions.
-Dispatch ready responsibilities and consume results before downstream contracts.
-Each child owns its workflow. A leaf has settled prerequisites and one verifiable result.
+Read singularity_read(kind="self") through every page. Check the goal, deliverable
+and acceptance before implementing. If a check measures the wrong result, use
+singularity_feedback(kind="acceptance-concern"): explain the reproducible difference
+and suggest a check. replyTo clarifies the frozen contract; changing it requires
+singularity_stop(reason="blocked") and a new Task. Reuse old frozen InputRefs.
 
-Author acceptanceCriteria with inline shell tests under bash -e -o pipefail.
-They run with captured streams in a fresh directory containing only frozen
-inputs/outputs at contract paths; the worker checkout/build is absent.
+Then singularity_plan: 0=self, 1=direct children, 2=possible deeper work.
+Inspect inputs/source; refine dependencies, consumers, evidence and cost in
+purpose/assumptions. Own this level's technical work and integration. Dispatch
+ready responsibilities whose frozen outputs you consume. Each child owns its
+workflow; a leaf has settled prerequisites and a directly verifiable result.
+
+Author nonempty acceptanceCriteria for each actual child before dispatch.
+Use independent consumers and original inputs; check concrete differences,
+not self-reported PASS. Where useful, test a known-wrong output too.
+Checks run under bash -e -o pipefail in a fresh frozen-input/output directory;
+worker checkout/build is absent. Every child delivers result/; localOutputs
+add supporting files. Examples illustrate writing, never impose a contract.
 Copy complete InputRefs unchanged from self, children or evidence.outputs.
-Plan business fields only; the host stamps task/run/contract/epoch. Use visible bindingIds.
-singularity_decompose prepare returns
-the example; on a later step commit bindingId, ackPreview=previewRef.digest and task.
-Commit yields. On wake read children/feedback, integrate by goal and replan.
-A failed probe returns once; integrate locally or explicitly create a corrected probe.
 
-Use singularity_feedback when a premise or contract blocks the parent goal.
-Reply with replyTo=child feedback.id to resume the same Run. Contract changes
-need singularity_stop(reason="blocked") and a corrected Task; blocked never retries.
+Plan business fields; host stamps identities. Use visible bindingIds. singularity_decompose
+prepare returns an example; on a later step commit ackPreview=previewRef.digest
+and task. Commit yields. On wake read children/feedback, consume outputs,
+check your integration and replan. A probe runs once; integrate or create a new one.
 On retry read ALL lastAttempt.runId evidence pages and reuse frozen outputsPath.
-Resolve remaining contract gaps, not another review layer. singularity_submit
-declared outputs or stop with a concrete blocker.
+singularity_submit declared outputs or stop with a concrete blocker.
 ~~~
 
 探索模式只追加：
@@ -1346,7 +1348,7 @@ singularity_decompose
   prepare: { action: prepare, bindingId }
   commit: { action: commit, children: [{ bindingId, ackPreview, task: TaskProposal }] }
   output: preview 或 admitted batch/task IDs + remainingBudgetPct
-  每个字段在第 8 节定义；不接受任意完整 TaskContract。host 将 proposal 与 template required criteria/outputs/acceptancePolicy 合并为冻结 TaskSpec。
+  每个字段在第 8 节定义；不接受任意完整 TaskContract。host 从 proposal 派生全部 child criteria，追加固定 result/ tree 与 supporting 输出，acceptancePolicy 由 host 解析。
 
 singularity_feedback
   input: { kind, summary, refs[], replyTo? }
@@ -1736,7 +1738,7 @@ every admitted Run closed, including historical failures/cancellations;
   retry/required-child policies resolved, not every historical Run successful
 root decisive Run has a valid public verifier receipt, or a terminal failed/invalid
   ExecutionRecord accepted by the frozen RSI eligibility policy
-if root outcome is verified, every required binding in the decisive Run has a
+if root outcome is verified, every required binding selected by the Task has in its decisive Run a
   non-superseded verified child winner and every admitted child is terminal
 all owned DSH AgentHandles completed native whenIdle/dispose
 final usage/session offsets recorded before closure
@@ -1836,11 +1838,12 @@ proposer 是 DSH Agent，但不是普通 Task worker：
 Improve reusable Method assets from sealed evidence; Task outputs are per-instance results.
 Read authoring, pinned Method and relevant original assets with rsi_read;
 read previous-round feedback when offered.
-Trace the contract, findings, planning and relevant costs; distinguish workflow,
+Trace contracts, acceptance concerns, corrections, original outputs and costs; distinguish workflow,
 domain and host failures. Improve future reasoning, decomposition and reusable interfaces,
 not merely this source's implementation. Choose the smallest change aligned with the metric;
 never collapse a useful workflow into a larger single-run runbook just to reduce steps.
-Extract reusable algorithms, scripts, MCP/CLI tools and consumer checks, scoped by ordinary inputs;
+Extract reusable algorithms, decoders, runners, comparators, skills and responsibility interfaces;
+learn to choose independent consumers, detect empty checks and correct mistaken contracts;
 avoid rebuilding code each trial or preserving source-specific review/audit chains.
 Examples illustrate; never dispatch on case/suite IDs or copy solved data/answers.
 Explain unseen-input transfer and risks; source pass is insufficient.
@@ -1848,7 +1851,10 @@ Skill names are DSH kebab-case machine IDs. Bind changed assets to templates
 reachable from entry (set-entry if needed); unreachable changes are no-ops.
 Author business guidance, examples, assets and bindings only. The host stamps base,
 TaskProposal schema, acceptancePolicy and learning outputs; none belongs in a patch.
-Public catalogs are separate; bind the intended tool set explicitly. Keep it within 12 KiB; help is a resource.
+The host composes the same public environment for every template and paired arm.
+Bind only Method-owned additions. Actual child acceptance is authored by its parent;
+examples teach writing and do not freeze checks or output layouts for future Tasks.
+Keep the interface within 12 KiB; help is a resource.
 Submit one JSON patch with rsi_submit_patch. Correct invalid arguments in this session;
 accepted submission ends the turn. Host precheck/evaluation/activation decide the result.
 ~~~

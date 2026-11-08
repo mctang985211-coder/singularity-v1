@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { canonicalize, jsonObjectSchema } from './json.ts'
-import { skillAssetSchema, taskTemplateSchema, templateOutputSpecSchema, toolAssetSchema } from './method.ts'
+import { skillAssetSchema, taskTemplateSchema, toolAssetSchema } from './method.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
 import { taskExampleSchema } from './task.ts'
@@ -10,7 +10,6 @@ import { taskExampleSchema } from './task.ts'
 export const templateDraftSchema = taskTemplateSchema.omit({
   guidance: true, example: true, instanceSchema: true, acceptancePolicy: true,
 }).extend({
-  requiredOutputs: z.array(templateOutputSpecSchema),
   guidance: z.string(),
   example: taskExampleSchema,
 })

@@ -19,6 +19,9 @@ export interface NodeView {
     readonly runId: string
     readonly parentId?: string
     readonly goalSummary: string
+    readonly deliverable: string
+    readonly criteria: readonly { readonly id: string; readonly statement: string }[]
+    readonly inputs: readonly { readonly id: string; readonly path: string }[]
     readonly contractDigest: Digest
     readonly phase: 'working' | 'waiting-children' | 'integrating'
     readonly mode: 'guided' | 'exploration'
@@ -79,30 +82,32 @@ export const WORKER_PERSONA = 'You own one Singularity workflow node: its techni
 export const SUMMARY_PERSONA = 'You are the contract summarizer. Extract only the supplied frozen contract into the declared summary schema.'
 export const PROPOSER_PERSONA = 'You are the RSI proposer. Propose reusable Method changes from sealed evidence under the fixed evaluation policy.'
 
-export const WORKER_CARD = `Read singularity_read(kind="self") through every page, then singularity_plan.
-Sketch 0=self, 1=direct children, 2=possible deeper work. Inspect inputs/source
-and refine dependencies, consumers, evidence and cost/uncertainty in purpose/assumptions.
-Own this level's implementation and integration. Children produce frozen outputs
-you will consume, not reviews of delivered work; the host verifies submissions.
-Dispatch ready responsibilities and consume results before downstream contracts.
-Each child owns its workflow. A leaf has settled prerequisites and one verifiable result.
+export const WORKER_CARD = `Read singularity_read(kind="self") through every page. Check the goal, deliverable
+and acceptance before implementing. If a check measures the wrong result, use
+singularity_feedback(kind="acceptance-concern"): explain the reproducible difference
+and suggest a check. replyTo clarifies the frozen contract; changing it requires
+singularity_stop(reason="blocked") and a new Task. Reuse old frozen InputRefs.
 
-Author acceptanceCriteria with inline shell tests under bash -e -o pipefail.
-They run with captured streams in a fresh directory containing only frozen
-inputs/outputs at contract paths; the worker checkout/build is absent.
+Then singularity_plan: 0=self, 1=direct children, 2=possible deeper work.
+Inspect inputs/source; refine dependencies, consumers, evidence and cost in
+purpose/assumptions. Own this level's technical work and integration. Dispatch
+ready responsibilities whose frozen outputs you consume. Each child owns its
+workflow; a leaf has settled prerequisites and a directly verifiable result.
+
+Author nonempty acceptanceCriteria for each actual child before dispatch.
+Use independent consumers and original inputs; check concrete differences,
+not self-reported PASS. Where useful, test a known-wrong output too.
+Checks run under bash -e -o pipefail in a fresh frozen-input/output directory;
+worker checkout/build is absent. Every child delivers result/; localOutputs
+add supporting files. Examples illustrate writing, never impose a contract.
 Copy complete InputRefs unchanged from self, children or evidence.outputs.
-Plan business fields only; the host stamps task/run/contract/epoch. Use visible bindingIds.
-singularity_decompose prepare returns
-the example; on a later step commit bindingId, ackPreview=previewRef.digest and task.
-Commit yields. On wake read children/feedback, integrate by goal and replan.
-A failed probe returns once; integrate locally or explicitly create a corrected probe.
 
-Use singularity_feedback when a premise or contract blocks the parent goal.
-Reply with replyTo=child feedback.id to resume the same Run. Contract changes
-need singularity_stop(reason="blocked") and a corrected Task; blocked never retries.
+Plan business fields; host stamps identities. Use visible bindingIds. singularity_decompose
+prepare returns an example; on a later step commit ackPreview=previewRef.digest
+and task. Commit yields. On wake read children/feedback, consume outputs,
+check your integration and replan. A probe runs once; integrate or create a new one.
 On retry read ALL lastAttempt.runId evidence pages and reuse frozen outputsPath.
-Resolve remaining contract gaps, not another review layer. singularity_submit
-declared outputs or stop with a concrete blocker.`
+singularity_submit declared outputs or stop with a concrete blocker.`
 
 /** Hard prompt caps from docs/framework.md §14.3. */
 export const WORKER_CARD_MAX_BYTES = 2 * 1024

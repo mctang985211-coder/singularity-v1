@@ -48,8 +48,8 @@ function minimalTemplate(overrides: Partial<TaskTemplate> = {}): TaskTemplate {
     guidance: objectRef('guidance-a'),
     example: objectRef('example-a'),
     instanceSchema: { type: 'object', additionalProperties: false },
-    requiredCriteria: [],
-    requiredOutputs: [],
+
+
     acceptancePolicy: objectRef('acceptance-a'),
     skills: [],
     tools: [],
@@ -264,11 +264,9 @@ void test('rejects unsupported transport, invalid join, unknown fields, and malf
     role: 'deliverable',
     required: true,
   }
-  assert.deepEqual(
-    taskTemplateSchema.parse(minimalTemplate({ requiredCriteria: [criterion], requiredOutputs: [output] }))
-      .requiredOutputs,
-    [output],
-  )
+  for (const field of ['requiredCriteria', 'requiredOutputs']) {
+    assert.throws(() => taskTemplateSchema.parse({ ...minimalTemplate(), [field]: [] }))
+  }
 
   const sealed = sealMethodRevision({
     v: 1,
@@ -282,16 +280,8 @@ void test('rejects unsupported transport, invalid join, unknown fields, and malf
     () => methodRevisionPayloadSchema.parse(withExtra(methodRevisionPayload())),
     () => methodRevisionSchema.parse(withExtra(sealed)),
     () => taskTemplateSchema.parse(withExtra(minimalTemplate())),
-    () =>
-      taskTemplateSchema.parse({
-        ...minimalTemplate(),
-        requiredCriteria: [withExtra(criterion)],
-      }),
-    () =>
-      taskTemplateSchema.parse({
-        ...minimalTemplate(),
-        requiredOutputs: [withExtra(output)],
-      }),
+    () => taskCriterionSchema.parse(withExtra(criterion)),
+    () => outputSpecSchema.parse(withExtra(output)),
     () =>
       taskTemplateSchema.parse({
         ...minimalTemplate(),
@@ -387,8 +377,8 @@ void test('sealMethodRevision rejects malformed payloads before sealing', () => 
 })
 
 void test('Method uses the task-owned criterion and output schema objects directly', () => {
-  assert.equal(taskTemplateSchema.shape.requiredCriteria.element, taskCriterionSchema)
-  assert.equal(taskTemplateSchema.shape.requiredOutputs.element, outputSpecSchema)
+  assert.equal(Object.hasOwn(taskTemplateSchema.shape, 'requiredCriteria'), false)
+  assert.equal(Object.hasOwn(taskTemplateSchema.shape, 'requiredOutputs'), false)
   assert.equal(taskSpecSchema.shape.criteria.element, taskCriterionSchema)
   assert.equal(taskSpecSchema.shape.outputs.element, outputSpecSchema)
 

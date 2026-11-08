@@ -42,7 +42,7 @@ function outputInput(request: WireRequest): InputRef {
     for (const row of value.data as unknown[]) {
       if (typeof row !== 'object' || row === null || !('outputs' in row) || !Array.isArray(row.outputs)) continue
       for (const output of row.outputs as unknown[]) {
-        if (typeof output !== 'object' || output === null || !('id' in output) || !('object' in output) || !('path' in output)) continue
+        if (typeof output !== 'object' || output === null || !('id' in output) || typeof output.id !== 'string' || !output.id.endsWith(':child-note') || !('object' in output) || !('path' in output)) continue
         return parseProtocolValue(inputRefSchema, { id: output.id, object: output.object, path: output.path, access: 'read' })
       }
     }
@@ -118,8 +118,8 @@ for (const mode of ['required', 'probe', 'failed-probe'] as const) {
       }
       if (index === 2 || index === 11) return call(index, 'singularity_decompose', { action: 'prepare', bindingId: index === 2 ? 'first' : secondBinding })
       if (index === 3) return commit(request, index, 'first')
-      if (index === 6 || index === 16) return call(index, 'bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
-      if (index === 7 || index === 17) return call(index, 'singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
+      if (index === 6 || index === 16) return call(index, 'bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt && mkdir -p result && cp child.txt result/child.txt` })
+      if (index === 7 || index === 17) return call(index, 'singularity_submit', { outputIds: ['result', 'child-note'], includeLearningDrafts: false })
       if (index === 10 || index === 20) return call(index, 'singularity_read', { kind: 'children' })
       if (index === 12) {
         firstOutput = outputInput(request)
@@ -141,13 +141,13 @@ for (const mode of ['required', 'probe', 'failed-probe'] as const) {
         const method = sealMethodRevision({ ...methodPayload(original.method), id: 'method:batches-fixture',
           templates: original.method.templates.map(template => template.id === original.contract.template.id
             ? { ...template, children: mode === 'required' ? [...template.children, { bindingId: 'second', templateId: 'template:child', brief: 'Consume the frozen first result.', join: 'required' }] : template.children }
-            : { ...template, requiredCriteria: [{ id: 'exact-child-bytes', statement: 'Produce the declared bytes.', required: true }] }) })
+            : template) })
         const methodRef = await service.putObject(method.id, jsonBytes(method), 'method')
         const contract = sealTaskContract({ ...contractPayload(original.contract), method: methodRef, template: { id: original.contract.template.id, digest: method.digest } })
         const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract, agentOptions: agentOptions(), base: { v: 1, seed: contract.environment.seed } })
         scenario = { ...original, method, contract, composition }
         const verifier = (task: TaskContract): RunVerifier => ({ provider: task.acceptance, async verify(request) {
-          const output = request.outputs[0]
+          const output = request.outputs.find(ref => ref.id.endsWith(':child-note')) ?? request.outputs[0]
           assert.ok(output)
           assert.equal(new TextDecoder().decode((await request.readObject(output, 'object')).bytes), FROZEN_OUTPUT)
           if (task.origin.kind === 'child' && task.taskId === children.at(1)?.taskId) {
@@ -237,8 +237,8 @@ for (const correction of [false, true]) {
           assert.match(messageTexts(request).join('\n'), /Stop blocked; I will dispatch/)
           return call(index, 'singularity_stop', { reason: 'blocked', message: 'Dispatcher confirmed the immutable check is wrong.' })
         }
-        if (step === (asking ? 5 : 2)) return call(index, 'bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
-        if (step === (asking ? 6 : 3)) return call(index, 'singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
+        if (step === (asking ? 5 : 2)) return call(index, 'bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt && mkdir -p result && cp child.txt result/child.txt` })
+        if (step === (asking ? 6 : 3)) return call(index, 'singularity_submit', { outputIds: ['result', 'child-note'], includeLearningDrafts: false })
       }
       throw new Error(`Unexpected dialogue step ${currentRun}:${String(step)}`)
     }, async ({ spike, workspace, storeRoot }) => {

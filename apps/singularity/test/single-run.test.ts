@@ -148,8 +148,8 @@ async function makeScenario(
         guidance,
         example,
         instanceSchema: {},
-        requiredCriteria: [],
-        requiredOutputs: [],
+
+
         acceptancePolicy,
         skills: [],
         tools: [],

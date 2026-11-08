@@ -53,8 +53,8 @@ function template(id: string, children: ChildBinding[] = []): TaskTemplate {
     guidance: ref(`${id}-guidance`, 11),
     example: ref(`${id}-example`, 12),
     instanceSchema: {},
-    requiredCriteria: [],
-    requiredOutputs: [],
+
+
     acceptancePolicy: ref(`${id}-acceptance`, 13),
     skills: [],
     tools: [],

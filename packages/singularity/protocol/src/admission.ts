@@ -10,7 +10,7 @@ import { budgetReservationSchema } from './fact.ts'
 import type { BudgetReservation } from './fact.ts'
 import { validateInstanceSchema } from './instance-schema.ts'
 import { methodRevisionSchema, verifyMethodRevision } from './method.ts'
-import type { ChildBinding, MethodRevision, TaskTemplate } from './method.ts'
+import type { ChildBinding, MethodRevision } from './method.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
 import {
@@ -54,6 +54,11 @@ export const MCP_DRAFTS_OUTPUT: OutputSpec = {
 
 const RESERVED_OUTPUT_IDS = new Set([SKILL_DRAFTS_OUTPUT.id, MCP_DRAFTS_OUTPUT.id])
 const RESERVED_OUTPUT_PATH_ROOT = 'learning-drafts'
+
+/** Every child delivers consumable files at the same simple interface. */
+export const CHILD_RESULT_OUTPUT: OutputSpec = {
+  id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true,
+}
 
 /** Existing protocol rejection codes used by pure admission; no new codes. */
 export type AdmissionErrorCode = Extract<
@@ -228,13 +233,6 @@ function validateBaseOutputs(outputs: readonly OutputSpec[], label: string): voi
     assertNoReservedOutput(output, label)
     assertNoDraftRole(output, label)
   }
-}
-
-/** Static interface checks shared by child admission and MethodPatch precheck. */
-export function assertTaskTemplateInterface(template: TaskTemplate): void {
-  assertUniqueIds(template.requiredCriteria, `Template ${JSON.stringify(template.id)} requiredCriteria`)
-  validateBaseOutputs(template.requiredOutputs, `Template ${JSON.stringify(template.id)} requiredOutputs`)
-  assertUniqueOutputs(template.requiredOutputs)
 }
 
 function validateLocalOutputs(outputs: readonly LocalOutput[]): void {
@@ -447,13 +445,11 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
         `Child proposal does not satisfy template ${JSON.stringify(template.id)} instanceSchema: ${schemaValidation.reason}`,
       )
     }
-    assertTaskTemplateInterface(template)
     assertUniqueIds(request.proposal.inputs, 'Child spec.inputs')
     const localOutputs = request.proposal.localOutputs ?? []
     validateLocalOutputs(localOutputs)
-    const outputs = mergeOutputs(template.requiredOutputs, localOutputs)
-    const criteria = [...template.requiredCriteria,
-      ...request.proposal.acceptanceCriteria.map(criterion => ({ ...criterion, required: true }))]
+    const outputs = mergeOutputs([CHILD_RESULT_OUTPUT], localOutputs)
+    const criteria = request.proposal.acceptanceCriteria.map(criterion => ({ ...criterion, required: true }))
     assertUniqueIds(criteria, 'Child spec.criteria')
 
     let contract: TaskContract

@@ -697,7 +697,7 @@ function applyRunSubmitted(runtime: ReducerRuntime, fact: FactOf<'run/submitted'
   const method = resolveMethod(task.contract.method, runtime, fact)
   const template = resolveTemplate(method, task.contract, runtime, fact)
   for (const binding of template.children) {
-    if (binding.join !== 'required') continue
+    if (binding.join !== 'required' || !task.childIds.some(id => runtime.tasks.get(id)?.bindingId === binding.bindingId)) continue
     if (!hasBindingWinner(runtime, task, run.runId, binding.bindingId)) {
       fail(
         'JOIN_UNSATISFIED',
@@ -829,7 +829,7 @@ function closeVerified(
   const method = resolveMethod(task.contract.method, runtime, fact)
   const template = resolveTemplate(method, task.contract, runtime, fact)
   for (const binding of template.children) {
-    if (binding.join !== 'required') continue
+    if (binding.join !== 'required' || !task.childIds.some(id => runtime.tasks.get(id)?.bindingId === binding.bindingId)) continue
     if (!hasBindingWinner(runtime, task, decisiveRun.runId, binding.bindingId)) {
       fail(
         'JOIN_UNSATISFIED',

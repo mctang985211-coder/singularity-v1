@@ -8,6 +8,7 @@ import type { FactPayloadMap,FactType,MethodPatch,MethodPatchDraft,Ref,TemplateD
 import { canonicalize,DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA,seal,sealMethodRevision,sealTaskContract } from '@singularity/protocol'
 
 import { freezeEvaluationCase } from '../src/evaluation-case.ts'
+import { freezeGlobalResources } from '../src/global-resources.ts'
 import { precheckMethodPatch,submitMethodPatch } from '../src/method-patch.ts'
 import { CommandService } from '../src/service.ts'
 
@@ -16,7 +17,7 @@ const bytes = (value: unknown) => new TextEncoder().encode(canonicalize(value))
 const usage = { inputTokens: 0, outputTokens: 0, steps: 0, unknownRequests: 0 }
 
 /** Pure host precheck fixture; live DSH trace sealing is covered by the app integration. */
-async function withRound(run: (service: CommandService, base: Ref, acceptance: Ref) => Promise<void>, skillText?: string): Promise<void> {
+async function withRound(run: (service: CommandService, base: Ref, acceptance: Ref) => Promise<void>, skillText?: string, publicSkill = false): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'singularity-precheck-'))
   const service = await CommandService.open({ root, actor, clock: () => 1000 })
   try {
@@ -24,6 +25,14 @@ async function withRound(run: (service: CommandService, base: Ref, acceptance: R
       command: { v: 1, commandId: id, tool: 'precheck-fixture', toolVersion: 1, actor, scope: {}, input: null }, type, data,
     }, [])
     const source = await service.putObject('source', bytes({ v: 1 }))
+    let exploration: Ref | undefined
+    if (publicSkill) {
+      const text = '---\nname: public-environment\ndescription: Public environment.\n---\nUse the public environment.'
+      const file = await service.putObject('public:file', new TextEncoder().encode(text))
+      const bundle = await service.putObject('public:bundle', bytes(seal('object', { v: 1, kind: 'tree', files: [{ path: 'SKILL.md', bytes: Buffer.byteLength(text), object: file }] })))
+      exploration = await freezeGlobalResources(service, 'public', { documents: [], baseTools: [], tools: [],
+        skills: [{ id: 'public:skill', name: 'public-environment', description: 'Public environment.', bundle }], fallbackAcceptance: source })
+    }
     const skills = [], templates = []
     if (skillText !== undefined) {
       const file = await service.putObject('legacy:file', new TextEncoder().encode(skillText))
@@ -47,7 +56,7 @@ async function withRound(run: (service: CommandService, base: Ref, acceptance: R
     const rootContract = sealTaskContract({ v: 1, taskId: 'task:fixture', spec,
       origin: { kind: 'root', purpose: 'work', requestRef: source }, method: baseRef,
       template: { id: 'template:root', digest: baseRef.digest },
-      resources: { baseTools: [], skills: [], mcpServers: [] }, acceptance: source,
+      resources: { baseTools: [], skills: [], mcpServers: [], ...(exploration === undefined ? {} : { exploration }) }, acceptance: source,
       environment: { seed: source, profile: source }, limits })
     const contractRef = await service.putObject(rootContract.taskId, bytes(rootContract))
     await commit('method/activated', { next: baseRef, approval: source }, 'activate')
@@ -76,12 +85,29 @@ function templateDraft(skills: string[] = [], tools: string[] = []): TemplateDra
   return { id: 'template:root', brief: 'Use reusable assets.', guidance: 'Use the bound reusable assets.',
     example: { goal: { summary: 'Produce the declared output.', deliverable: 'result.txt', scope: [], constraints: [] },
       acceptanceCriteria: [{ id: 'delivery', statement: 'The declared output exists.', check: 'test -f result.txt' }], inputs: [] },
-    requiredCriteria: [], requiredOutputs: [], skills, tools, children: [] }
+    skills, tools, children: [] }
 }
 
 function bindEntry(assets: { skills?: string[]; tools?: string[] }): MethodPatch['changes'] {
   return [{ op: 'put-template', template: templateDraft(assets.skills, assets.tools) },
     { op: 'set-entry', templateId: 'template:root' }]
+}
+
+for (const copyPublic of [false, true]) {
+  void test(`precheck ${copyPublic ? 'rejects a copied public identity' : 'composes public resources without Method copies'}`, async () => {
+    await withRound(async service => {
+      await submitMethodPatch({ service, actor, roundId: 'round:fixture', value: patch([
+        ...(copyPublic ? [{ op: 'put-skill' as const, skill: { id: 'public:skill', name: 'public-copy', description: 'Copy.', files: {
+          'SKILL.md': '---\nname: public-copy\ndescription: Copy.\n---\nCopy.',
+        } } }] : []),
+        ...bindEntry({}),
+      ]) })
+      const result = await precheckMethodPatch({ service, actor, roundId: 'round:fixture' })
+      assert.equal(result.accepted, !copyPublic)
+      if (result.accepted) assert.equal(result.candidate.skills.length, 0)
+      else assert.match(result.reason, /public asset.*conflicts/)
+    }, undefined, true)
+  })
 }
 
 void test('precheck atomically publishes one complete revision while preserving the active head', async () => {
@@ -154,20 +180,14 @@ for (const scenario of [
   })
 }
 
-void test('precheck closes template admission failures as rejected instead of failing the campaign', async () => {
+void test('model cannot submit fixed template outputs or criteria, leaving the Round open', async () => {
   await withRound(async (service, base) => {
-    const template = templateDraft()
-    await submitMethodPatch({ service, actor, roundId: 'round:fixture', value: patch([
-      { op: 'put-template', template: { ...template, requiredOutputs: [{
-        id: '__skill-drafts', path: 'learning-drafts/skills', kind: 'tree', role: 'deliverable', required: false,
-      }] } },
-      { op: 'set-entry', templateId: template.id },
-    ]) })
-    const result = await precheckMethodPatch({ service, actor, roundId: 'round:fixture' })
-    assert.equal(result.accepted, false)
-    assert.match(result.reason, /reserved output id/)
-    assert.equal(service.facts().filter(fact => fact.type === 'rsi/candidate-ready').length, 0)
-    assert.equal((await service.methodRoundState()).rounds.get('round:fixture')?.closed?.outcome, 'rejected')
+    for (const field of ['requiredOutputs', 'requiredCriteria']) {
+      await assert.rejects(submitMethodPatch({ service, actor, roundId: 'round:fixture', value: patch([
+        { op: 'put-template', template: { ...templateDraft(), [field]: [] } },
+      ]) }))
+    }
+    assert.equal(service.facts().some(fact => fact.type === 'rsi/proposal-submitted' || fact.type === 'rsi/round-closed'), false)
     assert.deepEqual((await service.methodRoundState()).productionHead, base)
   })
 })

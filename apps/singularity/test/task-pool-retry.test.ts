@@ -94,8 +94,8 @@ void test('maxActive=2 child retry counts its own descendants, excludes an expen
       if (step === 0) return { ...self(), ...(contract.origin.kind === 'child' && contract.origin.bindingId === 'expensive'
         ? { usage: { promptTokens: 5999, completionTokens: 1, totalTokens: 6000 } } : {}) }
       if (step === 1) return plan()
-      if (step === 2) return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
-      if (step === 3) return call('singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
+      if (step === 2) return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt && mkdir -p result && cp child.txt result/child.txt` })
+      if (step === 3) return call('singularity_submit', { outputIds: ['result', 'child-note'], includeLearningDrafts: false })
     }
     throw new Error(`Unexpected fixture step ${currentRunId}:${String(step)}`)
   }, async ({ spike, workspace, storeRoot, fixture }) => {
@@ -122,8 +122,7 @@ void test('maxActive=2 child retry counts its own descendants, excludes an expen
           { bindingId: 'required-work', templateId: 'retry-parent', brief: 'Produce the required direct result.', join: 'required' },
           { bindingId: 'parallel-work', templateId: leaf.id, brief: 'Produce a parallel supporting result.', join: 'probe' },
         ] }, leaf,
-        { ...leaf, id: 'retry-parent', children: [{ bindingId: 'grandchild', templateId: leaf.id, brief: 'Inspect one local subproblem.', join: 'probe' }],
-          requiredCriteria: [{ id: 'exact-child-bytes', statement: 'Produce the exact fixture bytes.', required: true }] },
+        { ...leaf, id: 'retry-parent', children: [{ bindingId: 'grandchild', templateId: leaf.id, brief: 'Inspect one local subproblem.', join: 'probe' }] },
       ] })
       const methodRef = await service.putObject(method.id, jsonBytes(method), 'method')
       const contract = sealTaskContract({ ...contractPayload(original.contract), method: methodRef,
@@ -133,7 +132,7 @@ void test('maxActive=2 child retry counts its own descendants, excludes an expen
       scenario = { ...original, method, contract, composition }
       tasks.set(taskId, contract)
       const verifier = (task: TaskContract): RunVerifier => ({ provider: task.acceptance, async verify(request) {
-        const output = request.outputs[0]
+        const output = request.outputs.find(ref => ref.id.endsWith(':child-note')) ?? request.outputs[0]
         assert.ok(output)
         assert.equal(new TextDecoder().decode((await request.readObject(output, 'object')).bytes), FROZEN_OUTPUT)
         return sealPublicReceipt({ v: 1, provider: task.acceptance, operationId: request.operationId, contractDigest: task.digest,

@@ -56,8 +56,8 @@ for (const joinMode of ['required', 'probe'] as const) {
           localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Frozen child result.' }],
         } })),
       })
-      if (index >= 6 && index < resumeIndex && (index - 6) % 4 === 0) return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
-      if (index >= 7 && index < resumeIndex && (index - 7) % 4 === 0) return call('singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
+      if (index >= 6 && index < resumeIndex && (index - 6) % 4 === 0) return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt && mkdir -p result && cp child.txt result/child.txt` })
+      if (index >= 7 && index < resumeIndex && (index - 7) % 4 === 0) return call('singularity_submit', { outputIds: ['result', 'child-note'], includeLearningDrafts: false })
       if (index === resumeIndex + 2) {
         assert.ok(messageTexts(request).some(text => text.includes('reason=children-terminal')))
         return call('singularity_read', { kind: 'children' })
@@ -80,8 +80,8 @@ for (const joinMode of ['required', 'probe'] as const) {
       const verifier = (contract: TaskContract): RunVerifier => ({
         provider: contract.acceptance,
         async verify(request) {
-          assert.equal(new TextDecoder().decode((await request.readObject(request.outputs[0], 'object')).bytes), FROZEN_OUTPUT)
-          if (contract.taskId === taskId) assert.equal(request.inputs.length, childCount + 1, 'root verifier sees initial input plus direct output')
+          assert.equal(new TextDecoder().decode((await request.readObject(request.outputs.find(ref => ref.id.endsWith(':child-note')) ?? request.outputs[0], 'object')).bytes), FROZEN_OUTPUT)
+          if (contract.taskId === taskId) assert.equal(request.inputs.length, childCount * 2 + 1, 'root verifier sees initial input plus direct output')
           verified.push(contract.taskId)
           return sealPublicReceipt({
             v: 1, provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,

@@ -314,8 +314,8 @@ export async function makeScenario(
       guidance,
       example,
       instanceSchema: {},
-      requiredCriteria: [],
-      requiredOutputs: [],
+
+
       acceptancePolicy,
       skills: skillAssets.map(skill => skill.id),
       tools: toolAssets.map(tool => tool.id),
@@ -346,8 +346,8 @@ export async function makeScenario(
         guidance,
         example: childExample,
         instanceSchema: {},
-        requiredCriteria: [],
-        requiredOutputs: [],
+
+
         acceptancePolicy,
         skills: skillAssets.map(skill => skill.id),
         tools: toolAssets.map(tool => tool.id),

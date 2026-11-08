@@ -207,8 +207,7 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
           localOutputs: { type: 'array' },
         },
       },
-      requiredCriteria: [{ id: 'template-criterion', statement: 'Use the authorized input.', required: true }],
-      requiredOutputs: [],
+
       acceptancePolicy,
       skills: ['skill:fixture'],
       tools: [],
@@ -218,8 +217,8 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
       ...childTemplate,
       id: 'template:root',
       brief: 'Run the root task.',
-      requiredCriteria: [],
-      requiredOutputs: [],
+
+
       skills: [],
       tools: [],
       children: [
@@ -510,7 +509,7 @@ void test('S4-B2 commit admits one host-derived child and appends exactly one fa
       bindingId: 'b1',
     })
     assert.deepEqual(child.contract.spec.criteria.slice(-task.acceptanceCriteria.length), task.acceptanceCriteria.map(criterion => ({ ...criterion, required: true })))
-    assert.deepEqual(child.contract.spec.criteria.map(item => item.id), ['template-criterion', 'local-1'])
+    assert.deepEqual(child.contract.spec.criteria.map(item => item.id), ['local-1'])
     assert.deepEqual(child.contract.spec.inputs, task.inputs)
     assert.deepEqual(child.contract.resources.baseTools, scenario.contract.resources.baseTools)
     assert.deepEqual(child.contract.resources.skills, [scenario.skillBundle])
@@ -529,6 +528,7 @@ void test('S4-B2 commit admits one host-derived child and appends exactly one fa
       role: output.role,
       required: output.required,
     })), [
+      { id: 'result', role: 'deliverable', required: true },
       { id: 'notes', role: 'supporting', required: false },
       { id: '__skill-drafts', role: 'skill-draft', required: false },
       { id: '__mcp-drafts', role: 'mcp-draft', required: false },

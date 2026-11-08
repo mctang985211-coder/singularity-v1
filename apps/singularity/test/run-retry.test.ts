@@ -317,9 +317,9 @@ void test('retry passes an unchanged evidence InputRef to a fresh child and inte
     if (index === 11) return call('singularity_read', { kind: 'resource', id: previous?.id })
     if (index === 12) {
       assert.ok(messageTexts(request).some(text => text.includes(FROZEN_OUTPUT)))
-      return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
+      return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt && mkdir -p result && cp child.txt result/child.txt` })
     }
-    if (index === 13) return call('singularity_submit', { outputIds: ['copy'], includeLearningDrafts: false })
+    if (index === 13) return call('singularity_submit', { outputIds: ['result', 'copy'], includeLearningDrafts: false })
     if (index === 16) return call('singularity_read', { kind: 'children' })
     assert.equal(index, 17)
     assert.ok(child)
@@ -331,7 +331,7 @@ void test('retry passes an unchanged evidence InputRef to a fresh child and inte
     retryWorkspace = join(workspace, 'fresh-runs', computeDigest('object', { runId: secondRunId }).slice('sha256:'.length))
     const service = await CommandService.open({ root: storeRoot, actor: { kind: 'runtime', id: 'singularity-runtime' }, clock: Date.now })
     const verify = async (request: VerifierRequest) => {
-      assert.equal(new TextDecoder().decode((await request.readObject(request.outputs[0], 'object')).bytes), FROZEN_OUTPUT)
+      assert.equal(new TextDecoder().decode((await request.readObject(request.outputs.find(ref => ref.id.endsWith(':copy')) ?? request.outputs[0], 'object')).bytes), FROZEN_OUTPUT)
       const failed = request.operationId === `${firstRunId}:verify`
       if (failed) await writeFile(join(workspace, OUTPUT_PATH), 'mutable old workspace must not be reused')
       if (request.task.origin.kind === 'child') assert.deepEqual(request.inputs, [previous?.object])

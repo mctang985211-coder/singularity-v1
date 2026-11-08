@@ -77,7 +77,8 @@ export async function loadDirectChildren(
     results.push({ ...result, task })
   }
   const current = results.filter(result => result.task.parentRunId === runId)
-  const requiredObligations = template.children.filter(binding => binding.join === 'required').map(binding => {
+  const requiredObligations = template.children.filter(binding => binding.join === 'required'
+    && results.some(result => result.task.bindingId === binding.bindingId)).map(binding => {
     const children = current.filter(result => result.task.bindingId === binding.bindingId
       && result.task.supersededBy === undefined)
     const winner = children.find(result => result.task.closed?.outcome === 'verified')

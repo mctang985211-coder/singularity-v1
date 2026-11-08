@@ -52,9 +52,9 @@ void test('local child cap settles failed while its sibling continues; parent re
         if (child.contract.origin.kind === 'child' && child.contract.origin.bindingId === 'sibling') siblingStarted.resolve(undefined)
         return plan(child.contract, child.runId)
       }
-      if (step === 2) return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
+      if (step === 2) return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt && mkdir -p result && cp child.txt result/child.txt` })
       assert.equal(step, 3)
-      return call('singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
+      return call('singularity_submit', { outputIds: ['result', 'child-note'], includeLearningDrafts: false })
     }
     assert.equal(currentId, taskId)
     const step = parentRequests++
@@ -109,10 +109,10 @@ void test('local child cap settles failed while its sibling continues; parent re
       scenario = { ...original, method, contract, composition }
       const verifier = (task: TaskContract): RunVerifier => ({ provider: task.acceptance,
         async verify(request) {
-          const output = request.outputs[0]
+          const output = request.outputs.find(ref => ref.id.endsWith(':child-note')) ?? request.outputs[0]
           assert.ok(output)
           assert.equal(new TextDecoder().decode((await request.readObject(output, 'object')).bytes), FROZEN_OUTPUT)
-          if (task.taskId === taskId) assert.equal(request.inputs.length, 3, 'root verifier receives its source and both verified required winners')
+          if (task.taskId === taskId) assert.equal(request.inputs.length, 5, 'root verifier receives its source and both verified required winners')
           return sealPublicReceipt({ v: 1, provider: task.acceptance, operationId: request.operationId, contractDigest: task.digest,
             inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
             criteria: task.spec.criteria.filter(value => value.required).map(value => ({ id: value.id, verdict: 'pass', reason: 'Exact declared bytes.' })),

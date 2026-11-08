@@ -28,11 +28,12 @@ delete patchInputSchema.$schema
 export const RSI_PROPOSER_CARD = `Improve reusable Method assets from sealed evidence; Task outputs are per-instance results.
 Read authoring, pinned Method and relevant original assets with rsi_read;
 read previous-round feedback when offered.
-Trace the contract, findings, planning and relevant costs; distinguish workflow,
+Trace contracts, acceptance concerns, corrections, original outputs and costs; distinguish workflow,
 domain and host failures. Improve future reasoning, decomposition and reusable interfaces,
 not merely this source's implementation. Choose the smallest change aligned with the metric;
 never collapse a useful workflow into a larger single-run runbook just to reduce steps.
-Extract reusable algorithms, scripts, MCP/CLI tools and consumer checks, scoped by ordinary inputs;
+Extract reusable algorithms, decoders, runners, comparators, skills and responsibility interfaces;
+learn to choose independent consumers, detect empty checks and correct mistaken contracts;
 avoid rebuilding code each trial or preserving source-specific review/audit chains.
 Examples illustrate; never dispatch on case/suite IDs or copy solved data/answers.
 Explain unseen-input transfer and risks; source pass is insufficient.
@@ -40,10 +41,10 @@ Skill names are DSH kebab-case machine IDs. Bind changed assets to templates
 reachable from entry (set-entry if needed); unreachable changes are no-ops.
 Author business guidance, examples, assets and bindings only. The host stamps base,
 TaskProposal schema, acceptancePolicy and learning outputs; none belongs in a patch.
-Public catalogs are separate; bind the intended tool set explicitly. If a template names a
-public MCP or skill, the candidate Method must also contain that asset: read the public
-asset and include the corresponding put-mcp-server or put-skill change, or omit the binding.
-An ID that exists only in the public catalog is a dangling binding. Keep it within 12 KiB; help is a resource.
+The host composes the same public environment for every template and paired arm.
+Bind only Method-owned additions. Actual child acceptance is authored by its parent;
+examples teach writing and do not freeze checks or output layouts for future Tasks.
+Keep the interface within 12 KiB; help is a resource.
 Submit one JSON patch with rsi_submit_patch. Correct invalid arguments in this session;
 accepted submission ends the turn. Host precheck/evaluation/activation decide the result.`
 

@@ -6,7 +6,7 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GlobalResourceSnapshot,JsonValue,Ref,RoundPlan,TaskContract,TaskLimits,TaskSpec } from '@singularity/protocol'
 import { admitRootTask,canonicalize,computeDigest,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseProtocolValue,resolveTemplateView,sealMethodRevision } from '@singularity/protocol'
 import type { EvaluationTaskRequest } from '@singularity/runtime'
-import { activateRoundCandidate,AGENT_REVIEW_POLICY,createAgentVerifier,compareVerifiedFraction,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
+import { activateRoundCandidate,AGENT_REVIEW_POLICY,createAgentVerifier,compareVerifiedFraction,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,resourceAssetCatalog,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
 
 import { bootSpikeProfile,buildSingleRunComposition } from './host-composition.ts'
 import { nativeAccounting } from './accounting.ts'
@@ -96,10 +96,11 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
       const templateId = revision.entryTemplateId ?? EXPLORE_TEMPLATE_ID
       const view = resolveTemplateView(revision, templateId, snapshotValue)
       if (view === undefined) throw new Error('Missing pinned entry template')
+      const catalog = resourceAssetCatalog({ method: revision, exploration: snapshotValue })
       return admitRootTask({ taskId, spec, origin: { kind: 'root', purpose, requestRef }, method: pinned, template: { id: templateId, digest: pinned.digest },
         resources: { baseTools, exploration: snapshot,
-          skills: view.skills.map(id => { const asset = revision.skills.find(value => value.id === id); if (asset === undefined) throw new Error(`Missing skill ${id}`); return asset.bundle }),
-          mcpServers: view.tools.map(id => { const asset = [...revision.tools, ...tools].find(value => value.id === id); if (asset === undefined) throw new Error(`Missing tool ${id}`); return asset.server.bundle }) },
+          skills: view.skills.map(id => { const asset = catalog.skills.find(value => value.id === id); if (asset === undefined) throw new Error(`Missing skill ${id}`); return asset.bundle }),
+          mcpServers: view.tools.map(id => { const asset = catalog.tools.find(value => value.id === id); if (asset === undefined) throw new Error(`Missing tool ${id}`); return asset.server.bundle }) },
         acceptance: acceptanceKind === 'checks' ? checkProvider : provider, environment: { seed, profile }, limits: { ...budget.task, deadlineAt } })
     }
     const bindSpec = async (id: string, taskDraft: Parameters<typeof bindDomainTask>[0], inputs: Readonly<Record<string, unknown>>) => bindDomainTask(taskDraft, Object.fromEntries(await Promise.all(
@@ -140,7 +141,7 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
       const workspace = join(root, 'proposers', String(index + 1)); await mkdir(workspace, { recursive: true })
       const proposal = await executeRsiProposer({ ctx: spike.ctx, service, actor, roundId, workspace, agentOptions: options,
         publicEvaluation: { goal: 'Improve reusable reasoning, workflow and interfaces across different real consumer tasks. Instance outputs stay in Task results.',
-          metric: 'Mean verified consumer fraction per paired case, higher is better. Validation quality must not regress; uncached and cached token costs are separate reports.',
+          metric: 'Mean verified consumer fraction per paired case, higher is better. Validation quality must not regress; report total tokens and elapsed time separately.',
           thresholds: ['Mean consumer-quality delta at least 0.01 with no per-case regression; total reported token cost at most 2x baseline. Token reduction alone is not an improvement.'], validationPolicy: 'required-by-domain',
           publicCases: domain.cases.filter(value => !value.validation).map(value => ({ id: value.id, description: value.description })) } })
       const precheck = proposal.proposalRef === undefined ? undefined : await precheckMethodPatch({ service, actor, roundId })

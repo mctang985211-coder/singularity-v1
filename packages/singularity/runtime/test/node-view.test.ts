@@ -75,3 +75,20 @@ void test('live NodeView renders the complete catalog within 8 KiB', () => {
     controller,
   }) })
 })
+
+void test('NodeView keeps current acceptance and paths visible without repeating scripts', () => {
+  const current = { ...contract, spec: { ...contract.spec,
+    criteria: [{ id: 'consumer', statement: 'Use original bytes through the consumer.', required: true, check: 'x'.repeat(20_000) }],
+    inputs: [{ id: 'data', path: 'input.bin', access: 'read' as const, object: contract.method }],
+  } }
+  const text = renderLiveNodeView({ contract: current, runId: 'run', workspace: '/workspace', baseToolNames: ['bash'],
+    template: template(0, 0), skills: [], mcpServers: [], budget: { tokensPct: 100, stepsPct: 100, wallClockPct: 100, depthPct: 100, taskSlotsPct: 100 },
+    lastAttempt: null, asOf: 1, contextEpoch: initialContextEpoch('session-node-view'), controller,
+    children: { requiredObligations: [], childBatch: null, childHistory: { total: 1, outcomes: { verified: 1 } },
+      recentChildResults: [{ id: 'child', batchId: 'batch', outcome: 'verified', publicReason: null, outputsPath: 'children/child' }] },
+  })
+  assert.ok(text.includes('Use original bytes through the consumer.'))
+  assert.ok(text.includes('input.bin') && text.includes('children/child'))
+  assert.ok(text.includes('"deliverable":"out"'))
+  assert.equal(text.includes('x'.repeat(100)), false)
+})
