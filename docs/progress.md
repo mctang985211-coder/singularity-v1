@@ -593,3 +593,5 @@ Buckyball 根脚本现在自行执行 `project.bemu` 固定的可信 poly/pebble
 用户已明确授权自行决定窗口和预算，余额不足立即停止并告知。操作者冻结 `/home/ROXY/code/bb_work/rsi-rebuild-study-20261108-1418/study.json`：先做两个离线任务 × 三种界面 × 三次重复，每次至多一次修正，最多 36 请求/300 万 reported tokens，截止北京时间 15:00；随后一轮 Buckyball source→proposal→四个完整 paired cases（含独立 validation），最多 1500 请求/1.5 亿 reported tokens、并发 2，截止北京时间 17:30。三界面对照中的 historical 仍只是复杂字段示意，不能升级为旧完整 runtime 的因果对照。新进程使用独立 OS session、持久日志与 stdin 一次性凭据，不恢复旧执行根。
 
 原生计量入口现在在收到 DSH `QUOTA`/`ACCOUNT_QUOTA` failure 时取消全局预算信号，并保存原始 failure；不新增错误文本匹配或 provider 重试。真实本地 HTTP 402→pi-ai adapter 的无费用回归确认余额不足只发出一次 HTTP 请求，下一次调用被拒绝。根 `pnpm verify` 再次全通过，protocol 209、runtime 143、app 100，共 **452 项**。这段记录的是启动准备；实际消费和实验结论以随后保存的 result 与下续记录为准。
+
+离线真实进程 PID/SID 635680 于北京时间 14:19 启动，启动终端退出后 PPID=1，持久日志为该 study 根的 `offline.log`。最初两个 signed-sums 试验（historical 示意、compact）均为 0 错误接受/拒绝，合计已报告 44,093 tokens；后续试验仍运行，不能把这个中间状态当作三界面对照结论。额外的 fresh consumer 预检也已完成：`cas-preflight/results.json` 的 source、long-k、output-tiling、SMatMul-bias **4/4** 通过；每个目录起初只有冻结 project/acceptance/bemu 与参考 ball 交付，consumer 自行从固定基线创建私有 checkout、生成 ISA 并编译，消除了依赖旧预检 build 的歧义。参考源码没有进入领域模型输入。
