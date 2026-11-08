@@ -101,7 +101,7 @@ void test('native campaign meter includes auxiliary calls; session projection co
       await handle.agent.whenIdle()
       const initial = snapshotSession(handle.agent.session).usage
       for (const purpose of ['compaction', 'session-title'] as const) {
-        for await (const chunk of spike.ctx.llm.stream({ ...agentOptions(), provider: 'singularity-local', model: 'deepseek-flash',
+        for await (const chunk of spike.ctx.llm.stream({ ...agentOptions(), provider: 'singularity-local', model: 'deepseek-v4.1-flash',
           sessionId: handle.agent.session.id, purpose, messages: [{ role: 'user', content: [{ type: 'text', text: 'Summarize briefly.' }] }] })) {
           assert.ok(chunk.type)
         }
@@ -114,7 +114,7 @@ void test('native campaign meter includes auxiliary calls; session projection co
       assert.equal(meter.available(), false)
       const summary = { compactionId: CompactionId('native-usage'), summary: [{ type: 'text' as const, text: 'Summary.' }],
         shadowedRange: { start: SessionSeq(0), end: SessionSeq(0) }, shadowedSeqs: [], shadowedTokenCount: 100,
-        provider: 'singularity-local', model: 'deepseek-flash', usage: { inputTokens: 100, outputTokens: 10 }, rawOutput: [], llmStreamCall: true as const }
+        provider: 'singularity-local', model: 'deepseek-v4.1-flash', usage: { inputTokens: 100, outputTokens: 10 }, rawOutput: [], llmStreamCall: true as const }
       handle.agent.session.append('compaction/summary', summary)
       const compacted = snapshotSession(handle.agent.session).usage
       assert.equal(compacted.steps, initial.steps + 1)
@@ -130,7 +130,7 @@ void test('native campaign meter includes auxiliary calls; session projection co
       handle.agent.session.append('compaction/summary', { ...missingUsage, compactionId: CompactionId('missing-usage') })
       assert.equal(snapshotSession(handle.agent.session).usage.unknownRequests, 1)
       await assert.rejects(async () => {
-        for await (const chunk of spike.ctx.llm.stream({ provider: 'singularity-local', model: 'deepseek-flash', purpose: 'compaction', messages: [] })) assert.ok(chunk.type)
+        for await (const chunk of spike.ctx.llm.stream({ provider: 'singularity-local', model: 'deepseek-v4.1-flash', purpose: 'compaction', messages: [] })) assert.ok(chunk.type)
       })
       assert.equal(meter.usage.requests, 3, 'exhausted auxiliary requests never enter the provider')
       assert.equal(cancellation.signal.aborted, true)

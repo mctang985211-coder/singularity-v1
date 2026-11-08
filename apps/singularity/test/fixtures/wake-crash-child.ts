@@ -16,7 +16,7 @@ function required(name: string): string {
 
 const agentOptions = {
   provider: 'singularity-local',
-  model: 'deepseek-flash',
+  model: 'deepseek-v4.1-flash',
   reasoningEffort: ReasoningEffortId('max'),
 } satisfies AgentOptions
 

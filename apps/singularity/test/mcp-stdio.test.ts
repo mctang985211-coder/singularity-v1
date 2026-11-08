@@ -371,7 +371,7 @@ void test('alpha2 MCP stdio keeps admission, declarations, dispatch, cancellatio
     const ctx = spike.ctx
     const agentOptions = {
       provider: 'singularity-local',
-      model: 'deepseek-flash',
+      model: 'deepseek-v4.1-flash',
       reasoningEffort: ReasoningEffortId('max'),
     } satisfies AgentOptions
 

@@ -53,7 +53,7 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
   const outcomes: unknown[] = []
   let failure: string | undefined
   const failures: unknown[] = []
-  const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
+  const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
     const provider = await put(id('acceptance'), { v: 1, kind: 'independent-contract-review', policy: AGENT_REVIEW_POLICY })

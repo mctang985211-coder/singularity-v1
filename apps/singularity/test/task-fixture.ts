@@ -455,7 +455,7 @@ export async function makeScenario(
 export function agentOptions(): AgentOptions {
   return {
     provider: 'singularity-local',
-    model: 'deepseek-flash',
+    model: 'deepseek-v4.1-flash',
     reasoningEffort: ReasoningEffortId('max'),
   }
 }

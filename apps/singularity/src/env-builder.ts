@@ -62,7 +62,7 @@ export async function buildDomainEnvironment(materials: string, outputRoot: stri
     maxRequests: options.maxRequests ?? 200, maxReportedTokens: options.maxReportedTokens ?? 10_000_000,
     log: join(destination, 'requests.jsonl') })
   const timer = setTimeout(() => { cancellation.abort('env-builder-deadline') }, Math.max(0, deadlineAt - Date.now()))
-  const agentOptions: AgentOptions = options.agentOptions ?? { provider: 'singularity-local', model: 'deepseek-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
+  const agentOptions: AgentOptions = options.agentOptions ?? { provider: 'singularity-local', model: 'deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 40000 }
   const failures: unknown[] = []
   let handle: AgentHandle | undefined
   try {
