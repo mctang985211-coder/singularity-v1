@@ -1,6 +1,6 @@
 # Singularity V1 进度
 
-更新：2026-11-07。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
+更新：2026-11-09。协议见 `docs/framework.md`，施工约束见 `AGENTS.md`。
 
 用户已授权核实架构审计并联动修改规范、约束、源代码和测试，作为 amendment 006/007/008 纳入框架与 spec-lock。随后授权 deepseek-flash 真实全流程验证、prompt 优化及 PR/合并；amendment 009 澄清 probe 后续批次复用。接手时的 S4–S7 成果保留，没有重置工作区。
 
@@ -708,3 +708,15 @@ ledger 与 DAG 在每组都各完成 3 份检查。18 份脚本在 fresh 目录�
 在提交 `5b25950` 的生产实现上冻结 **382 项**源码、实际dist消费者、领域输入、reference、库与操作者脚本，计划为 `/home/ROXY/code/bb_work/performance-rsi-study-20261108/plan.json`。付费前本地 HTTP fixture 确认128,000输出与max推理，paidRequests=0。新根 `run-performance-20261108`，一个空Method source、proposer/precheck、W32/W64 public与W48 validation，两臂各两次fresh trial（计划13roots，不预设child）。public几何平均相对改善须≥1%，所有case不回退；预算 **1000请求 / 80,000,000 reported tokens**，绝对deadline **2026-11-09 03:00北京时间**，余额不足立即取消后续购买。若满足完整冻结判据，只允许移动本隔离campaign的Method head，不涉及外部部署。
 
 PID/SID **113994** 已通过独立session启动，凭据只经stdin一次注入后关闭，输出持久保存run.log；新根不能退出后恢复。当前是启动证据，试验完成量、性能差异与activation以最终result和facts为准。固定串行reference=1不代表fresh空Method也只得1，两臂均可独立选择更快设计；不能把reference到并行的巨大加速冒充Method学习收益。
+
+### 连续评分恢复、标量半成品归档与试验前置（2026-11-09 13:00）
+
+用户明确连续评分是目标，只有连续分数能细化并对齐主流 benchmark；主目标保持 public 几何平均相对改善≥1%，validation 独立不回退。9 号凌晨标量工作树的算术平均/分数差口径不进入主线，旧冻结结果不改判。
+
+主工作区此前 6 个未提交文件的“标量评分”半成品已先归档为 `/home/ROXY/code/bb_work/scalar-partial-20261109/partial.diff`（SHA-256 `553165785e674573398c05f24bba3f1bf8813849e22203cd78b2747f112f00dc`），随后恢复提交 `b87a699` 的连续评分路径（metric-json、几何平均、relative delta）。标量工作树 `c6d34b9/cbee93c` 及其研究证据保留为隔离分支，不合并、不作为当前实现。
+
+实验宿主新增连续评分的试验次数前置：`apps/singularity/src/experiment.ts` 的 `MIN_CONTINUOUS_TRIALS=3`，连续 metric 的 `trialsPerCase<3` 在创建 execution root、购买任何模型请求前直接拒绝。新增 app 测试验证该拒绝且不生成 `launch.json`。这是 app 实验设计前置，不是协议字段或验收 authority 变化；几何平均相对≥1%、validation 不回退和既有成本规则不变。
+
+根 `pnpm verify` 全部通过 **457/457**（protocol 209、runtime 145、app 103），project/build/typecheck/lint 通过，0 fail/skip。该结果证明当前主工作区恢复可构建；不产生新模型证据、comparison、winner 或 activation。
+
+下一轮方向已定为真实 Buckyball 加速器/大型芯片设计的模型 workload 适配，而不是继续使用单 root 可解的小算子任务。领域包仍只写外部目标、冻结 workload/参考、根最终验收、少量案例和环境资源，不写阶段树、child 验收、MLIR/PPA 流程或 RSI 控制流。具体 workload、预算、绝对 deadline 和 case 数在零模型领域与验收预检完成后另行固定；在此之前不启动付费 campaign。

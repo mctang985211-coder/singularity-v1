@@ -13,7 +13,7 @@ import { SessionId,SessionSeq } from '@deepseek-ai/dsh-session'
 import { createWakeMessage,snapshotSession } from '@singularity/runtime'
 
 import { prepareBuckyballDomain } from './fixtures/buckyball-domain.ts'
-import { EXPERIMENT_BUDGET,runExperiment } from '../src/experiment.ts'
+import { EXPERIMENT_BUDGET,MIN_CONTINUOUS_TRIALS,runExperiment } from '../src/experiment.ts'
 import { bindDomainTask } from '../src/domain.ts'
 import type { ExperimentDomain,TaskDraft } from '../src/domain.ts'
 import { nativeAccounting } from '../src/accounting.ts'
@@ -380,4 +380,22 @@ void test('experiment settles exploration children by shell and reviews only the
     assert.equal(closure?.data.classification, 'verified')
     assert.equal(facts.filter(fact => fact.type === 'rsi/trace-sealed').length, 1)
   } finally { db.close() }
+})
+
+void test('continuous metric rounds reject fewer than three trials before creating an execution root', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'singularity-continuous-trials-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const task: TaskDraft = {
+    goal: { summary: 'Measure one frozen optimizer.', deliverable: 'result/', scope: [], constraints: [] },
+    criteria: [{ id: 'performance', statement: 'Measure the frozen artifact.', required: true, check: 'true', checkOutput: 'metric-json' }],
+    inputs: [], outputs: [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }],
+  }
+  const domain: ExperimentDomain = { id: 'continuous-trials', source: {}, sourceTask: task, cases: [],
+    metric: { criterion: 'performance', name: 'speedup', unit: 'ratio' } }
+  const root = join(directory, 'root')
+  await assert.rejects(
+    runExperiment(root, domain, { ...EXPERIMENT_BUDGET, trialsPerCase: MIN_CONTINUOUS_TRIALS - 1 }),
+    new RegExp(`at least ${String(MIN_CONTINUOUS_TRIALS)} trials`),
+  )
+  await assert.rejects(readFile(join(root, 'launch.json')), { code: 'ENOENT' })
 })

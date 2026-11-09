@@ -35,8 +35,13 @@ export const EXPERIMENT_BUDGET = {
 
 const actor = { kind: 'runtime', id: 'singularity-experiment' } as const
 const bytes = (value: unknown) => value instanceof Uint8Array ? value : new TextEncoder().encode(typeof value === 'string' ? value : canonicalize(value))
+/** Continuous metrics use a relative geometric mean; fewer trials cannot separate signal from noise. */
+export const MIN_CONTINUOUS_TRIALS: number = 3
 /** Operator host for any public domain bundle; domains own no Task or Round state. */
 export async function runExperiment(root: string, domain: ExperimentDomain, budget = EXPERIMENT_BUDGET, host: { readonly apiKey?: string; readonly patchFiles?: readonly string[] } = {}) {
+  if (domain.metric !== undefined && budget.trialsPerCase < MIN_CONTINUOUS_TRIALS) {
+    throw new Error(`Continuous metric rounds require at least ${String(MIN_CONTINUOUS_TRIALS)} trials per case`)
+  }
   const startedAt = Date.now(), deadlineAt = startedAt + budget.maxWallClockMs
   const campaignId = `experiment:${basename(root).replace(/[^A-Za-z0-9_-]/g, '-')}`
   const id = (suffix: string) => `${campaignId}:${suffix}`
