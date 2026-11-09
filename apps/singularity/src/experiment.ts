@@ -22,6 +22,7 @@ export const EXPERIMENT_BUDGET = {
   maxRequests: 4000,
   rounds: 3,
   trialsPerCase: 1,
+  sourceMustVerify: false,
   maxActive: 4,
   reviewMaxSteps: 128,
   maxOutputBytes: 256 * 1024 * 1024,
@@ -37,6 +38,11 @@ const actor = { kind: 'runtime', id: 'singularity-experiment' } as const
 const bytes = (value: unknown) => value instanceof Uint8Array ? value : new TextEncoder().encode(typeof value === 'string' ? value : canonicalize(value))
 /** Continuous metrics use a relative geometric mean; fewer trials cannot separate signal from noise. */
 export const MIN_CONTINUOUS_TRIALS: number = 3
+/** Invalid sources never enter RSI; a strict campaign also rejects failed/cancelled roots. */
+export function sourceEligible(classification: string, requireVerified: boolean): boolean {
+  return classification !== 'invalid' && (!requireVerified || classification === 'verified')
+}
+
 /** Operator host for any public domain bundle; domains own no Task or Round state. */
 export async function runExperiment(root: string, domain: ExperimentDomain, budget = EXPERIMENT_BUDGET, host: { readonly apiKey?: string; readonly patchFiles?: readonly string[] } = {}) {
   if (domain.metric !== undefined && budget.trialsPerCase < MIN_CONTINUOUS_TRIALS) {
@@ -59,7 +65,7 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
   const outcomes: unknown[] = []
   let failure: string | undefined
   const failures: unknown[] = []
-  const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 128000 }
+  const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-v4-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 128000 }
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
     const provider = await put(id('acceptance'), { v: 1, kind: 'independent-contract-review', policy: AGENT_REVIEW_POLICY })
@@ -131,8 +137,11 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
       const active = (await service.methodRoundState()).productionHead
       if (active === undefined) throw new Error('Missing active Method')
       const source = await runTask(await contractFor(taskId, sourceSpec, active, 'work', await put(`${taskId}:request`, { v: 1, purpose: 'domain-work' })))
-      if (source.root.classification === 'invalid') {
-        const outcome = { roundId, source: source.root.classification, reason: 'source-not-eligible-for-rsi', usage: { ...accounting.usage } }
+      const eligible = sourceEligible(source.root.classification, budget.sourceMustVerify)
+      if (!eligible) {
+        const outcome = { roundId, source: source.root.classification,
+          reason: source.root.classification === 'invalid' ? 'source-not-eligible-for-rsi' : 'source-not-verified',
+          usage: { ...accounting.usage } }
         outcomes.push(outcome)
         await writeFile(join(root, `round-${String(index + 1)}.json`), JSON.stringify(outcome, null, 2))
         console.log(JSON.stringify({ event: 'round-finished', ...outcome }))

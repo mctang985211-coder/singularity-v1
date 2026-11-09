@@ -13,7 +13,7 @@ import { SessionId,SessionSeq } from '@deepseek-ai/dsh-session'
 import { createWakeMessage,snapshotSession } from '@singularity/runtime'
 
 import { prepareBuckyballDomain } from './fixtures/buckyball-domain.ts'
-import { EXPERIMENT_BUDGET,MIN_CONTINUOUS_TRIALS,runExperiment } from '../src/experiment.ts'
+import { EXPERIMENT_BUDGET,MIN_CONTINUOUS_TRIALS,runExperiment,sourceEligible } from '../src/experiment.ts'
 import { bindDomainTask } from '../src/domain.ts'
 import type { ExperimentDomain,TaskDraft } from '../src/domain.ts'
 import { nativeAccounting } from '../src/accounting.ts'
@@ -398,4 +398,13 @@ void test('continuous metric rounds reject fewer than three trials before creati
     new RegExp(`at least ${String(MIN_CONTINUOUS_TRIALS)} trials`),
   )
   await assert.rejects(readFile(join(root, 'launch.json')), { code: 'ENOENT' })
+})
+
+void test('strict source eligibility rejects failed and cancelled roots before RSI', () => {
+  assert.equal(sourceEligible('verified', true), true)
+  assert.equal(sourceEligible('failed', true), false)
+  assert.equal(sourceEligible('cancelled', true), false)
+  assert.equal(sourceEligible('invalid', true), false)
+  assert.equal(sourceEligible('failed', false), true)
+  assert.equal(sourceEligible('invalid', false), false)
 })
