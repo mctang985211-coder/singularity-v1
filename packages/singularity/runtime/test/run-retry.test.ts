@@ -33,7 +33,6 @@ sealSubmissionManifest,
 sealTaskContract
 } from '@singularity/protocol'
 
-import { initialContextEpoch } from '../src/epoch.ts'
 import { PLATFORM_PROMPT_SERVICE } from '../src/resources.ts'
 import { retrySingleRun } from '../src/retry.ts'
 import { executeSingleRun } from '../src/run.ts'
@@ -142,8 +141,8 @@ async function buildScenario(
       guidance,
       example,
       instanceSchema: {},
-      requiredCriteria: [],
-      requiredOutputs: [],
+
+
       acceptancePolicy,
       skills: [],
       tools: [],
@@ -510,6 +509,7 @@ function makeFakeContext(options: FakeContextOptions): {
     get: () => undefined,
     on() {},
     systemPrompt: {
+      getSectionOrder: () => 0,
       section(section: { name: string; order: number; text: string; interpolate?: boolean }) {
         options.sections?.push(section)
       },
@@ -650,11 +650,9 @@ void test('Agent cleanup failure after submission cannot produce Evidence', asyn
         const execution = { agent, concludeTurn() {} } as unknown as ToolExecution
         await tools.get('singularity_read')?.execute({ kind: 'self' }, execution)
         await tools.get('singularity_plan')?.execute({ sketch: {
-          v: 1, taskId: scenario.taskId, runId,
-          contextEpoch: initialContextEpoch(sessionId),
-          objective: 'Write the declared output.',
+          v: 1, objective: 'Write the declared output.',
           levels: [0, 1].map(level => ({ level, purpose: 'Write output.', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
-          directPlan: [], assumptions: [], sourceContract: scenario.contract.digest,
+          directPlan: [], assumptions: [],
         } }, execution)
         await tools.get('singularity_submit')?.execute({ outputIds: [OUTPUT_ID], includeLearningDrafts: false }, execution)
       },

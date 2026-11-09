@@ -1,0 +1,15 @@
+{
+  "id": "signed-key-sums",
+  "goal": "Aggregate signed integer values by key from records.json into result/totals.json. Preserve keys whose sum is zero. Invoke result/consumer.py records.json; its stdout must be that same JSON mapping, including empty input.",
+  "inputs": {"records.json": "[{\"key\":\"a\",\"value\":-7},{\"key\":\"a\",\"value\":7},{\"key\":\"b\",\"value\":-2}]"},
+  "outputs": ["result/consumer.py", "result/totals.json"],
+  "artifacts": [
+    {"id": "correct", "correct": true, "files": {"result/totals.json": "{\"a\":0,\"b\":-2}", "result/consumer.py": "import json,sys\nr={}\nfor x in json.load(open(sys.argv[1])): r[x['key']]=r.get(x['key'],0)+x['value']\nprint(json.dumps(r))\n"}},
+    {"id": "missing-zero-key", "correct": false, "files": {"result/totals.json": "{\"b\":-2}", "result/consumer.py": "print('{\"b\":-2}')"}},
+    {"id": "wrong-sign", "correct": false, "files": {"result/totals.json": "{\"a\":0,\"b\":2}", "result/consumer.py": "print('{\"a\":0,\"b\":2}')"}},
+    {"id": "empty-report", "correct": false, "files": {"result/totals.json": "{}", "result/consumer.py": "print('{}')"}},
+    {"id": "selfcheck-only", "correct": false, "files": {"result/totals.json": "{\"a\":0,\"b\":-2}", "result/consumer.py": "print('PASS')"}},
+    {"id": "fixed-output", "correct": false, "files": {"result/totals.json": "{\"a\":0,\"b\":-2}", "result/consumer.py": "print('{\"a\":0,\"b\":-2}')"}},
+    {"id": "missing-consumer", "correct": false, "files": {"result/totals.json": "{\"a\":0,\"b\":-2}"}}
+  ]
+}

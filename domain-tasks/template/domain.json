@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "id": "inventory-example",
+  "task": "task.json",
+  "acceptance": "checks",
+  "source": {
+    "records": "cases/source.csv"
+  },
+  "cases": [
+    {
+      "id": "cancellation-and-zero",
+      "description": "Repeated SKUs, cancellation, zero totals and signed quantities.",
+      "inputs": {
+        "records": "cases/transfer.csv"
+      }
+    },
+    {
+      "id": "negative-and-sorting",
+      "description": "Unseen SKUs requiring negative totals and ascending output order.",
+      "inputs": {
+        "records": "cases/validation.csv"
+      },
+      "validation": true
+    }
+  ]
+}

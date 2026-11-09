@@ -253,6 +253,7 @@ export async function makeScenario(
     readonly guidanceText?: string
     readonly otherGuidanceText?: string
     readonly skills?: readonly SkillFixture[]
+    readonly baseToolNames?: readonly string[]
     readonly mcpServers?: readonly McpServerFixture[]
     readonly childBinding?: {
       readonly bindingId: string
@@ -313,8 +314,8 @@ export async function makeScenario(
       guidance,
       example,
       instanceSchema: {},
-      requiredCriteria: [],
-      requiredOutputs: [],
+
+
       acceptancePolicy,
       skills: skillAssets.map(skill => skill.id),
       tools: toolAssets.map(tool => tool.id),
@@ -345,8 +346,8 @@ export async function makeScenario(
         guidance,
         example: childExample,
         instanceSchema: {},
-        requiredCriteria: [],
-        requiredOutputs: [],
+
+
         acceptancePolicy,
         skills: skillAssets.map(skill => skill.id),
         tools: toolAssets.map(tool => tool.id),
@@ -372,7 +373,7 @@ export async function makeScenario(
     const seed = await seedObject(store, 'seed:s3c', { v: 1, seed: 's3c-seed' })
     const profile = await seedObject(store, 'profile:s3c', { v: 1, profile: 's3c-profile' })
     const request = await seedObject(store, 'request:s3c', { v: 1, request: 'run recovery fixture' })
-    const bashTool = await seedObject(store, 'base-tool:bash', { v: 1, name: 'bash' })
+    const baseTools = await Promise.all((options.baseToolNames ?? ['bash']).map(name => seedObject(store, `base-tool:${name}`, { v: 1, name })))
 
     const rootAdmission: RootAdmissionInput = {
       taskId: options.taskId,
@@ -391,10 +392,6 @@ export async function makeScenario(
           statement: `The declared output ${OUTPUT_PATH} exists and contains exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline.`,
           required: true,
         }],
-        localGuidance: [{
-          id: 'exact-output',
-          statement: `Use bash with printf, for example: printf %s ${JSON.stringify(FROZEN_OUTPUT)} > ${OUTPUT_PATH}`,
-        }],
         inputs: [{
           id: 'source',
           object: input,
@@ -412,7 +409,7 @@ export async function makeScenario(
       origin: { kind: 'root', purpose: 'work', requestRef: request },
       method: methodRef,
       template: { id: 'template:s3c', digest: method.digest },
-      resources: { baseTools: [bashTool], skills: skillBundles, mcpServers: mcpBundles },
+      resources: { baseTools, skills: skillBundles, mcpServers: mcpBundles },
       acceptance: provider,
       environment: { seed, profile },
       limits: {
@@ -458,7 +455,7 @@ export async function makeScenario(
 export function agentOptions(): AgentOptions {
   return {
     provider: 'singularity-local',
-    model: 'deepseek-flash',
+    model: 'deepseek-v4.1-flash',
     reasoningEffort: ReasoningEffortId('max'),
   }
 }

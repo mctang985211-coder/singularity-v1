@@ -184,8 +184,6 @@ function previewIdentityReason(input: IdentityInput): string | undefined {
     || preview.sourceContract !== contract.digest
     || canonicalize(preview.interface as unknown as JsonValue)
       !== canonicalize({
-        requiredCriteria: childTemplate.requiredCriteria,
-        requiredOutputs: childTemplate.requiredOutputs,
         acceptance: childTemplate.acceptancePolicy,
         instanceSchema: childTemplate.instanceSchema,
       } as unknown as JsonValue)) {

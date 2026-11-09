@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import * as protocol from '../src/index.ts'
-import { planningSketchSchema } from '../src/planning.ts'
+import { planningSketchDraftSchema, planningSketchSchema } from '../src/planning.ts'
 import type { PlanningSketch } from '../src/planning.ts'
 import { parseProtocolValue } from '../src/schema.ts'
 
@@ -78,6 +78,17 @@ function firstDirectPlan(sketch: PlanningSketch): Record<string, unknown> {
 
 void test('protocol index exports the PlanningSketch schema', () => {
   assert.equal(protocol.planningSketchSchema, planningSketchSchema)
+})
+
+void test('PlanningSketchDraft excludes every host identity', () => {
+  const draft = {
+    v: threeLevelSketch.v, objective: threeLevelSketch.objective,
+    levels: threeLevelSketch.levels, directPlan: threeLevelSketch.directPlan, assumptions: threeLevelSketch.assumptions,
+  }
+  assert.deepEqual(parseProtocolValue(planningSketchDraftSchema, draft), draft)
+  for (const identity of ['taskId', 'runId', 'contextEpoch', 'sourceContract'] as const) {
+    assert.throws(() => parseProtocolValue(planningSketchDraftSchema, { ...draft, [identity]: threeLevelSketch[identity] }), identity)
+  }
 })
 
 void test('PlanningSketch accepts structural two-level and three-level plans', () => {
@@ -237,7 +248,7 @@ void test('PlanningSketch rejects directPlan.join and other direct-plan authorit
     ['required', true],
     ['role', 'deliverable'],
     ['taskId', 'task-model'],
-    ['localCriteria', [{ id: 'criterion-model', statement: 'model acceptance' }]],
+    ['acceptanceCriteria', [{ id: 'criterion-model', statement: 'model acceptance' }]],
     ['digest', digestA],
   ]
 

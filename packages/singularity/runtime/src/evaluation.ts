@@ -4,6 +4,7 @@ import {
   computeDigest,
   cancellationCutSchema,
   evidenceSchema,
+  evaluationMetricSchema,
   executionRecordSchema,
   parseProtocolValue,
   publicReceiptSchema,
@@ -43,7 +44,7 @@ export function frozenEvaluationSlots(roundId: string, plan: RoundPlan, base: Re
     const cases = partition === 'evaluation' ? plan.cases : plan.validationCases
     for (const caseRef of cases) {
       for (let repetition = 0; repetition < plan.trialsPerCase; repetition += 1) {
-        for (const arm of ['baseline', 'candidate'] as const) {
+        for (const arm of ['candidate', 'baseline'] as const) {
           const digest = computeDigest('object', { roundId, partition, caseRef, repetition, arm })
           const id = `${roundId}:slot:${digest.slice('sha256:'.length)}`
           slots.push({ id, roundId, taskId: `${id}:task`, partition, caseRef, arm, repetition, method: arm === 'baseline' ? base : candidate })
@@ -57,9 +58,12 @@ export function frozenEvaluationSlots(roundId: string, plan: RoundPlan, base: Re
 export interface EvaluationUsage {
   readonly inputTokens: number
   readonly outputTokens: number
+  readonly cacheReadTokens?: number
+  readonly cacheWriteTokens?: number
   readonly steps: number
   readonly unknownRequests: number
   readonly complete: boolean
+  readonly cacheComplete: boolean
 }
 
 export interface PublicEvaluationEvidence {
@@ -204,7 +208,22 @@ export interface ComparisonCost {
   readonly unit: string
 }
 
-/** Domain owns metric extraction, repetition aggregation and sample policy. */
+export interface TokenCostArm {
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly uncachedInputTokens: number | null
+  readonly cacheReadTokens: number | null
+  readonly cacheWriteTokens: number | null
+}
+
+export interface TokenCostReport {
+  readonly complete: boolean
+  readonly cacheComplete: boolean
+  readonly baseline: TokenCostArm
+  readonly candidate: TokenCostArm
+}
+
+/** Host-supplied quality comparison; domain bundles cannot inject a comparator. */
 export interface EvaluationComparator {
   readonly asset: Ref
   describeMetric(plan: RoundPlan): ComparisonMetric
@@ -226,6 +245,7 @@ export interface EvaluationComparison {
   readonly cost?: ComparisonCost
   readonly cases: readonly ComparedCase[]
   readonly usage: EvaluationUsage
+  readonly tokenCosts?: TokenCostReport
   readonly slots: readonly EvaluationSlotResult[]
   readonly missingOrInvalid: readonly string[]
   readonly outcome: 'improved' | 'no-improvement' | 'insufficient-evidence'
@@ -245,7 +265,7 @@ export function compareEvaluation(
     v: 1 as const, roundId, plan: planRef, claim: plan.claim, complete: manifest.complete,
     completeCases: [...plan.cases, ...plan.validationCases].filter(caseRef => manifest.slots
       .filter(result => same(result.slot.caseRef, caseRef)).every(result => result.status === 'complete')).length,
-    usage: manifest.usage, slots: manifest.slots, missingOrInvalid,
+    usage: manifest.usage, tokenCosts: tokenCostReport(manifest), slots: manifest.slots, missingOrInvalid,
   }
   const insufficient = (reason: string): EvaluationComparison => ({ ...common, cases: [], outcome: 'insufficient-evidence', reason })
   if (comparator === undefined || !same(comparator.asset, plan.comparator)) return insufficient('unsupported-comparator')
@@ -254,9 +274,8 @@ export function compareEvaluation(
   if (!metric.name || !metric.unit || !['higher-is-better', 'lower-is-better'].includes(metric.direction)) {
     return insufficient('invalid-comparator-metric')
   }
-  if ((!manifest.usage.complete || manifest.usage.unknownRequests > 0)
-    && (metric.costObjective || plan.thresholds.maxRelativeCostIncrease !== undefined)) {
-    return insufficient('unknown-cost')
+  if (!manifest.usage.complete && (metric.costObjective || plan.thresholds.maxRelativeCostIncrease !== undefined)) {
+    return insufficient('missing-cost')
   }
   const evidence = manifest.slots.flatMap(slot => slot.publicEvidence === undefined ? [] : [slot.publicEvidence])
   const compared = comparator.compare(plan, evidence)
@@ -281,7 +300,7 @@ export function compareEvaluation(
     && worstRegression <= plan.thresholds.maxRegression && costAllowed
   return {
     ...common, metric, aggregateDelta: compared.aggregateDelta, worstRegression, cases: compared.cases,
-    ...(compared.cost === undefined || !manifest.usage.complete || manifest.usage.unknownRequests > 0 ? {} : { cost: compared.cost }),
+    ...(compared.cost === undefined || !manifest.usage.complete ? {} : { cost: compared.cost }),
     outcome: improved ? 'improved' : 'no-improvement',
     ...(!costAllowed ? { reason: 'cost-threshold' } : {}),
   }
@@ -293,7 +312,7 @@ export interface EvaluationTaskRequest {
   readonly maxActive: number
   readonly deadlineAt: number
   /** Same writer's committed usage, checked by the ordinary DSH request gate. */
-  readonly checkReportedBudget: (reported?: { readonly tokens: number; readonly unknown: boolean }) => boolean
+  readonly checkReportedBudget: (reported?: { readonly tokens: number }) => boolean
   readonly canOpenRun: () => boolean
   /** Ordinary Task tree runner owns native cancellation and final settlement. */
   readonly signal: AbortSignal
@@ -327,7 +346,7 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
     const existing = state.tasks.get(slot.taskId)
     if (existing?.phase === 'closed') continue
     const manifest = await readEvaluationManifest(service, slots, state)
-    if (existing === undefined && (clock() >= deadlineAt || manifest.usage.unknownRequests > 0
+    if (existing === undefined && (clock() >= deadlineAt
       || tokenCount(manifest.usage) >= plan.budget.maxTokens || manifest.runCount >= plan.budget.maxRuns)) break
     const requestRef = await service.putObject(slot.id, new TextEncoder().encode(canonicalize({ v: 1, roundId, slot })))
     await request.runTask({
@@ -336,10 +355,11 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
         if (reported === undefined) return reportedEvaluationBudget(service, slots, plan, clock, deadlineAt)
         const otherUsage = manifest.slots.filter(value => value.slot.id !== slot.id)
           .reduce((sum, value) => sum + tokenCount(value.usage), 0)
-        return !reported.unknown && otherUsage + reported.tokens < plan.budget.maxTokens && clock() < deadlineAt
+        return otherUsage + reported.tokens < plan.budget.maxTokens && clock() < deadlineAt
       },
       canOpenRun: () => reportedEvaluationUsage(service, slots).runCount < plan.budget.maxRuns,
     })
+    if ((await readEvaluationManifest(service, [slot])).slots[0]?.status !== 'complete') break
   }
   const state = await service.taskRunState([])
   await assertPairedContracts(service, state, slots, plan)
@@ -353,14 +373,13 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
 
 function reportedEvaluationBudget(service: CommandService, slots: readonly EvaluationSlot[], plan: RoundPlan, clock: () => number, deadlineAt: number): boolean {
   const usage = reportedEvaluationUsage(service, slots)
-  return !usage.unknown && clock() < deadlineAt && usage.tokens < plan.budget.maxTokens && usage.runCount <= plan.budget.maxRuns
+  return clock() < deadlineAt && usage.tokens < plan.budget.maxTokens && usage.runCount <= plan.budget.maxRuns
 }
 
-function reportedEvaluationUsage(service: CommandService, slots: readonly EvaluationSlot[]): { readonly runCount: number; readonly tokens: number; readonly unknown: boolean } {
+function reportedEvaluationUsage(service: CommandService, slots: readonly EvaluationSlot[]): { readonly runCount: number; readonly tokens: number } {
   const taskIds = new Set(slots.map(slot => slot.taskId))
   const runs = new Map<string, string>()
   let tokens = 0
-  let unknown = false
   for (const fact of service.facts()) {
     if (fact.type === 'task/children-admitted') {
       const parentTaskId = runs.get(fact.data.parentRunId)
@@ -368,11 +387,10 @@ function reportedEvaluationUsage(service: CommandService, slots: readonly Evalua
     }
     if (fact.type === 'run/opened' && taskIds.has(fact.data.taskId)) runs.set(fact.data.runId, fact.data.taskId)
     if (fact.type === 'run/closed' && runs.has(fact.data.runId)) {
-      unknown ||= fact.data.usage.unknownRequests > 0 || (fact.data.usage.summary?.unknownRequests ?? 0) > 0
       tokens += tokenCount(fact.data.usage) + (fact.data.usage.summary === undefined ? 0 : tokenCount(fact.data.usage.summary))
     }
   }
-  return { runCount: runs.size, tokens, unknown }
+  return { runCount: runs.size, tokens }
 }
 
 async function assertPairedContracts(service: CommandService, state: TaskRunState, slots: readonly EvaluationSlot[], plan: RoundPlan): Promise<void> {
@@ -412,17 +430,47 @@ async function assertPairedContracts(service: CommandService, state: TaskRunStat
   }
 }
 
-function emptyUsage(): { inputTokens: number; outputTokens: number; steps: number; unknownRequests: number; complete: boolean } {
-  return { inputTokens: 0, outputTokens: 0, steps: 0, unknownRequests: 0, complete: true }
+type MutableEvaluationUsage = { -readonly [Key in keyof EvaluationUsage]: EvaluationUsage[Key] }
+
+function emptyUsage(): MutableEvaluationUsage {
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+    steps: 0, unknownRequests: 0, complete: true, cacheComplete: true }
 }
 
-function addUsage(target: ReturnType<typeof emptyUsage>, source: UsageRecord | EvaluationUsage): void {
+function addUsage(target: MutableEvaluationUsage, source: UsageRecord | EvaluationUsage): void {
   target.inputTokens += source.inputTokens
   target.outputTokens += source.outputTokens
   target.steps += source.steps
   target.unknownRequests += source.unknownRequests
   if ('complete' in source) target.complete &&= source.complete
+  const cacheComplete = 'cacheComplete' in source ? source.cacheComplete
+    : source.cacheReadTokens !== undefined && source.cacheWriteTokens !== undefined
+  target.cacheComplete &&= cacheComplete
+  if (target.cacheComplete) {
+    target.cacheReadTokens = (target.cacheReadTokens ?? 0) + (source.cacheReadTokens ?? 0)
+    target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + (source.cacheWriteTokens ?? 0)
+  } else {
+    delete target.cacheReadTokens
+    delete target.cacheWriteTokens
+  }
   if ('summary' in source && source.summary !== undefined) addUsage(target, source.summary)
+}
+
+function tokenCostReport(manifest: EvaluationManifest): TokenCostReport {
+  const cacheComplete = manifest.complete && manifest.usage.cacheComplete
+  const arm = (name: 'baseline' | 'candidate'): TokenCostArm => {
+    const usage = emptyUsage()
+    for (const slot of manifest.slots) if (slot.slot.arm === name) addUsage(usage, slot.usage)
+    return {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      uncachedInputTokens: cacheComplete
+        ? usage.inputTokens - (usage.cacheReadTokens ?? 0) - (usage.cacheWriteTokens ?? 0) : null,
+      cacheReadTokens: cacheComplete ? usage.cacheReadTokens ?? 0 : null,
+      cacheWriteTokens: cacheComplete ? usage.cacheWriteTokens ?? 0 : null,
+    }
+  }
+  return { complete: manifest.complete, cacheComplete, baseline: arm('baseline'), candidate: arm('candidate') }
 }
 
 function tokenCount(usage: Pick<UsageRecord, 'inputTokens' | 'outputTokens'>): number {
@@ -431,4 +479,63 @@ function tokenCount(usage: Pick<UsageRecord, 'inputTokens' | 'outputTokens'>): n
 
 function same(left: Ref, right: Ref): boolean {
   return left.id === right.id && left.digest === right.digest
+}
+
+/** Compare real consumer quality; token cost is reported separately and is not the objective. */
+export function compareVerifiedFraction(plan: RoundPlan, evidence: readonly PublicEvaluationEvidence[]) {
+  const cases = []
+  for (const caseRef of [...plan.cases, ...plan.validationCases]) {
+    const arm = (name: 'baseline' | 'candidate') => evidence.filter(value => value.caseRef.digest === caseRef.digest && value.caseRef.id === caseRef.id && value.arm === name)
+    const baseline = arm('baseline'), candidate = arm('candidate')
+    if (baseline.length !== plan.trialsPerCase || candidate.length !== plan.trialsPerCase) {
+      return { comparable: false as const, reason: 'missing-quality-trial' }
+    }
+    const mean = (values: typeof baseline) => values.reduce((sum, value) => sum + (value.verdict === 'verified' ? 1 : 0), 0) / values.length
+    const before = mean(baseline), after = mean(candidate)
+    cases.push({ caseRef, baseline: before, candidate: after, verdict: after > before ? 'improved' : after < before ? 'regression' : 'equal' })
+  }
+  const publicCases = cases.slice(0, plan.cases.length)
+  return { comparable: true as const, cases,
+    aggregateDelta: publicCases.reduce((sum, value) => sum + value.candidate - value.baseline, 0) / publicCases.length,
+    cost: pairedTokenCost(evidence) }
+}
+
+/** Domain checks own normalization and measurement; validation only guards regression. */
+export function compareMetricScores(plan: RoundPlan, evidence: readonly PublicEvaluationEvidence[]) {
+  const selected = evaluationMetricSchema.safeParse(plan.metric)
+  if (!selected.success) return { comparable: false as const, reason: 'invalid-metric-selector' }
+  const cases: ComparedCase[] = []
+  for (const caseRef of [...plan.cases, ...plan.validationCases]) {
+    const scores = { baseline: [] as number[], candidate: [] as number[] }
+    for (const arm of ['baseline', 'candidate'] as const) {
+      const trials = evidence.filter(value => same(value.caseRef, caseRef) && value.arm === arm)
+      if (trials.length !== plan.trialsPerCase) return { comparable: false as const, reason: 'missing-metric-trial' }
+      for (const trial of trials) {
+        if (trial.verdict === 'failed') { scores[arm].push(0); continue }
+        const metric = trial.receipt.criteria.find(value => value.id === selected.data.criterion)?.metric
+        if (metric === undefined || metric.name !== selected.data.name || metric.unit !== selected.data.unit
+          || !Number.isFinite(metric.value) || metric.value <= 0) {
+          return { comparable: false as const, reason: 'missing-or-invalid-performance-metric' }
+        }
+        scores[arm].push(metric.value)
+      }
+    }
+    const baseline = geometricMean(scores.baseline), candidate = geometricMean(scores.candidate)
+    cases.push({ caseRef, baseline, candidate, verdict: candidate > baseline ? 'improved' : candidate < baseline ? 'regression' : 'equal' })
+  }
+  const publicCases = cases.slice(0, plan.cases.length)
+  const baseline = geometricMean(publicCases.map(value => value.baseline)), candidate = geometricMean(publicCases.map(value => value.candidate))
+  return { comparable: true as const, cases,
+    aggregateDelta: baseline === 0 ? candidate : candidate / baseline - 1,
+    cost: pairedTokenCost(evidence) }
+}
+
+function geometricMean(values: readonly number[]): number {
+  return values.some(value => value === 0) ? 0 : Math.exp(values.reduce((sum, value) => sum + Math.log(value), 0) / values.length)
+}
+
+function pairedTokenCost(evidence: readonly PublicEvaluationEvidence[]): ComparisonCost {
+  const tokens = (arm: 'baseline' | 'candidate') => evidence.filter(value => value.arm === arm)
+    .reduce((sum, value) => sum + value.usage.inputTokens + value.usage.outputTokens, 0)
+  return { baseline: tokens('baseline'), candidate: tokens('candidate'), unit: 'reported-tokens' }
 }

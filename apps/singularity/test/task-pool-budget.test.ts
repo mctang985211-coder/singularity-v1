@@ -64,11 +64,11 @@ void test('reported budget exhaustion drains native child/parent sessions and cl
     }
     if (index === 2) return call('singularity_decompose', { action: 'prepare', bindingId: 'required-work' })
     if (index === 3) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: 'required-work', ackPreview: previewDigestFrom(request), task: {
-      goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, inputs: [],
+      goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, acceptanceCriteria: [{ id: 'exact-child', statement: 'Produce the declared child result.', check: 'test -s child.txt' }], inputs: [],
       localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Public child output.' }],
     } }] })
-    if (index === 6) return call('bash', { command: 'printf child > child.txt' })
-    if (index === 7) return call('singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
+    if (index === 6) return call('bash', { command: 'printf child > child.txt && mkdir -p result && cp child.txt result/child.txt' })
+    if (index === 7) return call('singularity_submit', { outputIds: ['result', 'child-note'], includeLearningDrafts: false })
     throw new Error(`No request may be purchased after the budget boundary: ${String(index)}`)
   }, async ({ spike, workspace, storeRoot, fixture }) => {
     scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1, maxStepsPerRun: 20, maxDepth: 2, maxTasks: 2,

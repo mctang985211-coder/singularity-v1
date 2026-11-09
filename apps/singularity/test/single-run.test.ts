@@ -148,8 +148,8 @@ async function makeScenario(
         guidance,
         example,
         instanceSchema: {},
-        requiredCriteria: [],
-        requiredOutputs: [],
+
+
         acceptancePolicy,
         skills: [],
         tools: [],
@@ -187,10 +187,6 @@ async function makeScenario(
           id: CRITERION_ID,
           statement: `The declared output ${OUTPUT_PATH} exists and contains exactly ${JSON.stringify(FROZEN_OUTPUT)} with no trailing newline.`,
           required: true,
-        }],
-        localGuidance: [{
-          id: 'exact-output',
-          statement: `Use bash with printf, for example: printf %s ${JSON.stringify(FROZEN_OUTPUT)} > ${OUTPUT_PATH}`,
         }],
         inputs: [{
           id: 'source',
@@ -254,12 +250,10 @@ async function makeScenario(
   }
 }
 
-function planReply(scenario: Scenario, taskId: string, runId: string, contextEpoch: string): ScriptedReply {
+function planReply(...args: [Scenario, string, string, string]): ScriptedReply {
+  void args
   const sketch = {
     v: 1,
-    taskId,
-    runId,
-    contextEpoch,
     objective: 'Produce the declared result file and submit it.',
     levels: [
       {
@@ -279,7 +273,6 @@ function planReply(scenario: Scenario, taskId: string, runId: string, contextEpo
     ],
     directPlan: [],
     assumptions: ['The fixture model can use the native bash tool.'],
-    sourceContract: scenario.contract.digest,
   }
   return {
     reasoning: 'Submit the plan for the current context epoch.',
@@ -433,7 +426,7 @@ async function withLiveHarness(
 function agentOptions(): AgentOptions {
   return {
     provider: 'singularity-local',
-    model: 'deepseek-flash',
+    model: 'deepseek-v4.1-flash',
     reasoningEffort: ReasoningEffortId('max'),
   }
 }
@@ -548,11 +541,9 @@ function assertVerifiedToolSemantics(
     if (!call.succeeded || call.name !== 'singularity_plan') return false
     const sketch = planSketchOf(call)
     return sketch !== undefined
-      && sketch['taskId'] === expected.taskId
-      && sketch['runId'] === expected.runId
-      && sketch['sourceContract'] === expected.contractDigest
-      && typeof sketch['contextEpoch'] === 'string'
-      && sketch['contextEpoch'].length > 0
+      && typeof sketch['objective'] === 'string'
+      && !('taskId' in sketch) && !('runId' in sketch)
+      && !('sourceContract' in sketch) && !('contextEpoch' in sketch)
   })
   const submit = calls.findLastIndex(call => call.succeeded && call.name === 'singularity_submit')
   const bash = calls.findLastIndex(call => call.succeeded && call.name === 'bash')
@@ -866,7 +857,7 @@ void test('single Run verified: self-read, plan, native bash output, independent
 })
 
 void test('single Run stops purchasing at host budget boundaries', { timeout: 240_000 }, async t => {
-  const boundaries = ['steps', 'tokens', 'cache', 'unknown', 'deadline'] as const
+  const boundaries = ['steps', 'tokens', 'cache', 'deadline'] as const
   let boundary: (typeof boundaries)[number] = 'steps'
   let now = Date.now()
   let deadline = now + 60_000
@@ -876,9 +867,9 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
     if (boundary === 'deadline') now = deadline
     return {
       toolCalls: [{ id: `read-${String(index)}`, name: 'singularity_read', arguments: '{"kind":"self"}' }],
-      ...(boundary === 'unknown' ? {} : { usage: boundary === 'cache'
+      usage: boundary === 'cache'
         ? { promptTokens: 256_001, completionTokens: 8, totalTokens: 256_009, cachedTokens: 256_000 }
-        : fixtureUsage(0) }),
+        : fixtureUsage(0),
     }
   }, async ({ spike, fixture, workspace, storeRoot }) => {
     for (const current of boundaries) {
@@ -910,7 +901,6 @@ void test('single Run stops purchasing at host budget boundaries', { timeout: 24
         assert.equal(fixture.requests.length - firstRequest, 1)
         assert.equal(result.evidence, undefined)
         assert.ok(result.executionRecord)
-        if (boundary === 'unknown') assert.equal(result.usage.unknownRequests, 1)
       })
     }
   })
@@ -925,15 +915,17 @@ void test('oversized visible tool schemas are rejected before the first model re
     })
     const taskId = `oversized-tools-${String(Date.now())}`
     const scenario = await makeScenario(storeRoot, spike.ctx, { taskId, baseToolName: 'verbose_fixture' })
-    await assert.rejects(executeSingleRun({
+    const result = await executeSingleRun({
       ctx: spike.ctx, journalRoot: storeRoot, workspace,
       sessionId: `${taskId}:session`, runId: `${taskId}:run`,
       admission: scenario.runAdmission, composition: scenario.composition,
       agentOptions: agentOptions(), maxOutputBytes: 1024,
       verifier: { provider: scenario.provider, verify() { throw new Error('no submission') } },
-    }), /visible tool schemas/)
+    })
+    assert.ok(result.kind === 'settled' && result.classification === 'invalid')
+    assert.match(result.executionRecord?.reason ?? '', /visible tool schemas/)
 
-    assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 0)
+    assert.equal((await readFacts(storeRoot)).filter(fact => fact.type === 'run/closed').length, 1)
     assert.equal(fixture.requests.length, 0)
 
   })
@@ -1281,11 +1273,8 @@ void test('Task resource CAS failure aborts without asking the model to repair h
     assert.ok(scenario)
     if (index === 0) return { toolCalls: [{ id: 'host-fault-self', name: 'singularity_read', arguments: JSON.stringify({ kind: 'self' }) }], usage: fixtureUsage(index) }
     if (index === 1) {
-      const contextEpoch = contextEpochFrom(request)
-      assert.ok(contextEpoch)
       return { toolCalls: [{ id: 'host-fault-plan', name: 'singularity_plan', arguments: JSON.stringify({ sketch: {
-        v: 1, taskId: scenario.contract.taskId, runId: 'host-fault-run', contextEpoch,
-        objective: 'Inspect the authorized input.', sourceContract: scenario.contract.digest,
+        v: 1, objective: 'Inspect the authorized input.',
         levels: [0, 1].map(level => ({ level, purpose: 'local work', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
         directPlan: [], assumptions: [],
       } }) }], usage: fixtureUsage(index) }

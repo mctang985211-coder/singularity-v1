@@ -197,7 +197,7 @@ function assertRequestHeader(session: Session): void {
   assert.ok(headerEvent)
   const { config, tools } = headerEvent.data.header
   assert.equal(config.provider, 'singularity-local')
-  assert.equal(config.model, 'deepseek-flash')
+  assert.equal(config.model, 'deepseek-v4.1-flash')
   assert.equal(config.reasoningEffort, 'max')
   assert.deepEqual(tools?.map(tool => tool.name).sort(), [...EXPECTED_TOOLS].sort())
 }
@@ -407,7 +407,7 @@ async function assertDirectNegativeOutcomes(
 
 function assertWireRequest(request: CapturedChatRequest): void {
   assert.equal(request.reasoning_effort, 'max')
-  assert.equal(request.model, 'deepseek-flash')
+  assert.equal(request.model, 'deepseek-v4.1-flash')
 
   const messages = request.messages ?? []
   assert.ok(messages.some(message => message.role === 'system' && wireText(message.content).includes(SYSTEM_TEXT)))
@@ -493,7 +493,7 @@ void test('alpha2 agent composition keeps declarations, dispatch, persistence, a
     }
     const agentOptions = {
       provider: 'singularity-local',
-      model: 'deepseek-flash',
+      model: 'deepseek-v4.1-flash',
       reasoningEffort: ReasoningEffortId('max'),
     } satisfies AgentOptions
 

@@ -1,16 +1,19 @@
 import { z } from 'zod'
 
 import { digestSchema, seal, verifyDigest } from './digest.ts'
+import type { JsonObject } from './json.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue, workspaceRelativePathSchema } from './schema.ts'
 
-/** Model-supplied local guidance; never an acceptance obligation. */
-export const localCriterionSchema = closedObject({
+/** Parent-authored acceptance frozen before dispatch. */
+export const acceptanceCriterionSchema = closedObject({
   id: z.string(),
   statement: z.string(),
+  check: z.string().regex(/\S/),
+  checkOutput: z.literal('metric-json').optional(),
 })
 
-export type LocalCriterion = z.infer<typeof localCriterionSchema>
+export type AcceptanceCriterion = z.infer<typeof acceptanceCriterionSchema>
 
 /** Model-supplied supporting output; this shape cannot express required deliverables. */
 export const localOutputSchema = closedObject({
@@ -33,6 +36,12 @@ export const taskCriterionSchema = closedObject({
   id: z.string(),
   statement: z.string(),
   required: z.boolean(),
+  check: z.string().regex(/\S/).optional(),
+  checkOutput: z.literal('metric-json').optional(),
+}).superRefine((criterion, ctx) => {
+  if (criterion.checkOutput !== undefined && criterion.check === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['checkOutput'], message: 'metric output requires a frozen check' })
+  }
 })
 
 export type TaskCriterion = z.infer<typeof taskCriterionSchema>
@@ -85,7 +94,6 @@ export type TaskLimits = z.infer<typeof taskLimitsSchema>
 export const taskSpecSchema = closedObject({
   goal: taskGoalSchema,
   criteria: z.array(taskCriterionSchema),
-  localGuidance: z.array(localCriterionSchema).optional(),
   inputs: z.array(inputRefSchema),
   outputs: z.array(outputSpecSchema),
 })
@@ -95,12 +103,24 @@ export type TaskSpec = z.infer<typeof taskSpecSchema>
 /** The only Task shape a model may submit through decomposition. */
 export const taskProposalSchema = closedObject({
   goal: taskGoalSchema,
-  localCriteria: z.array(localCriterionSchema).optional(),
+  acceptanceCriteria: z.array(acceptanceCriterionSchema).min(1),
   inputs: z.array(inputRefSchema),
   localOutputs: z.array(localOutputSchema).optional(),
 })
 
 export type TaskProposal = z.infer<typeof taskProposalSchema>
+
+/** Host-owned default used by exploration and every MethodPatch template. */
+export const DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA: JsonObject = {
+  type: 'object', additionalProperties: false,
+  required: ['goal', 'inputs', 'acceptanceCriteria'],
+  properties: {
+    goal: { type: 'object' },
+    acceptanceCriteria: { type: 'array', minItems: 1 },
+    inputs: { type: 'array' },
+    localOutputs: { type: 'array' },
+  },
+}
 
 const taskExampleInputSchema = closedObject({
   id: z.string(),

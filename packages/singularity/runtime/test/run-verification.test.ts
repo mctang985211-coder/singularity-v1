@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ToolDefinition,ToolRunContext } from '@deepseek-ai/dsh-tools'
@@ -124,6 +125,7 @@ async function run(
   clock: () => number = () => 0,
 ) {
   return verifyRunSubmission({
+    shell: {} as ShellExecutor,
     contract: options.contract,
     runId: 'run-verify',
     inputs: [{ id: 'input', digest: digestA }],
@@ -418,11 +420,7 @@ void test('skill dispatch is denied after stop and after submission', async () =
         } while (cursor !== undefined)
         await planTool.execute({ sketch: {
           v: 1,
-          taskId: contract.taskId,
-          runId: 'skill-guard-run',
-          contextEpoch,
           objective: 'exercise skill guard states',
-          sourceContract: contract.digest,
           levels: [0, 1].map(level => ({
             level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
           })),
@@ -528,11 +526,7 @@ void test('MCP dispatch guard admits only frozen public tools/resources and keep
       assert.equal(codeOf(controller.checkGuard(execution('mcp__calc__echo', { message: 'hi' }))), 'PLAN_FIRST')
       await planTool.execute({ sketch: {
         v: 1,
-        taskId: contract.taskId,
-        runId: 'mcp-guard-run',
-        contextEpoch,
         objective: 'exercise MCP guard states',
-        sourceContract: contract.digest,
         levels: [0, 1].map(level => ({
           level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
         })),
@@ -588,11 +582,7 @@ void test('MCP dispatch guard admits only frozen public tools/resources and keep
       } while (submittedCursor !== undefined)
       await submittedPlan.execute({ sketch: {
         v: 1,
-        taskId: contract.taskId,
-        runId: 'mcp-guard-run',
-        contextEpoch,
         objective: 'exercise MCP submitted guard',
-        sourceContract: contract.digest,
         levels: [0, 1].map(level => ({
           level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
         })),
@@ -650,7 +640,6 @@ void test('tool dispatch uses the exact host budget check while preserving read 
     const assertSubmissionGate = (expected: string | undefined) => {
       const refusal = controller.checkGuard(execution('singularity_submit'))
       assert.equal(refusal === undefined ? undefined : (JSON.parse(refusal) as { code: string }).code, expected)
-      assert.equal(controller.obligations().canSubmit, expected === undefined)
       assert.deepEqual(controller.obligations().denialCodes, expected === undefined ? [] : [expected])
     }
     assertSubmissionGate('READ_SELF_FIRST')
@@ -677,11 +666,29 @@ void test('tool dispatch uses the exact host budget check while preserving read 
     await assert.rejects(readTool.execute({ kind: 'self', cursor: 'unissued-cursor' }, execution('singularity_read')), /INVALID_ARGUMENT/)
     assertSubmissionGate('PLAN_FIRST')
     await planTool.execute({ sketch: {
-      v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch,
-      objective: 'complete current task', sourceContract: contract.digest,
+      v: 1, objective: 'complete current task',
       levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
       directPlan: [], assumptions: [],
     } }, execution('singularity_plan'))
+    const currentPlan = await planTool.execute({ sketch: {
+      v: 1, objective: 'replan current task',
+      levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+      directPlan: [], assumptions: [],
+    } }, execution('singularity_plan')) as { readonly planningSketchRef: Ref }
+    const persistedPlan = JSON.parse(new TextDecoder().decode(
+      (await store.readObject(currentPlan.planningSketchRef, 'object')).bytes,
+    )) as { readonly contextEpoch: string }
+    assert.equal(persistedPlan.contextEpoch, contextEpoch)
+    assert.notEqual(persistedPlan.contextEpoch, 'current')
+    await assert.rejects(
+      planTool.execute({ sketch: {
+        v: 1, taskId: contract.taskId, runId: 'run-guard', contextEpoch: 'stale-epoch',
+        objective: 'stale replan', sourceContract: contract.digest,
+        levels: [0, 1].map(level => ({ level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [] })),
+        directPlan: [], assumptions: [],
+      } }, execution('singularity_plan')),
+      /INVALID_ARGUMENT/,
+    )
     assertSubmissionGate(undefined)
     assert.equal(controller.checkGuard(execution('bash')), undefined)
     allowed = false
@@ -748,7 +755,6 @@ void test('S4-B1/B2 registers decompose for empty child bindings and accepts dup
     })
     const noChildTools = register(noChild)
     assert.ok(noChildTools.has('singularity_decompose'), 'prepare schema must stay discoverable without child bindings')
-    assert.equal(noChild.obligations().canDecompose, false)
     const noChildGuard = noChild.checkGuard(execution('singularity_decompose', { action: 'prepare', bindingId: 'b1' }))
     assert.ok(noChildGuard)
     assert.equal((JSON.parse(noChildGuard) as { readonly code: string }).code, 'BINDING_FIXED')
@@ -789,11 +795,7 @@ void test('S4-B1/B2 registers decompose for empty child bindings and accepts dup
     } while (cursor !== undefined)
     const sketch = (directPlan: readonly { readonly bindingId: string; readonly purpose: string }[]) => ({
       v: 1,
-      taskId: contract.taskId,
-      runId: 'b1-plan-run',
-      contextEpoch,
       objective: 'exercise directPlan visibility',
-      sourceContract: contract.digest,
       levels: [0, 1].map(level => ({
         level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
       })),
@@ -921,7 +923,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
         scope: ['child'],
         constraints: [],
       },
-      localCriteria: [{ id: 'local', statement: 'Record the result.' }],
+      acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local', statement: 'Record the result.' }],
       inputs: [],
       localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
     }
@@ -981,11 +983,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
     assert.equal(codeOf(controller.checkGuard(execution('singularity_decompose', commitArgs))), 'PLAN_FIRST')
     await plan.execute({ sketch: {
       v: 1,
-      taskId: contract.taskId,
-      runId: 'run-s4b2-guard',
-      contextEpoch,
       objective: 'commit one child',
-      sourceContract: contract.digest,
       levels: [0, 1].map(level => ({
         level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
       })),
@@ -1033,7 +1031,6 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
     assert.equal(codeOf(controller.checkGuard(execution('bash', {}))), 'CHILD_BATCH_ACTIVE')
     assert.equal(codeOf(controller.checkGuard(execution('singularity_stop'))), 'CHILD_BATCH_ACTIVE')
     assert.equal(codeOf(controller.checkGuard(execution('singularity_read', { kind: 'status' }))), undefined)
-    assert.equal(controller.obligations().canSubmit, false)
     assert.deepEqual(controller.obligations().denialCodes, ['CHILD_BATCH_ACTIVE'])
     await assert.rejects(
       decompose.execute(commitArgs, execution('singularity_decompose')),
@@ -1074,11 +1071,7 @@ void test('S4-B2 decompose commit guards, maps errors, and concludes the parent 
     } while (retryCursor !== undefined)
     await retryPlan.execute({ sketch: {
       v: 1,
-      taskId: contract.taskId,
-      runId: 'run-s4b2-retry',
-      contextEpoch,
       objective: 'retry commit',
-      sourceContract: contract.digest,
       levels: [0, 1].map(level => ({
         level, purpose: 'current level', likelyChildren: [], expectedInputs: [], expectedOutputs: [],
       })),

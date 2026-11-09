@@ -97,9 +97,10 @@ export async function sealPublicTrace(request: SealPublicTraceRequest): Promise<
   const sessionCuts: SessionCut[] = []
   const planning: { runId: string; ref: Ref }[] = []
   const feedback: { runId: string; ref: Ref }[] = []
-  const usage: UsageRecord = { inputTokens: 0, outputTokens: 0, steps: 0, unknownRequests: 0 }
+  const usage: UsageRecord = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, steps: 0, unknownRequests: 0 }
   const totals = { ...usage }
   const method = parseProtocolValue(methodRevisionSchema, await readJson(service, root.contract.method, 'method'))
+  await authorize(root.contract.acceptance)
   await authorize(root.contract.method, 'method')
   for (const template of method.templates) {
     await authorize(template.guidance)
@@ -174,8 +175,12 @@ export async function sealPublicTrace(request: SealPublicTraceRequest): Promise<
     const events = await (request.readSessionEvents?.(result.sessionCut) ?? readPersistedEvents(request.ctx, result.sessionCut))
     if (events.length !== result.sessionCut.to || result.sessionCut.from !== 0) throw new Error('Persisted session does not match the final Run cut')
     const observed = snapshotSessionEvents(run.opened.sessionId, events)
-    const runUsage = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
-      steps: result.usage.steps, unknownRequests: result.usage.unknownRequests }
+    const runUsage: UsageRecord = {
+      inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
+      ...(result.usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: result.usage.cacheReadTokens }),
+      ...(result.usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: result.usage.cacheWriteTokens }),
+      steps: result.usage.steps, unknownRequests: result.usage.unknownRequests,
+    }
     if (canonicalize(observed.usage) !== canonicalize(runUsage)) throw new Error('Persisted session usage differs from the recorded final usage')
     sessionCuts.push(result.sessionCut)
     addUsage(totals, result.usage)
@@ -389,12 +394,22 @@ function publicMessage(message: Message): unknown {
     ...(message.role === 'tool' ? { toolCallId: message.toolCallId, isError: message.isError === true } : {}) }
 }
 
-function addUsage(totals: { inputTokens: number; outputTokens: number; steps: number; unknownRequests: number }, usage: UsageRecord): void {
+type MutableUsageRecord = { -readonly [Key in keyof UsageRecord]: UsageRecord[Key] }
+
+function addUsage(totals: MutableUsageRecord, usage: UsageRecord): void {
   for (const part of [usage, ...(usage.summary === undefined ? [] : [usage.summary])]) {
     totals.inputTokens += part.inputTokens
     totals.outputTokens += part.outputTokens
     totals.steps += part.steps
     totals.unknownRequests += part.unknownRequests
+    if (totals.cacheReadTokens === undefined || totals.cacheWriteTokens === undefined
+      || part.cacheReadTokens === undefined || part.cacheWriteTokens === undefined) {
+      delete totals.cacheReadTokens
+      delete totals.cacheWriteTokens
+    } else {
+      totals.cacheReadTokens += part.cacheReadTokens
+      totals.cacheWriteTokens += part.cacheWriteTokens
+    }
   }
 }
 

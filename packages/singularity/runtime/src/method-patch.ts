@@ -1,17 +1,21 @@
 import type {
-FactActor,JsonValue,MethodPatch,MethodRevision,Ref,TaskTemplate,
+FactActor,GlobalResourceSnapshot,JsonValue,MethodPatch,MethodRevision,Ref,TaskTemplate,
 } from '@singularity/protocol'
+import { isSkillName } from '@deepseek-ai/dsh-skill'
 import {
-assertTaskTemplateInterface,
+AdmissionError,
 canonicalize,
 computeDigest,
 computeDigestBytes,
+DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA,
+globalResourceSnapshotSchema,
 methodRevisionSchema,
 parseJsonText,
 parseMethodPatch,
 parseProtocolValue,
 seal,
 sealMethodRevision,
+taskContractSchema,
 taskExampleSchema,
 validateInstanceSchema,
 } from '@singularity/protocol'
@@ -20,7 +24,7 @@ import { MethodResourceError } from './errors.ts'
 
 import { readMcpServers } from './mcp-resources.ts'
 import { readTreeBundle } from './resource-bundle.ts'
-import { METHOD_GUIDANCE_MAX_BYTES,TASK_EXAMPLE_MAX_BYTES } from './resources.ts'
+import { METHOD_GUIDANCE_MAX_BYTES,TASK_EXAMPLE_MAX_BYTES,resourceAssetCatalog } from './resources.ts'
 import type { CommandService } from './service.ts'
 import { readSkills,sameRef } from './skill-resources.ts'
 import { readPublicTrace } from './trace.ts'
@@ -42,17 +46,17 @@ export type PatchPrecheckResult =
   | { readonly accepted: true; readonly candidate: MethodRevision; readonly candidateMethod: Ref; readonly precheckReceipt: Ref }
   | { readonly accepted: false; readonly reason: string; readonly precheckReceipt: Ref }
 
-/** Freeze the single formal proposal. Invalid arguments do not consume the Round proposal. */
 export async function submitMethodPatch(request: {
   readonly service: CommandService
   readonly actor: FactActor
   readonly roundId: string
   readonly value: unknown
 }): Promise<Ref> {
-  const patch = parseMethodPatch(request.value)
   const opened = request.service.facts().find(fact => fact.type === 'rsi/round-opened' && fact.data.roundId === request.roundId)
   if (opened?.type !== 'rsi/round-opened') throw new Error('Round is not open')
-  if (!sameRef(patch.base, opened.data.baseMethod)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')
+  const patch = parseMethodPatch(request.value, opened.data.baseMethod)
+  for (const change of patch.changes) if (change.op === 'put-skill' && !isSkillName(change.skill.name))
+    throw new MethodPatchRejection(`skill name ${JSON.stringify(change.skill.name)} is not DSH kebab-case`)
   if (request.service.facts().some(fact => (fact.type === 'rsi/proposal-submitted' || fact.type === 'rsi/round-closed') && fact.data.roundId === request.roundId)) {
     throw new Error('Round already has a formal proposal or is closed')
   }
@@ -84,12 +88,19 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
   const base = parseProtocolValue(methodRevisionSchema, await readJson(service, opened.data.baseMethod, 'method'))
   if (base.id !== opened.data.baseMethod.id || base.digest !== opened.data.baseMethod.digest) throw new Error('Pinned base Method identity is invalid')
   const trace = await readPublicTrace(service, opened.data.sourceTrace)
+  const contractChapter = trace.chapters.find(chapter => chapter.id === 'contract')
+  if (contractChapter === undefined) throw new Error('Sealed trace has no root contract')
+  const root = parseProtocolValue(taskContractSchema, await readJson(service, contractChapter.object))
+  const exploration = root.resources.exploration === undefined ? undefined
+    : parseProtocolValue(globalResourceSnapshotSchema, await readJson(service, root.resources.exploration))
+  const defaultAcceptance = exploration?.fallbackAcceptance ?? root.acceptance
+  await service.readObject(defaultAcceptance)
   let candidate: MethodRevision
   try {
     if (!sameRef(patch.base, opened.data.baseMethod)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')
-    candidate = await applyPatch(service, base, patch, trace.authorizedObjects.map(entry => entry.ref))
+    candidate = await applyPatch(service, base, patch, defaultAcceptance, exploration)
   } catch (error) {
-    if (!(error instanceof MethodPatchRejection || error instanceof MethodResourceError || error instanceof ZodError)) throw error
+    if (!(error instanceof MethodPatchRejection || error instanceof MethodResourceError || error instanceof AdmissionError || error instanceof ZodError)) throw error
     const reason = error instanceof Error ? error.message : String(error)
     const precheckReceipt = await putJson(service, `round:${roundId}:precheck`, seal('object', {
       v: 1, roundId, patch: proposal.data.patch, accepted: false, reason,
@@ -119,7 +130,7 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
 }
 
 async function applyPatch(
-  service: CommandService, base: MethodRevision, patch: MethodPatch, publicRefs: readonly Ref[],
+  service: CommandService, base: MethodRevision, patch: MethodPatch, defaultAcceptance: Ref, exploration?: GlobalResourceSnapshot,
 ): Promise<MethodRevision> {
   const templates = new Map(base.templates.map(template => [template.id, template]))
   const skills = new Map(base.skills.map(skill => [skill.id, skill]))
@@ -127,7 +138,6 @@ async function applyPatch(
   if (templates.size !== base.templates.length || skills.size !== base.skills.length || tools.size !== base.tools.length) throw new MethodPatchRejection('Base Method contains duplicate asset IDs')
   let entry = base.entryTemplateId
   const modified = new Set<string>()
-  const allowed = [...publicRefs, ...base.templates.map(template => template.acceptancePolicy)]
   for (const change of patch.changes) {
     const id = change.op === 'set-entry' ? '' : 'id' in change ? change.id
       : change.op === 'put-template' ? change.template.id
@@ -146,10 +156,11 @@ async function applyPatch(
       case 'remove-mcp-server': tools.delete(change.id); break
       case 'put-template': {
         const { guidance, example, ...template } = change.template
-        if (!allowed.some(ref => sameRef(ref, template.acceptancePolicy))) throw new MethodPatchRejection('Template acceptancePolicy is outside the authorized public references')
-        await service.readObject(template.acceptancePolicy)
+        const acceptancePolicy = templates.get(template.id)?.acceptancePolicy ?? defaultAcceptance
         templates.set(template.id, {
           ...template,
+          instanceSchema: structuredClone(DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA),
+          acceptancePolicy,
           guidance: await putContent(service, { v: 1, text: guidance }),
           example: await putContent(service, example),
         })
@@ -182,10 +193,10 @@ async function applyPatch(
     templates: [...templates.values()], skills: [...skills.values()], tools: [...tools.values()],
   })
   if (entry !== undefined && !templates.has(entry)) throw new MethodPatchRejection('Method entry template is dangling')
+  const catalog = resourceAssetCatalog({ method: candidate, ...(exploration === undefined ? {} : { exploration }) })
   const assetIds = [...templates.keys(), ...skills.keys(), ...tools.keys()]
   if (new Set(assetIds).size !== assetIds.length || assetIds.some(id => id.length === 0)) throw new MethodPatchRejection('Method asset IDs must be nonempty and unique')
   for (const template of candidate.templates) {
-    assertTaskTemplateInterface(template)
     assertUnique(template.skills, 'template skill bindings')
     assertUnique(template.tools, 'template tool bindings')
     assertUnique(template.children.map(binding => binding.bindingId), 'child binding IDs')
@@ -193,7 +204,6 @@ async function applyPatch(
     for (const id of template.tools) if (!tools.has(id)) throw new MethodPatchRejection('Template MCP server binding is dangling')
     for (const binding of template.children) if (!templates.has(binding.templateId)) throw new MethodPatchRejection('Child template binding is dangling')
     const example = parseProtocolValue(taskExampleSchema, await readJson(service, template.example))
-    assertProposalSchemaFields(template.instanceSchema)
     const guidance = await readJson(service, template.guidance)
     if (guidance === null || typeof guidance !== 'object' || Array.isArray(guidance)
       || Object.keys(guidance).length !== 2 || guidance['v'] !== 1 || typeof guidance['text'] !== 'string'
@@ -207,29 +217,15 @@ async function applyPatch(
   // Reuse the same deterministic catalog/bundle schema checks as normal Task composition.
   const catalogTemplate: TaskTemplate = {
     id: 'catalog-check', brief: '', guidance: patch.base, example: patch.base,
-    instanceSchema: {}, requiredCriteria: [], requiredOutputs: [], acceptancePolicy: patch.base,
-    skills: candidate.skills.map(skill => skill.id), tools: candidate.tools.map(tool => tool.id), children: [],
+    instanceSchema: {}, acceptancePolicy: patch.base,
+    skills: catalog.skills.map(skill => skill.id), tools: catalog.tools.map(tool => tool.id), children: [],
   }
-  await readSkills(service, candidate, catalogTemplate, candidate.skills.map(skill => skill.bundle))
-  await readMcpServers(service, candidate, catalogTemplate, candidate.tools.map(tool => tool.server.bundle))
+  await readSkills(service, catalog, catalogTemplate, catalog.skills.map(skill => skill.bundle))
+  await readMcpServers(service, catalog, catalogTemplate, catalog.tools.map(tool => tool.server.bundle))
   if (canonicalize(await effectiveContent(service, candidate)) === canonicalize(await effectiveContent(service, base))) throw new MethodPatchRejection('MethodPatch is a no-op')
   return candidate
 }
 
-function assertProposalSchemaFields(schema: JsonValue): void {
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return
-  const allowed = ['goal', 'localCriteria', 'inputs', 'localOutputs']
-  const properties = schema['properties']
-  if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)
-    && Object.keys(properties).some(key => !allowed.includes(key))) throw new MethodPatchRejection('Template instanceSchema can constrain only TaskProposal fields')
-  const required = schema['required']
-  if (Array.isArray(required) && required.some(key => typeof key !== 'string' || !allowed.includes(key))) throw new MethodPatchRejection('Template instanceSchema cannot add host-owned Task fields')
-  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
-    const branches = schema[keyword]
-    if (Array.isArray(branches)) for (const branch of branches) assertProposalSchemaFields(branch)
-  }
-  if (Object.hasOwn(schema, 'not')) assertProposalSchemaFields(schema['not'])
-}
 
 async function effectiveContent(service: CommandService, method: MethodRevision): Promise<unknown> {
   const tree = async (ref: Ref) => {
@@ -237,11 +233,22 @@ async function effectiveContent(service: CommandService, method: MethodRevision)
     return bundle.manifest.files.map(file => ({ path: file.path,
       digest: computeDigestBytes('object', bundle.contents.get(file.path) ?? new Uint8Array()) }))
   }
+  const catalog = new Map(method.templates.map(template => [template.id, template]))
+  const reachable = new Set<string>()
+  const pending = method.entryTemplateId === undefined ? [] : [method.entryTemplateId]
+  for (const id of pending) {
+    if (reachable.has(id)) continue
+    reachable.add(id)
+    pending.push(...catalog.get(id)?.children.map(binding => binding.templateId) ?? [])
+  }
+  const templates = method.templates.filter(template => reachable.has(template.id))
+  const skillIds = new Set(templates.flatMap(template => template.skills))
+  const toolIds = new Set(templates.flatMap(template => template.tools))
   return {
     entry: method.entryTemplateId ?? null,
-    templates: method.templates.map(template => ({ ...template, guidance: template.guidance.digest, example: template.example.digest })),
-    skills: await Promise.all(method.skills.map(async skill => ({ ...skill, bundle: await tree(skill.bundle) }))),
-    tools: await Promise.all(method.tools.map(async tool => ({ ...tool, server: {
+    templates: templates.map(template => ({ ...template, guidance: template.guidance.digest, example: template.example.digest })),
+    skills: await Promise.all(method.skills.filter(skill => skillIds.has(skill.id)).map(async skill => ({ ...skill, bundle: await tree(skill.bundle) }))),
+    tools: await Promise.all(method.tools.filter(tool => toolIds.has(tool.id)).map(async tool => ({ ...tool, server: {
       ...tool.server, bundle: await tree(tool.server.bundle), sourceFiles: await tree(tool.server.sourceFiles),
       manifest: tool.server.manifest.digest, config: tool.server.config.digest,
     } }))),

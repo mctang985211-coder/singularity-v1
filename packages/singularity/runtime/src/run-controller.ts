@@ -1,8 +1,8 @@
-import type { Session } from '@deepseek-ai/dsh-session'
-import type { Fact,JsonValue,Ref,TaskContract,UsageRecord } from '@singularity/protocol'
+import type { Session,SessionId } from '@deepseek-ai/dsh-session'
+import type { Fact,JsonValue,Ref,UsageRecord } from '@singularity/protocol'
 
 import { snapshotSession } from './agent.ts'
-import { loadDirectChildren,mountDirectOutputs,readChildData } from './children.ts'
+import { loadDirectChildren,loadRunResult,mountRunOutputs,readChildData } from './children.ts'
 import { activeChildBatch,commitDecomposeBatch } from './decompose-commit.ts'
 import { initialContextEpoch } from './epoch.ts'
 import { DecomposeError } from './errors.ts'
@@ -11,8 +11,9 @@ import { mcpDispatchPlan } from './mcp-resources.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
 import { clampPercent } from './prompt.ts'
 import { usesExploration } from './resources.ts'
-import { commitFact,usageCost } from './run-settlement.ts'
+import { closedSubtreeUsage,commitFact,usageCost } from './run-settlement.ts'
 import type { ExecuteSingleRunRequest,PreparedRun,RuntimeContext } from './run.ts'
+import { yieldedRunSession } from './run.ts'
 import type { CommandService } from './service.ts'
 import { loadDirectFeedback,readDirectFeedback } from './task-feedback.ts'
 import { RunToolController } from './tools.ts'
@@ -31,18 +32,18 @@ export async function createToolController(
   service: CommandService,
 ) {
   const { runtime, runOpened } = prepared
-  const state = await service.taskRunState(runtime.transientInvalidReasons)
+  let state = await service.taskRunState(runtime.transientInvalidReasons)
   let children = await loadDirectChildren(service, state, runtime.contract.taskId, request.runId, prepared.methodResources.template)
-  await mountDirectOutputs(service, runtime.workspace, children, prepared.mountedChildOutputs)
-  const subtree = new Set<string>()
-  const pending = [runtime.contract.taskId]
-  for (const taskId of pending) {
-    subtree.add(taskId)
-    pending.push(...(state.tasks.get(taskId)?.childIds ?? []))
-  }
-  const feedbackCount = (await loadDirectFeedback({ state, parentTaskId: runtime.contract.taskId, reader: service })).length
-  const prior = usageCost([...state.runs.values()]
-    .flatMap(run => subtree.has(run.taskId) && run.closed?.usage !== undefined ? [run.closed.usage] : []))
+  const previous = await loadRunResult(service, state.runs.get(runtime.lastAttempt?.runId ?? ''),
+    runtime.lastAttempt?.outputsPath ?? '')
+  await mountRunOutputs(service, runtime.workspace, [...children.results.flatMap(result => result.outputs), ...previous.outputs], prepared.mountedChildOutputs)
+  const authorizedInputs = () => [...runtime.contract.spec.inputs, ...children.inputs, ...previous.outputs]
+  const session = (runId: string) => request.ctx.sessions.get(state.runs.get(runId)?.opened.sessionId as SessionId) ?? yieldedRunSession(service, runId)
+  const feedbackEntries = await loadDirectFeedback({ state, parentTaskId: runtime.contract.taskId, reader: service, session })
+  const feedbackCount = feedbackEntries.length
+  const prior = closedSubtreeUsage(state, runtime.contract.taskId)
+  const taskStartedAt = service.facts().find(fact => fact.type === 'run/opened'
+    && fact.data.taskId === runtime.contract.taskId)?.at ?? runtime.startedAt
   const reservation = runOpened.data.budgetReservation
   const limits = {
     ...runtime.contract.limits,
@@ -70,19 +71,34 @@ export async function createToolController(
     }
     const usage = currentUsage()
     const cost = usageCost([usage])
-    if (prior.unknown || cost.unknown || cost.tokens + tokens > limits.maxTokens) {
+    if (cost.tokens + tokens > limits.maxTokens) {
       request.onBudgetExhausted?.()
       return false
     }
     return usage.steps + steps <= limits.maxStepsPerRun
   }
-  const budget = () => computeBudget(limits, currentUsage(), runtime.startedAt, runtime.clock(), prior.unknown,
-    Math.min(reservation.tokens, runtime.contract.limits.maxTokens))
+  const budget = (): RemainingBudgetPct => {
+    const usage = currentUsage()
+    const cost = usageCost([usage])
+    const closed = closedSubtreeUsage(state, runtime.contract.taskId)
+    const subtree = [runtime.contract.taskId]
+    for (const taskId of subtree) subtree.push(...(state.tasks.get(taskId)?.childIds ?? []))
+    const task = state.tasks.get(runtime.contract.taskId)
+    const rootDepth = state.tasks.get(task?.rootTaskId ?? '')?.contract.limits.maxDepth ?? limits.maxDepth
+    return {
+      tokensPct: clampPercent(
+        Math.min(reservation.tokens, runtime.contract.limits.maxTokens - closed.tokens) - cost.tokens, runtime.contract.limits.maxTokens),
+      stepsPct: clampPercent(limits.maxStepsPerRun - usage.steps, limits.maxStepsPerRun),
+      wallClockPct: clampPercent(limits.deadlineAt - runtime.clock(), limits.deadlineAt - taskStartedAt),
+      depthPct: clampPercent(limits.maxDepth, rootDepth),
+      taskSlotsPct: clampPercent(limits.maxTasks - subtree.length, limits.maxTasks),
+    }
+  }
   request.summaries?.registerRun({ contract: runtime.contract, runId: request.runId, workspace: runtime.workspace,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
     checkBudget: (extraTokens = 0) => {
       const cost = usageCost([workerUsage()])
-      return !prior.unknown && !cost.unknown && runtime.clock() < limits.deadlineAt
+      return runtime.clock() < limits.deadlineAt
         && cost.tokens + extraTokens < limits.maxTokens && request.checkReportedBudget?.() !== false
     },
   })
@@ -94,21 +110,22 @@ export async function createToolController(
     childBatchActive: activeChildBatch(state, request.runId) !== undefined,
     submitDenial: () => children.submitDenial,
     requiredFailure: () => children.requiredFailure,
-    verifierInputs: [...runtime.contract.spec.inputs.map(input => input.object), ...children.inputs.map(input => input.object)],
+    verifierInputs: authorizedInputs().map(input => input.object),
+    replyTarget: id => feedbackEntries.find(entry => entry.feedback.id === id)?.feedback,
     readTask: async query => query.kind === 'ancestor' && request.summaries !== undefined
       ? request.summaries.readAncestor(await service.taskRunState(runtime.transientInvalidReasons), runtime.contract.taskId, query, runtime.clock())
       : query.kind === 'feedback'
       ? readDirectFeedback({ state: await service.taskRunState(runtime.transientInvalidReasons),
-        parentTaskId: runtime.contract.taskId, reader: service,
+        parentTaskId: runtime.contract.taskId, reader: service, session,
         ...(query.id === undefined ? {} : { id: query.id }),
         ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
         ...(query.page === undefined ? {} : { page: query.page }),
       })
       : (query.kind === 'resource' && usesExploration(prepared.methodResources) && prepared.methodResources.exploration !== undefined
         ? await readGlobalResource(service, prepared.methodResources.exploration, query) : undefined)
-        ?? await readChildData(service, children, runtime.contract.spec.inputs, query),
+        ?? await readChildData(service, children, runtime.contract.spec.inputs, query, previous),
     skillNames: prepared.methodResources.skills.map(skill => skill.name),
-    mcpPlan: mcpDispatchPlan(prepared.methodResources.mcpServers),
+    mcpPlan: mcpDispatchPlan(prepared.methodResources.mcpServers, request.ctx.get('mcpResources', false) !== undefined),
     childBindingIds: prepared.methodResources.template.children.map(binding => binding.bindingId),
     decompose: {
       methodResources: prepared.methodResources,
@@ -122,6 +139,7 @@ export async function createToolController(
     epoch: () => initialContextEpoch(request.sessionId),
     onAgent: agent => {
       liveAgent = agent
+      prepared.session = agent.session
     },
     commitSubmission: async (frozen, sessionId, transcriptSeq) => {
       if (!checkBudget()) throw new Error('Run budget unavailable')
@@ -142,9 +160,6 @@ export async function createToolController(
         throw new DecomposeError('INVALID_ARGUMENT', 'live Agent is missing at child batch commit')
       }
       const live = usageCost([currentUsage()])
-      if (live.unknown || prior.unknown) {
-        throw new DecomposeError('LIMIT_EXCEEDED', 'live usage is unknown at child batch commit')
-      }
       const result = await commitDecomposeBatch({
         contract: runtime.contract,
         parentRunId: request.runId,
@@ -158,16 +173,15 @@ export async function createToolController(
         transientInvalidReasons: runtime.transientInvalidReasons,
         liveTokens: live.tokens,
         args,
-        authorizedInputs: [...runtime.contract.spec.inputs, ...children.inputs.map(input => ({ id: input.id, path: input.path, object: input.object, access: input.access }))],
+        authorizedInputs: authorizedInputs(),
       })
-      children = await loadDirectChildren(service, await service.taskRunState(runtime.transientInvalidReasons),
+      state = await service.taskRunState(runtime.transientInvalidReasons)
+      children = await loadDirectChildren(service, state,
         runtime.contract.taskId, request.runId, prepared.methodResources.template)
       return result
     },
   })
-  return { controller, children: () => children, feedback: { count: feedbackCount, ...(feedbackCount > 0 ? { cursor: `feedback:${runtime.contract.taskId}:0` } : {}) }, budget, checkBudget, stopBudget: () => { active = false },
-    startBudget: computeBudget({ ...runtime.contract.limits, maxTokens: reservation.tokens },
-      zeroUsage, runtime.startedAt, runtime.startedAt) }
+  return { controller, children: () => children, feedback: { count: feedbackCount, ...(feedbackCount > 0 ? { cursor: `feedback:${runtime.contract.taskId}:0` } : {}) }, budget, checkBudget, stopBudget: () => { active = false } }
 }
 
 async function commitRunSubmitted(
@@ -203,23 +217,4 @@ async function commitRunSubmitted(
     },
     runtime.transientInvalidReasons,
   )
-}
-
-function computeBudget(
-  limits: TaskContract['limits'],
-  usage: UsageRecord,
-  startedAt: number,
-  now: number,
-  priorUnknown = false,
-  totalTokens = limits.maxTokens,
-): RemainingBudgetPct {
-  const cost = usageCost([usage])
-  const tokensPct = priorUnknown || cost.unknown ? null : clampPercent(limits.maxTokens - cost.tokens, totalTokens)
-  const stepsPct = clampPercent(limits.maxStepsPerRun - usage.steps, limits.maxStepsPerRun)
-  const wallClockPct = limits.deadlineAt <= startedAt
-    ? 0
-    : clampPercent(limits.deadlineAt - now, limits.deadlineAt - startedAt)
-  const depthPct = limits.maxDepth <= 0 ? 100 : clampPercent(limits.maxDepth, limits.maxDepth)
-  const taskSlotsPct = limits.maxTasks <= 0 ? 0 : clampPercent(limits.maxTasks - 1, limits.maxTasks)
-  return { tokensPct, stepsPct, wallClockPct, depthPct, taskSlotsPct }
 }

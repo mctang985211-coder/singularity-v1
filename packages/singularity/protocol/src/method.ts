@@ -4,7 +4,6 @@ import { digestSchema, seal, verifyDigest } from './digest.ts'
 import { jsonObjectSchema } from './json.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
-import { outputSpecSchema, taskCriterionSchema } from './task.ts'
 
 /** Static child binding from docs/framework.md §5. */
 export const childBindingSchema = closedObject({
@@ -23,8 +22,6 @@ export const taskTemplateSchema = closedObject({
   guidance: refSchema,
   example: refSchema,
   instanceSchema: jsonObjectSchema,
-  requiredCriteria: z.array(taskCriterionSchema),
-  requiredOutputs: z.array(outputSpecSchema),
   acceptancePolicy: refSchema,
   skills: z.array(z.string()),
   tools: z.array(z.string()),

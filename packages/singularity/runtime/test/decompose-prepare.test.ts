@@ -112,7 +112,7 @@ function exampleBody(marker = 'complete example'): Record<string, unknown> {
       scope: ['sample'],
       constraints: ['Read-only sample.'],
     },
-    localCriteria: [{ id: 'local', statement: 'Record the sample.' }],
+    acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local', statement: 'Record the sample.' }],
     inputs: [{ id: 'sample', exampleText: 'sample text' }],
     localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
   }
@@ -143,8 +143,8 @@ async function makeFixture(
     guidance,
     example,
     instanceSchema: {},
-    requiredCriteria: [],
-    requiredOutputs: [],
+
+
     acceptancePolicy: acceptance,
     skills: [],
     tools: [],
@@ -219,7 +219,7 @@ void test('S4-B1 prepare returns the frozen example and writes preview plus obje
     assert.equal(result.response.status, 'preview')
     assert.equal(result.response.join, 'probe')
     assert.equal(result.response.example.goal.summary.includes('complete example'), true)
-    assert.equal(result.response.interface.requiredCriteria.length, 0)
+    assert.equal(Object.hasOwn(result.response.interface, 'requiredCriteria'), false)
     assert.equal(result.response.resolved.skills.length, 0)
     assert.equal(result.response.resolved.mcpServers.length, 0)
     assert.equal(await objectCount(join(root, 'objects')), before + 2)

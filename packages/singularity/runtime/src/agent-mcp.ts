@@ -120,9 +120,11 @@ export function assertMcpSurface(
       }
     }
   }
-  for (const name of MCP_RESOURCE_TOOL_NAMES) {
-    if (!definitionNames.has(name)) {
-      failSurface(`native MCP resource tool ${JSON.stringify(name)} is not mounted`)
+  if (agentCtx.get('mcpResources', false) !== undefined) {
+    for (const name of MCP_RESOURCE_TOOL_NAMES) {
+      if (!definitionNames.has(name)) {
+        failSurface(`native MCP resource tool ${JSON.stringify(name)} is not mounted`)
+      }
     }
   }
 }

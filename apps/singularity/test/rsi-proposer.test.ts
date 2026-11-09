@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import type { FactPayloadMap,FactType,JsonValue,MethodPatch,RoundPlan } from '@singularity/protocol'
+import type { FactPayloadMap,FactType,JsonValue,MethodPatchDraft,RoundPlan } from '@singularity/protocol'
 import { canonicalize,parseJsonText,sealTaskContract } from '@singularity/protocol'
 import {
 closeRsiRound,
@@ -22,16 +22,16 @@ import { ACTOR,agentOptions,fixtureUsage,jsonBytes,makeScenario } from './task-f
 void test('C-14 sealed public trace drives an independent scoped DSH proposer and atomic candidate precheck', { timeout: 120_000 }, async () => {
   let scenario: Scenario | undefined
   let nextScenario: Scenario | undefined
-  let patch: MethodPatch | undefined
+  let patch: MethodPatchDraft | undefined
   let comparisonDigest = ''
   const taskId = 'task:s5-source', runId = 'run:s5-source'
   await withHarness((request, index) => {
     if (index < 2) return selfReadAndPlan(request, index, scenario, taskId, runId) ?? { content: 'unreachable' }
     if (index === 2) return writeOutputReply()
     if (index === 3) return submitReply()
-    if (index === 8 || index === 9) return selfReadAndPlan(request, index - 8, nextScenario, 'task:s5-next', 'run:s5-next') ?? { content: 'unreachable' }
-    if (index === 10) return writeOutputReply()
-    if (index === 11) return submitReply()
+    if (index === 9 || index === 10) return selfReadAndPlan(request, index - 9, nextScenario, 'task:s5-next', 'run:s5-next') ?? { content: 'unreachable' }
+    if (index === 11) return writeOutputReply()
+    if (index === 12) return submitReply()
     assert.deepEqual(toolSchemaNames(request).sort(), ['rsi_read', 'rsi_submit_patch'])
     if (index === 4) {
       assert.equal(messageTexts(request).some(text => text.includes('You execute one Singularity Task as one level')), false)
@@ -41,22 +41,26 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       assert.ok(scenario)
       assert.ok(context.includes(canonicalize(scenario.method.templates[0].guidance)))
       assert.ok(context.includes(canonicalize(scenario.method.templates[0].example)))
-      const schema = JSON.stringify(request.tools)
-      for (const field of ['instanceSchema', 'requiredCriteria', 'requiredOutputs', 'acceptancePolicy', 'guidance', 'exampleText', 'files', 'set-entry', 'templateId']) assert.ok(schema.includes(field), `proposer schema must display ${field}`)
-      const patchTool = request.tools?.find(tool => tool.function?.name === 'rsi_submit_patch')
-      const parameters = patchTool?.function?.parameters as { properties?: { patch?: { type?: string } } } | undefined
-      assert.equal(parameters?.properties?.patch?.type, 'object', 'native tool schema exposes the structured patch')
-      return { toolCalls: [{ id: 'read-public-resources', name: 'rsi_read', arguments: JSON.stringify({ kind: 'public-resources' }) }], usage: fixtureUsage(index) }
+      assert.ok(Buffer.byteLength(JSON.stringify(request.tools)) < 4096, 'authoring schema is read on demand')
+      assert.equal(messageTexts(request).some(text => text.includes('Track every background job') || text.includes('Check the [exit code:')), false)
+      return { toolCalls: ['public-resources', 'authoring'].map(kind => ({ id: `read-${kind}`, name: 'rsi_read', arguments: JSON.stringify({ kind }) })), usage: fixtureUsage(index) }
     }
-    if (index === 5) return { toolCalls: [{ id: 'read-children', name: 'rsi_read', arguments: JSON.stringify({ kind: 'trace-page', id: 'children' }) }], usage: fixtureUsage(index) }
+    if (index === 5) {
+      for (const field of ['guidance', 'exampleText', 'files', 'set-entry', 'templateId']) assert.ok(messageTexts(request).join('\n').includes(field), `authoring must display ${field}`)
+      return { toolCalls: [{ id: 'read-children', name: 'rsi_read', arguments: JSON.stringify({ kind: 'trace-page', id: 'children' }) }], usage: fixtureUsage(index) }
+    }
     if (index === 6) return { toolCalls: [{ id: 'private-denied', name: 'rsi_read', arguments: JSON.stringify({ kind: 'asset', id: 'private-validation-case' }) }], usage: fixtureUsage(index) }
     assert.ok(patch)
-    if (index === 7) return { toolCalls: [{ id: 'submit-patch', name: 'rsi_submit_patch', arguments: JSON.stringify({ patch }) }], usage: fixtureUsage(index) }
-    if (index === 12) {
+    if (index === 7) return { toolCalls: [{ id: 'invalid-name', name: 'rsi_submit_patch', arguments: JSON.stringify({ patch: { ...patch, changes: [{ op: 'put-skill', skill: { id: 'bad-name', name: 'Display Title', description: 'Review.', files: { 'SKILL.md': 'Review.' } } }] } }) }], usage: fixtureUsage(index) }
+    if (index === 8) {
+      assert.match(messageTexts(request).join('\n'), /not DSH kebab-case/)
+      return { toolCalls: [{ id: 'submit-patch', name: 'rsi_submit_patch', arguments: JSON.stringify({ patch }) }], usage: fixtureUsage(index) }
+    }
+    if (index === 13) {
       assert.match(messageTexts(request).join('\n'), /"previousRound":\{"outcome":"no-improvement","readKind":"previous-round","roundId":"round:s5"\}/)
       return { toolCalls: [{ id: 'previous-feedback', name: 'rsi_read', arguments: JSON.stringify({ kind: 'previous-round' }) }], usage: fixtureUsage(index) }
     }
-    if (index === 13) {
+    if (index === 14) {
       const texts = messageTexts(request).join('\n')
       assert.ok(texts.includes('Reuse a local review skill for the declared output.'))
       assert.ok(texts.includes('aggregateDelta'))
@@ -64,7 +68,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       assert.ok(!texts.includes('PRIVATE-COMPARISON-CASE'))
       return { toolCalls: [{ id: 'deny-previous-comparison', name: 'rsi_read', arguments: JSON.stringify({ kind: 'asset', id: comparisonDigest }) }], usage: fixtureUsage(index) }
     }
-    if (index === 14) {
+    if (index === 15) {
       assert.match(messageTexts(request).join('\n'), /Asset ID must identify one object/)
       return { content: 'The measured prior hypothesis did not improve this metric.', usage: fixtureUsage(index) }
     }
@@ -79,12 +83,15 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
         skills: [], tools: [], baseTools: scenario.contract.resources.baseTools,
         fallbackAcceptance: scenario.provider, fallbackJoin: 'probe',
       }))
-      const contract = sealTaskContract({ ...contractPayload(scenario.contract), resources: { ...scenario.contract.resources, exploration: snapshot } })
+      const rootAcceptance = await sourceStore.putObject('acceptance:root-only', jsonBytes({ v: 1, kind: 'root-acceptance' }))
+      const contract = sealTaskContract({ ...contractPayload(scenario.contract), acceptance: rootAcceptance,
+        resources: { ...scenario.contract.resources, exploration: snapshot } })
       const composition = await buildSingleRunComposition(spike.ctx, {
         store: sourceStore, id: 's5-source', contract,
         base: compositionBase(scenario.composition), agentOptions: agentOptions(),
       })
-      scenario = { ...scenario, contract, composition, runAdmission: { ...scenario.runAdmission, contract } }
+      scenario = { ...scenario, contract, composition, provider: rootAcceptance,
+        runAdmission: { ...scenario.runAdmission, contract, acceptanceBytes: jsonBytes({ v: 1, kind: 'root-acceptance' }) } }
     } finally { await sourceStore.close() }
     const source = await executeSingleRun({
       ctx: spike.ctx, journalRoot: storeRoot, workspace, sessionId: 'session-s5-source', runId,
@@ -108,6 +115,9 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       assert.equal(sealed.body.sessionCuts.length, 1)
       assert.deepEqual(sealed.body.sourceResourceSnapshot, scenario.contract.resources.exploration)
       assert.ok(sealed.body.authorizedObjects.some(item => item.ref.id === 'document:s5-public'))
+      const sourceAcceptance = scenario.contract.acceptance
+      assert.ok(sealed.body.authorizedObjects.some(item => item.ref.id === sourceAcceptance.id && item.ref.digest === sourceAcceptance.digest),
+        'the root provider visible in the contract is also authorized for a Method template')
       const repeated = await sealPublicTrace({ service, actor: ACTOR, ctx: spike.ctx, rootTaskId: taskId })
       assert.deepEqual(repeated.trace, sealed.trace)
       assert.equal(service.facts().filter(fact => fact.type === 'rsi/trace-sealed').length, 1)
@@ -132,15 +142,20 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       })
       const template = scenario.method.templates[0]
       assert.ok(template)
+      const businessTemplate = {
+        id: template.id, brief: template.brief,
+        skills: template.skills, tools: template.tools, children: template.children,
+      }
       patch = {
-        v: 1, base: methodRef, hypothesis: 'Reuse a local review skill for the declared output.',
+        v: 1, hypothesis: 'Reuse a local review skill for the declared output.',
         changes: [
           { op: 'put-skill', skill: { id: 'skill:s5-review', name: 's5-review', description: 'Review declared outputs.', files: {
             'SKILL.md': '# Review\n\nRead the frozen criteria. Do not invent a score. Check the declared output.',
           } } },
           { op: 'put-template', template: {
-            ...template, guidance: 'Read the criteria, produce the output and check it with the bound review skill.',
-            example: { goal: { summary: 'Produce result.txt with the requested content.', deliverable: 'result.txt', scope: ['Write the requested text.'], constraints: ['Use the declared output path.'] }, inputs: [{ id: 'request', exampleText: 'Write the requested text.' }] },
+            ...businessTemplate,
+            guidance: 'Read the criteria, produce the output and check it with the bound review skill.',
+            example: { goal: { summary: 'Produce result.txt with the requested content.', deliverable: 'result.txt', scope: ['Write the requested text.'], constraints: ['Use the declared output path.'] }, acceptanceCriteria: [{ id: 'requested-text', statement: 'The result contains the requested text.', check: 'test -s result.txt' }], inputs: [{ id: 'request', exampleText: 'Write the requested text.' }] },
             skills: ['skill:s5-review'],
           } },
         ], predictedRisks: ['Review may add cost.'], transferPlan: 'Measure against the frozen paired cases.',
@@ -153,7 +168,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       })
       assert.equal(proposed.failure, undefined)
       assert.ok(proposed.proposalRef)
-      assert.equal(proposed.usage.steps, 4)
+      assert.equal(proposed.usage.steps, 5)
       assert.equal(proposed.usage.unknownRequests, 0)
       assert.equal(proposed.sessionCut.sessionId, 'session-s5-proposer')
       assert.equal(service.facts().filter(fact => fact.type === 'rsi/proposal-submitted').length, 1)

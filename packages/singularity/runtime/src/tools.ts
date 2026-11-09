@@ -6,15 +6,17 @@ import type {
 DecomposeCommit,
 JsonValue,
 PlanningSketch,
+PlanningSketchDraft,
 Ref,
 TaskContract,
+TaskFeedback,
 } from '@singularity/protocol'
 import {
 canonicalize,
 decomposeCommitSchema,decomposePrepareSchema,
 errorMessage,
 parseProtocolValue,
-planningSketchSchema,
+planningSketchDraftSchema,
 taskFeedbackInputSchema,
 } from '@singularity/protocol'
 
@@ -40,7 +42,7 @@ class TaskToolRefusal extends Error {}
 const TOOL_ERROR_NEXT_ACTIONS: Readonly<Record<string, string>> = {
   INVALID_ARGUMENT: 'Fix the tool arguments and retry with declared fields only.',
   READ_SELF_FIRST: 'Call singularity_read(kind="self") and follow nextCursor through the complete contract, then continue.',
-  PLAN_FIRST: 'Call singularity_plan with the current contextEpoch, then continue.',
+  PLAN_FIRST: 'Call singularity_plan with business fields only; the host stamps identities.',
   BINDING_FIXED: 'Use a bindingId from the current NodeView childOptions, then continue.',
   PREVIEW_REQUIRED: 'Call singularity_decompose with action="prepare" for a visible child binding first.',
   PREVIEW_STALE: 'Read the current self contract and prepare the child example again in this context epoch.',
@@ -51,7 +53,7 @@ const TOOL_ERROR_NEXT_ACTIONS: Readonly<Record<string, string>> = {
   IDEMPOTENCY_CONFLICT: 'Use a fresh tool call; the original command identity already has a different payload.',
   ALREADY_SUBMITTED: 'The submission is already frozen; stop calling tools.',
   RUN_CLOSED: 'This Run is already settling; stop calling tools.',
-  LIMIT_EXCEEDED: 'Reduce the requested scope or stop with a concrete blocker.',
+  LIMIT_EXCEEDED: 'Replan the remaining required work within current limits, or stop with a concrete blocker.',
 }
 
 const textEncoder = new TextEncoder()
@@ -94,6 +96,7 @@ export interface RunToolControllerOptions {
   readonly submitDenial?: () => 'CHILD_BATCH_ACTIVE' | 'REQUIRED_FEEDBACK_REPLAN' | undefined
   readonly requiredFailure?: () => boolean
   readonly verifierInputs?: readonly Ref[]
+  readonly replyTarget?: (id: string) => TaskFeedback | undefined
 }
 
 export interface TaskReadQuery {
@@ -116,6 +119,7 @@ export interface RunToolSnapshot {
   readonly stopped?: { readonly reason: 'blocked' | 'unsolved'; readonly message: string }
   readonly contextEpoch: ContextEpoch
   readonly feedbackRefs?: readonly Ref[]
+  readonly feedbackWait?: Ref
 }
 
 interface MutableRunToolState {
@@ -125,6 +129,7 @@ interface MutableRunToolState {
   submitted: boolean
   childBatchPending: boolean
   childBatchActive: boolean
+  feedbackWait?: Ref
   planningSketchRef?: Ref
   submission?: FrozenSubmission
   stopped?: { readonly reason: 'blocked' | 'unsolved'; readonly message: string }
@@ -143,7 +148,6 @@ export class RunToolController {
   private readonly state: MutableRunToolState
   private agent: Agent | undefined
   private failure: Error | undefined
-  private readonly feedbackRefs = new Map<string, Ref>()
 
   constructor(options: RunToolControllerOptions) {
     this.options = options
@@ -203,27 +207,22 @@ export class RunToolController {
   obligations(): NodeView['obligations'] {
     this.refreshEpoch()
     const code = this.denialCode('singularity_submit', this.agent, undefined)
-    const decomposeCode = this.options.decompose === undefined
-      ? 'BINDING_FIXED'
-      : this.denialCode('singularity_decompose', this.agent, { action: 'prepare' })
     return {
       readSelf: !this.state.readSelf,
       readPlanningSketch: this.state.planningSketchRef === undefined,
       requiredFailure: this.options.requiredFailure?.() === true,
-      canDecompose: decomposeCode === undefined,
-      canSubmit: code === undefined,
       denialCodes: code === undefined ? [] : [code],
     }
   }
 
   private denialCode(name: string, agent: Agent | undefined, args: unknown): string | undefined {
     if (this.state.submitted) return 'ALREADY_SUBMITTED'
-    if (this.state.stopped !== undefined || this.failure !== undefined) return 'RUN_CLOSED'
+    if (this.state.stopped !== undefined || this.state.feedbackWait !== undefined || this.failure !== undefined) return 'RUN_CLOSED'
     if (this.agent === undefined || agent !== this.agent) return 'INVALID_ARGUMENT'
     // A committed (or in-flight) child batch makes the parent waiting-children.
-    // Read-only status/self reads stay available; every other action must wait.
+    // Reads and dispatcher feedback remain available; implementation waits.
     if ((this.state.childBatchPending || this.state.childBatchActive)
-      && name !== 'singularity_read') {
+      && name !== 'singularity_read' && name !== 'singularity_feedback') {
       return 'CHILD_BATCH_ACTIVE'
     }
     if (name === 'singularity_submit') {
@@ -267,7 +266,7 @@ export class RunToolController {
     }
     if (!this.options.checkBudget()) return 'LIMIT_EXCEEDED'
     if (!this.state.readSelf) return 'READ_SELF_FIRST'
-    if (name === 'singularity_plan') return undefined
+    if (name === 'singularity_plan' || name === 'singularity_feedback') return undefined
     if (this.state.planningSketchRef === undefined) return 'PLAN_FIRST'
     return undefined
   }
@@ -275,14 +274,10 @@ export class RunToolController {
   /** Current durable tool facts for settlement; no extra state authority. */
   snapshot(): RunToolSnapshot {
     this.refreshEpoch()
-    if (this.agent !== undefined) {
-      for (const ref of feedbackRefsFromSession(this.agent.session)) {
-        this.feedbackRefs.set(`${ref.id}:${ref.digest}`, ref)
-      }
-    }
     return {
       ...(this.failure === undefined ? {} : { failure: this.failure }),
-      feedbackRefs: [...this.feedbackRefs.values()],
+      feedbackRefs: this.agent === undefined ? [] : feedbackRefsFromSession(this.agent.session),
+      ...(this.state.feedbackWait === undefined ? {} : { feedbackWait: this.state.feedbackWait }),
       ...(this.state.planningSketchRef === undefined
         ? {}
         : { planningSketchRef: this.state.planningSketchRef }),
@@ -295,12 +290,12 @@ export class RunToolController {
   private readTool() {
     return defineTool({
       name: 'singularity_read',
-      description: 'Read self, direct children/feedback, authorized resources/evidence or ancestor summaries; follow nextCursor.',
+      description: 'Read authorized Task views/resources; follow nextCursor. evidence accepts child/result Ref IDs or lastAttempt.runId.',
       parameters: {
         kind: { type: 'string', enum: ['self', 'status', 'resource', 'children', 'evidence', 'ancestor', 'feedback'], required: true, description: 'Authorized Task view.' },
-        id: { type: 'string', description: 'The visible resource, child, evidence, feedback, or ancestor contract digest.' },
-        cursor: { type: 'string', description: 'nextCursor from a self page in this epoch.' },
-        page: { type: 'integer', description: 'List page size.' },
+        id: { type: 'string', description: 'Visible resource, child, result Ref, lastAttempt.runId, feedback, or ancestor digest.' },
+        cursor: { type: 'string', description: 'nextCursor from the same read object.' },
+        page: { type: 'integer', description: 'Optional page size for children/feedback lists.' },
       },
       output: {
         schema: {
@@ -390,17 +385,9 @@ export class RunToolController {
           contractDigest: contract.digest,
           goal: contract.spec.goal,
           criteria: contract.spec.criteria,
-          localGuidance: contract.spec.localGuidance ?? [],
-          inputs: contract.spec.inputs.map(input => ({
-            id: input.id,
-            path: input.path,
-            access: input.access,
-          })),
+          inputs: contract.spec.inputs,
           outputs: contract.spec.outputs,
-          acceptance: {
-            provider: contract.acceptance,
-            criteria: contract.spec.criteria.filter(criterion => criterion.required),
-          },
+          acceptanceProvider: contract.acceptance,
           workspace: this.options.workspace,
           contextEpoch: this.state.epoch,
         }
@@ -414,7 +401,7 @@ export class RunToolController {
         }
         const end = Math.min(text.length, offset + SELF_PAGE_CHARS)
         const response = {
-          data: text.length > SELF_PAGE_CHARS ? text.slice(offset, end) : data,
+          data: text.slice(offset, end),
           objectRef: { id: contract.taskId, digest: contract.digest },
           ...(end < text.length ? { nextCursor: `${prefix}${String(end)}` } : {}),
           asOf,
@@ -447,20 +434,21 @@ export class RunToolController {
         render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
       },
       execute: async (args) => {
-        let sketch: PlanningSketch
+        let draft: PlanningSketchDraft
         try {
-          sketch = parseProtocolValue(planningSketchSchema, args.sketch)
+          draft = parseProtocolValue(planningSketchDraftSchema, args.sketch)
         } catch (error) {
           throw this.toolError('INVALID_ARGUMENT', errorMessage(error, 'unknown error'))
         }
-        if (sketch.taskId !== this.options.contract.taskId
-          || sketch.runId !== this.options.runId
-          || sketch.contextEpoch !== this.state.epoch
-          || sketch.sourceContract !== this.options.contract.digest) {
-          throw this.toolError('PLAN_FIRST', 'sketch does not match the current task/run/epoch/contract')
+        const normalized: PlanningSketch = {
+          ...draft,
+          taskId: this.options.contract.taskId,
+          runId: this.options.runId,
+          contextEpoch: this.state.epoch,
+          sourceContract: this.options.contract.digest,
         }
         const visibleBindings = new Set(this.childBindingIds)
-        for (const entry of sketch.directPlan) {
+        for (const entry of normalized.directPlan) {
           if (!visibleBindings.has(entry.bindingId)) {
             throw this.toolError(
               'BINDING_FIXED',
@@ -468,7 +456,7 @@ export class RunToolController {
             )
           }
         }
-        const bytes = textEncoder.encode(canonicalize(sketch as unknown as JsonValue))
+        const bytes = textEncoder.encode(canonicalize(normalized as unknown as JsonValue))
         const planningSketchRef = await this.options.writer.putObject(
           `${this.options.runId}:planning-sketch`,
           bytes,
@@ -558,11 +546,11 @@ export class RunToolController {
   private feedbackTool() {
     return defineTool({
       name: 'singularity_feedback',
-      description: 'Send structured feedback to your direct parent and continue this Run.',
+      description: 'Ask dispatcher and yield, or replyTo=child feedback.id. Frozen contract changes need stop(blocked).',
       parameters: {
         kind: { type: 'string', enum: ['needs-replan', 'input-invalid', 'acceptance-concern', 'blocked'], required: true },
         summary: { type: 'string', required: true },
-        proposedChanges: { type: 'array', items: { type: 'json' }, required: true, description: '[{field: goal|inputs|outputs|child-purpose|order, suggestion: string}]' },
+        replyTo: { type: 'string', description: 'Omit to ask your direct parent; set to a direct child feedback.id to reply.' },
         refs: { type: 'array', items: { type: 'json' }, required: true, description: 'Frozen public refs from this Run, or [].' },
       },
       output: {
@@ -587,11 +575,12 @@ export class RunToolController {
           input,
           createdAt: this.options.clock(),
           writer: this.options.writer,
+          authorizedRefs: this.options.verifierInputs ?? [],
+          ...(input.replyTo === undefined ? {} : { reply: this.options.replyTarget?.(input.replyTo) }),
         })
-        this.feedbackRefs.set(`${feedbackRef.id}:${feedbackRef.digest}`, feedbackRef)
         const origin = this.options.contract.origin
-        if (origin.kind !== 'child') throw this.toolError('INPUT_NOT_AUTHORIZED')
-        return { feedbackRef, directParentTaskId: origin.parentId, remainingBudgetPct: this.options.budget() }
+        if (input.replyTo === undefined) { this.state.feedbackWait = feedbackRef; exec.concludeTurn() }
+        return { feedbackRef, directParentTaskId: origin.kind === 'child' && input.replyTo === undefined ? origin.parentId : this.options.contract.taskId, remainingBudgetPct: this.options.budget() }
       },
     })
   }
@@ -647,7 +636,7 @@ export class RunToolController {
   private stopTool() {
     return defineTool({
       name: 'singularity_stop',
-      description: 'End this Run with its blocker for settlement.',
+      description: 'Return blocked or unsolved with a concrete reason for settlement.',
       parameters: {
         reason: { type: 'string', enum: ['blocked', 'unsolved'], required: true, description: 'Stable stop category.' },
         message: { type: 'string', required: true, description: 'Concrete blocker or reason.' },

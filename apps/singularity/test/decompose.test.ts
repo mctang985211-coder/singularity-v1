@@ -164,7 +164,7 @@ void test('S4-B1 prepare delivers a persisted preview and status reconstructs it
     )
     assert.ok(contexts[0]?.includes(S4B1_BINDING))
     assert.ok(contexts[0]?.includes('"join":"probe"'))
-    assert.ok(contexts[0]?.includes('"canDecompose":false'))
+    assert.ok(contexts[0]?.includes('"denialCodes":["READ_SELF_FIRST"]'))
     assert.ok(prompts[0])
     assert.equal(active.composition.platformPrompt, computeDigest('object', { v: 1, text: prompts[0] ?? '' }))
     assert.ok(Buffer.byteLength(JSON.stringify(firstRequest.tools ?? [])) <= 12 * 1024)
@@ -285,10 +285,11 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
       const childId = childScenario.contract.taskId
       const first = selfReadAndPlan(request, index - 4, childScenario, childId, `${childId}:run`)
       if (first !== undefined) return first
+      if (index === 6) return { toolCalls: [{ id: 'child-write', name: 'bash', arguments: JSON.stringify({ command: 'mkdir -p result && printf sample > notes.txt && cp notes.txt result/notes.txt' }) }], usage: fixtureUsage(index) }
       return {
         toolCalls: [{
           id: 'child-submit', name: 'singularity_submit',
-          arguments: JSON.stringify({ outputIds: [], includeLearningDrafts: false }),
+          arguments: JSON.stringify({ outputIds: ['result', 's4b2-child-note'], includeLearningDrafts: false }),
         }],
         usage: fixtureUsage(index),
       }
@@ -326,7 +327,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
                   scope: ['single committed child sample'],
                   constraints: ['Use only host-authorized inputs.'],
                 },
-                localCriteria: [{
+                acceptanceCriteria: [{ check: 'test -s notes.txt',
                   id: 's4b2-child-criterion',
                   statement: 'The local note records the observed sample.',
                 }],
@@ -401,7 +402,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
     assert.equal(result.sessionId, sessionId)
     assert.equal(result.batchId, expectedBatchId)
     assert.deepEqual(result.childTaskIds, [
-      `child:${computeDigest('object', { parentTaskId: taskId, batchId: expectedBatchId, bindingId: S4B2_BINDING }).slice(7)}`,
+      `child:${computeDigest('object', { parentTaskId: taskId, batchId: expectedBatchId, bindingId: S4B2_BINDING, index: 0 }).slice(7)}`,
     ])
     assert.equal(fixture.requests.length, 4, 'commit must conclude the turn without buying another request')
     assert.deepEqual(createdSessions, [sessionId], 'commit must not create a child Agent session')
@@ -448,11 +449,11 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
       assert.equal(child.contract.method.id, active.method.id)
       assert.equal(child.contract.template.id, 'template:s3c-child')
       assert.equal(child.contract.spec.inputs.length, 0)
-      assert.deepEqual(child.contract.spec.localGuidance, [{
+      assert.deepEqual(child.contract.spec.criteria.filter(criterion => criterion.id === 's4b2-child-criterion'), [{ required: true, check: 'test -s notes.txt',
         id: 's4b2-child-criterion',
         statement: 'The local note records the observed sample.',
       }])
-      assert.deepEqual(child.contract.spec.criteria, [])
+      assert.deepEqual(child.contract.spec.criteria.map(criterion => criterion.id), ['s4b2-child-criterion'])
       assert.deepEqual(child.contract.resources.baseTools, active.contract.resources.baseTools)
       assert.deepEqual(child.contract.resources.skills, active.contract.resources.skills)
       assert.equal(child.contract.resources.mcpServers.length, 0)
@@ -472,6 +473,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
           required: output.required,
         })),
         [
+          { id: 'result', role: 'deliverable', required: true },
           { id: 's4b2-child-note', role: 'supporting', required: false },
           { id: '__skill-drafts', role: 'skill-draft', required: false },
           { id: '__mcp-drafts', role: 'mcp-draft', required: false },
@@ -528,7 +530,7 @@ void test('S4-B2 commit yields the parent; an admitted child uses the shared Run
             contractDigest: request.task.digest,
             inputDigests: request.inputs.map(ref => ref.digest),
             outputDigests: request.outputs.map(ref => ref.digest),
-            criteria: [], exit: { code: 0, signal: null }, timedOut: false,
+            criteria: request.task.spec.criteria.filter(criterion => criterion.required).map(criterion => ({ id: criterion.id, verdict: 'pass', reason: 'Observed fixture note.' })), exit: { code: 0, signal: null }, timedOut: false,
           }))
         },
       },

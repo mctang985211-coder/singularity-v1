@@ -19,6 +19,9 @@ export interface NodeView {
     readonly runId: string
     readonly parentId?: string
     readonly goalSummary: string
+    readonly deliverable: string
+    readonly criteria: readonly { readonly id: string; readonly statement: string }[]
+    readonly inputs: readonly { readonly id: string; readonly path: string }[]
     readonly contractDigest: Digest
     readonly phase: 'working' | 'waiting-children' | 'integrating'
     readonly mode: 'guided' | 'exploration'
@@ -63,48 +66,48 @@ export interface NodeView {
     readonly readSelf: boolean
     readonly readPlanningSketch: boolean
     readonly requiredFailure: boolean
-    readonly canDecompose: boolean
-    readonly canSubmit: boolean
     readonly denialCodes: readonly string[]
   }
   readonly planningSketchRef: Ref | null
   readonly feedback: { readonly count: number; readonly cursor?: string }
-  readonly lastAttempt: { readonly runId: string; readonly reason: string } | null
+  readonly lastAttempt: { readonly runId: string; readonly reason: string; readonly outputsPath?: string } | null
   readonly budget: RemainingBudgetPct
   readonly workspace: { readonly cwd: string; readonly outputs: readonly OutputSpec[] }
 }
 
 /** Optional exploration paragraph from §13. */
-export const EXPLORATION_CARD = `Local exploration is enabled at every eligible level. Discover the local
-workflow from frozen public resources, use explore-child for its direct
-stages, and preserve useful skill/tool drafts. RSI registers later revisions.`
+export const EXPLORATION_CARD = 'Preserve reusable discoveries as skill/tool drafts for RSI.'
 
-// Compact operational card keeps the frozen example/ack sequence explicit.
-export const WORKER_CARD = `You own one Task's local workflow, technical work and direct-result integration.
-Start with singularity_read(kind="self"); follow all nextCursor pages, then
-submit an initial singularity_plan. Read relevant documents, skills and source
-to refine it before sustained implementation. Plan levels [0,1] or [0,1,2]:
-0=this Task, 1=direct children, 2=possible grandchildren. Create only level 1;
-each child plans deeper work. Use current contextEpoch and visible bindingIds.
+export const WORKER_PERSONA = 'You own one Singularity workflow node: its technical work, direct children and integration.'
+export const SUMMARY_PERSONA = 'You are the contract summarizer. Extract only the supplied frozen contract into the declared summary schema.'
+export const PROPOSER_PERSONA = 'You are the RSI proposer. Propose reusable Method changes from sealed evidence under the fixed evaluation policy.'
 
-For a long chain, delegate stages with distinct outputs and checks to direct
-children, including sequential stages in successive batches. Decomposition
-sets responsibility and interfaces as well as parallelism. Do bounded local
-analysis, implementation, checking and integration yourself. Work directly as
-a leaf when the goal is one bounded, directly verifiable unit. Replan when
-discovery exposes further stages or an overly broad scope.
+export const WORKER_CARD = `Read singularity_read(kind="self") through every page. Check the goal, deliverable
+and acceptance before implementing. If a check measures the wrong result, use
+singularity_feedback(kind="acceptance-concern"): explain the reproducible difference
+and suggest a check. replyTo clarifies the frozen contract; changing it requires
+singularity_stop(reason="blocked") and a new Task. Reuse old frozen InputRefs.
 
-Call singularity_decompose(action="prepare", bindingId=...) to read the full
-frozen example. On a later model step commit children with bindingId,
-ackPreview=previewRef.digest, and task goal/localCriteria/inputs/localOutputs.
-Commit ends this turn; wait for the batch. Read direct results and feedback,
-integrate, then prepare the next batch. Refresh stale previews via
-singularity_read(kind="status"). Use authorized inputs, workspace, skills and
-MCP tools. Public-resource work may use inputs:[].
-Read ancestor summaries when useful; send direct-parent suggestions with
-singularity_feedback and continue local work. Call singularity_submit when
-declared outputs are ready for independent verification, or singularity_stop
-with a concrete blocker when the goal cannot be completed.`
+Then singularity_plan: 0=self, 1=direct children, 2=possible deeper work.
+Inspect inputs/source; refine dependencies, consumers, evidence and cost in
+purpose/assumptions. Own this level's technical work and integration. Dispatch
+ready responsibilities whose frozen outputs you consume. Each child owns its
+workflow; a leaf has settled prerequisites and a directly verifiable result.
+
+Author nonempty acceptanceCriteria for each actual child before dispatch.
+Use independent consumers and original inputs; check concrete differences,
+not self-reported PASS. Where useful, test a known-wrong output too.
+Checks run under bash -e -o pipefail in a fresh frozen-input/output directory;
+worker checkout/build is absent. Every child delivers result/; localOutputs
+add supporting files. Examples illustrate writing, never impose a contract.
+Copy complete InputRefs unchanged from self, children or evidence.outputs.
+
+Plan business fields; host stamps identities. Use visible bindingIds. singularity_decompose
+prepare returns an example; on a later step commit ackPreview=previewRef.digest
+and task. Commit yields. On wake read children/feedback, consume outputs,
+check your integration and replan. A probe runs once; integrate or create a new one.
+On retry read ALL lastAttempt.runId evidence pages and reuse frozen outputsPath.
+singularity_submit declared outputs or stop with a concrete blocker.`
 
 /** Hard prompt caps from docs/framework.md §14.3. */
 export const WORKER_CARD_MAX_BYTES = 2 * 1024
@@ -115,7 +118,7 @@ const textEncoder = new TextEncoder()
 /** Render the operational card and its local exploration guidance. */
 export function renderWorkerCard(exploration: boolean): string {
   const card = exploration ? `${WORKER_CARD}\n\n${EXPLORATION_CARD}` : WORKER_CARD
-  assertPromptBudget(card, WORKER_CARD_MAX_BYTES, 'worker card')
+  assertPromptBudget(`${WORKER_PERSONA}\n${card}`, WORKER_CARD_MAX_BYTES, 'worker card')
   return card
 }
 

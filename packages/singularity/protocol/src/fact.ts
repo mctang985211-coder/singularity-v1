@@ -19,6 +19,8 @@ export const usageRecordSummarySchema = closedObject({
   sourceContract: digestSchema,
   inputTokens: z.number(),
   outputTokens: z.number(),
+  cacheReadTokens: z.number().nonnegative().optional(),
+  cacheWriteTokens: z.number().nonnegative().optional(),
   steps: z.number(),
   unknownRequests: z.number(),
 })
@@ -29,6 +31,8 @@ export type UsageRecordSummary = z.infer<typeof usageRecordSummarySchema>
 export const usageRecordSchema = closedObject({
   inputTokens: z.number(),
   outputTokens: z.number(),
+  cacheReadTokens: z.number().nonnegative().optional(),
+  cacheWriteTokens: z.number().nonnegative().optional(),
   steps: z.number(),
   unknownRequests: z.number(),
   summary: usageRecordSummarySchema.optional(),

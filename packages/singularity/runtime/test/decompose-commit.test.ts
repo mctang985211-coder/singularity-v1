@@ -181,7 +181,7 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
         scope: ['single child sample'],
         constraints: ['Use only authorized inputs.'],
       },
-      localCriteria: [{ id: 'local', statement: 'Record the observed sample.' }],
+      acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local', statement: 'Record the observed sample.' }],
       inputs: [{ id: 'sample', exampleText: 'sample input' }],
       localOutputs: [{ id: 'notes', path: 'notes.txt', kind: 'file', description: 'Local note.' }],
     }, 'child-example')
@@ -198,17 +198,16 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
       example,
       instanceSchema: options.instanceSchema ?? {
         type: 'object',
-        required: ['goal', 'localCriteria', 'inputs', 'localOutputs'],
+        required: ['goal', 'acceptanceCriteria', 'inputs', 'localOutputs'],
         additionalProperties: false,
         properties: {
           goal: { type: 'object', required: ['summary', 'deliverable', 'scope', 'constraints'] },
-          localCriteria: { type: 'array' },
+          acceptanceCriteria: { type: 'array' },
           inputs: { type: 'array' },
           localOutputs: { type: 'array' },
         },
       },
-      requiredCriteria: [{ id: 'template-criterion', statement: 'Use the authorized input.', required: true }],
-      requiredOutputs: [],
+
       acceptancePolicy,
       skills: ['skill:fixture'],
       tools: [],
@@ -218,8 +217,8 @@ async function makeScenario(root: string, options: ScenarioOptions = {}): Promis
       ...childTemplate,
       id: 'template:root',
       brief: 'Run the root task.',
-      requiredCriteria: [],
-      requiredOutputs: [],
+
+
       skills: [],
       tools: [],
       children: [
@@ -377,7 +376,7 @@ function proposal(scenario: Scenario, overrides: Partial<TaskProposal> = {}): Ta
       scope: ['child sample'],
       constraints: ['Use only the authorized input.'],
     },
-    localCriteria: [{ id: 'local-1', statement: 'The note records the sample.' }],
+    acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local-1', statement: 'The note records the sample.' }],
     inputs: [{
       id: 'source',
       object: scenario.parentInput,
@@ -479,7 +478,7 @@ void test('S4-B2 commit admits one host-derived child and appends exactly one fa
     assert.equal(result.batchId, `batch:${sessionId}:commit-1`)
     assert.equal(result.children.length, 1)
     assert.deepEqual(result.children[0], {
-      taskId: `child:${computeDigest('object', { parentTaskId: 'task-s4b2', batchId: `batch:${sessionId}:commit-1`, bindingId: 'b1' }).slice(7)}`,
+      taskId: `child:${computeDigest('object', { parentTaskId: 'task-s4b2', batchId: `batch:${sessionId}:commit-1`, bindingId: 'b1', index: 0 }).slice(7)}`,
       bindingId: 'b1',
       join: 'probe',
     })
@@ -509,8 +508,8 @@ void test('S4-B2 commit admits one host-derived child and appends exactly one fa
       batchId: result.batchId,
       bindingId: 'b1',
     })
-    assert.deepEqual(child.contract.spec.localGuidance, task.localCriteria)
-    assert.deepEqual(child.contract.spec.criteria.map(item => item.id), ['template-criterion'])
+    assert.deepEqual(child.contract.spec.criteria.slice(-task.acceptanceCriteria.length), task.acceptanceCriteria.map(criterion => ({ ...criterion, required: true })))
+    assert.deepEqual(child.contract.spec.criteria.map(item => item.id), ['local-1'])
     assert.deepEqual(child.contract.spec.inputs, task.inputs)
     assert.deepEqual(child.contract.resources.baseTools, scenario.contract.resources.baseTools)
     assert.deepEqual(child.contract.resources.skills, [scenario.skillBundle])
@@ -529,6 +528,7 @@ void test('S4-B2 commit admits one host-derived child and appends exactly one fa
       role: output.role,
       required: output.required,
     })), [
+      { id: 'result', role: 'deliverable', required: true },
       { id: 'notes', role: 'supporting', required: false },
       { id: '__skill-drafts', role: 'skill-draft', required: false },
       { id: '__mcp-drafts', role: 'mcp-draft', required: false },
@@ -689,7 +689,7 @@ void test('S4-B2 commit derives per-child budget, join, and rejects exhausted or
     const { prepared, preparedSecond } = await prepareBoth(scenario)
     const firstTask = proposal(scenario)
     const secondTask = proposal(scenario, {
-      localCriteria: [{ id: 'local-second', statement: 'Second child note.' }],
+      acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'local-second', statement: 'Second child note.' }],
     })
     const args = {
       action: 'commit' as const,
@@ -761,7 +761,7 @@ void test('S4-B2 commit rejects an active batch, unauthorized inputs, and invali
     const secondArgs = {
       action: 'commit' as const,
       children: [{ bindingId: 'b1', ackPreview: prepared.previewRef.digest, task: proposal(scenario, {
-        localCriteria: [{ id: 'second', statement: 'A second batch cannot start.' }],
+        acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'second', statement: 'A second batch cannot start.' }],
       }) }],
     }
     const secondSession = fakeSession([
@@ -847,7 +847,7 @@ void test('S4-B2 commit rejects an active batch, unauthorized inputs, and invali
   })
 })
 
-void test('S4-B2 commit enforces maxTasks, maxDepth, and unique bindings before the fact', async () => {
+void test('S4-B2 commit enforces maxTasks and maxDepth before the fact', async () => {
   await withScenario({ maxTasks: 2 }, async (scenario) => {
     const { prepared, preparedSecond } = await prepareBoth(scenario)
     const args = {
@@ -889,6 +889,9 @@ void test('S4-B2 commit enforces maxTasks, maxDepth, and unique bindings before 
     assert.equal(scenario.service.facts().length, 2)
   })
 
+})
+
+void test('S4-B2 one preview admits distinct same-probe instances and replays the original batch', async () => {
   await withScenario({}, async (scenario) => {
     const { prepared } = await prepareBoth(scenario)
     const args = {
@@ -899,7 +902,7 @@ void test('S4-B2 commit enforces maxTasks, maxDepth, and unique bindings before 
           bindingId: 'b1',
           ackPreview: prepared.previewRef.digest,
           task: proposal(scenario, {
-            localCriteria: [{ id: 'duplicate-binding', statement: 'Duplicate binding.' }],
+            acceptanceCriteria: [{ check: 'test -s notes.txt', id: 'duplicate-binding', statement: 'Duplicate binding.' }],
           }),
         },
       ],
@@ -909,11 +912,21 @@ void test('S4-B2 commit enforces maxTasks, maxDepth, and unique bindings before 
       prepareResult(1, 1, 1, 'prepare-1', prepared.response),
       commitCall(2, 1, 2, 'commit-1', args),
     ], [1])
-    await assert.rejects(
-      commitDecomposeBatch(commitInput(scenario, session, args)),
-      errorCode('INVALID_ARGUMENT'),
-    )
-    assert.equal(scenario.service.facts().length, 2)
+    const result = await commitDecomposeBatch(commitInput(scenario, session, args))
+    assert.equal(result.children.length, 2)
+    assert.notEqual(result.children[0]?.taskId, result.children[1]?.taskId)
+    assert.deepEqual(result.children.map(child => [child.bindingId, child.join]), [['b1', 'probe'], ['b1', 'probe']])
+    assert.deepEqual(result.deliveryReceiptRefs, [prepared.deliveryReceiptRef, prepared.deliveryReceiptRef])
+    assert.equal(scenario.service.facts().length, 3)
+    const replay = await commitDecomposeBatch(commitInput(scenario, session, args))
+    assert.deepEqual(replay.children, result.children)
+    assert.equal(replay.fact.digest, result.fact.digest)
+    assert.equal(scenario.service.facts().length, 3)
+    const state = await scenario.service.taskRunState([])
+    assert.equal(state.tasks.size, 3)
+    assert.equal(state.runs.size, 1)
+    if (result.fact.type !== 'task/children-admitted') assert.fail('expected child admission')
+    assert.equal(result.fact.data.children.reduce((sum, child) => sum + child.budgetReservation.tokens, 0), 90_000)
   })
 })
 

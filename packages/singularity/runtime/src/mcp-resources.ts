@@ -100,7 +100,7 @@ export interface McpDispatchPlan {
 export async function readMcpServers(
   reader: CasObjectReader,
   method: Pick<MethodRevision, 'tools'>,
-  template: TaskTemplate,
+  template: Pick<TaskTemplate, 'tools'>,
   contractRefs: readonly Ref[],
 ): Promise<readonly FrozenMcpServer[]> {
   const catalog = await readToolCatalog(reader, method.tools)
@@ -171,11 +171,11 @@ export async function readMcpServers(
   return servers
 }
 
-export function mcpDispatchPlan(servers: readonly FrozenMcpServer[]): McpDispatchPlan {
+export function mcpDispatchPlan(servers: readonly FrozenMcpServer[], resources = true): McpDispatchPlan {
   return {
     serverNames: servers.map(server => server.serverName),
     publicToolNames: servers.flatMap(server => server.publicToolNames),
-    resourceToolNames: servers.length > 0 ? [...MCP_RESOURCE_TOOL_NAMES] : [],
+    resourceToolNames: resources && servers.length > 0 ? [...MCP_RESOURCE_TOOL_NAMES] : [],
   }
 }
 
@@ -187,6 +187,7 @@ export function mcpDispatchPlan(servers: readonly FrozenMcpServer[]): McpDispatc
 export function mcpPromptSections(
   servers: readonly FrozenMcpServer[],
   order: number,
+  resources = true,
 ): readonly {
   readonly name: string
   readonly order: number
@@ -194,13 +195,12 @@ export function mcpPromptSections(
   readonly interpolate: false
 }[] {
   if (servers.length === 0) return []
-  const names = servers.map(server => server.serverName).sort()
-  const sections = [{
+  const sections = resources ? [{
     name: 'mcp-resource-servers',
     order,
     interpolate: false as const,
-    text: `## MCP resource servers\n\nUse list_mcp_resources, list_mcp_resource_templates, or read_mcp_resource with one of these names as the server argument: ${JSON.stringify(names)}.`,
-  }]
+    text: `## MCP resource servers\n\nUse list_mcp_resources, list_mcp_resource_templates, or read_mcp_resource with one of these names as the server argument: ${JSON.stringify(servers.map(server => server.serverName).sort())}.`,
+  }] : []
   for (const server of servers) {
     const text = instructionSectionText(server.serverName, server.instructions)
     if (text.length === 0) continue

@@ -184,7 +184,7 @@ export async function commitDecomposeBatch(input: CommitDecomposeInput): Promise
     }
     return {
       bindingId: child.bindingId,
-      taskId: childTaskId(input.contract.taskId, batchId, child.bindingId),
+      taskId: childTaskId(input.contract.taskId, batchId, child.bindingId, index),
       authorizedInputs: authorizeInputs(input.authorizedInputs ?? input.contract.spec.inputs, child.task.inputs),
       proposal: child.task,
       resources: childResources(input.contract, input.resources, template),
@@ -293,9 +293,9 @@ function findBinding(template: TaskTemplate, bindingId: string) {
   return matches[0]
 }
 
-function childTaskId(parentTaskId: string, batchId: string, bindingId: string): string {
+function childTaskId(parentTaskId: string, batchId: string, bindingId: string, index: number): string {
   // DSH uses session ids in filenames; bound their size independently of depth.
-  return `child:${computeDigest('object', { parentTaskId, batchId, bindingId }).slice(7)}`
+  return `child:${computeDigest('object', { parentTaskId, batchId, bindingId, index }).slice(7)}`
 }
 
 function authorizeInputs(parentInputs: readonly InputRef[], proposed: readonly InputRef[]): InputRef[] {
@@ -356,7 +356,7 @@ function subtreeTaskCount(state: TaskRunState, parentTaskId: string): number {
 /**
  * Remaining frozen Task budget after every closed Run in the parent subtree and
  * the live parent attempt. Child reservations and actual usage therefore count
- * against the same ancestor cap; unknown usage fails closed.
+ * against the same ancestor cap.
  */
 function taskRemainingTokens(
   state: TaskRunState,
@@ -370,7 +370,6 @@ function taskRemainingTokens(
     .map(run => run.closed?.usage)
     .filter((usage): usage is NonNullable<typeof usage> => usage !== undefined)
   const cost = usageCost(records)
-  if (cost.unknown) return 0
   return Math.max(0, maxTokens - cost.tokens - liveTokens)
 }
 

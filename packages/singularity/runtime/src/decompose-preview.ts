@@ -3,12 +3,10 @@ import {
   closedObject,
   digestSchema,
   jsonObjectSchema,
-  outputSpecSchema,
   parseJsonText,
   parseProtocolValue,
   refSchema,
   remainingBudgetPctSchema,
-  taskCriterionSchema,
   taskExampleSchema,
 } from '@singularity/protocol'
 import type { JsonValue, Ref } from '@singularity/protocol'
@@ -16,8 +14,6 @@ import type { JsonValue, Ref } from '@singularity/protocol'
 import type { CasObjectReader } from './workspace.ts'
 
 const templateInterfaceSchema = closedObject({
-  requiredCriteria: z.array(taskCriterionSchema).readonly(),
-  requiredOutputs: z.array(outputSpecSchema).readonly(),
   acceptance: refSchema,
   instanceSchema: jsonObjectSchema,
 })

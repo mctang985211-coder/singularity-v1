@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { canonicalize, computeDigest, parseJsonText, sealTaskContract, taskFeedbackInputSchema } from '@singularity/protocol'
-import type { JsonValue, Ref, TaskContract, TaskFeedbackInput, TaskRunState } from '@singularity/protocol'
+import type { JsonValue, Ref, TaskContract, TaskFeedback, TaskFeedbackInput, TaskRunState } from '@singularity/protocol'
 
 import { createSchedulerFeedback, createTaskFeedback, readDirectFeedback } from '../src/task-feedback.ts'
 import type { CasObjectReader, CasObjectWriter } from '../src/workspace.ts'
@@ -44,7 +44,7 @@ function memoryCas(): CasObjectReader & CasObjectWriter {
 
 const suggestion: TaskFeedbackInput = {
   kind: 'input-invalid', summary: 'Need a complete input.',
-  proposedChanges: [{ field: 'inputs', suggestion: 'Supply the missing public document.' }], refs: [],
+  refs: [],
 }
 
 void test('worker feedback derives direct-parent identity, preserves suggestions, and authorizes refs', async () => {
@@ -87,4 +87,27 @@ void test('closed source refs expose feedback only to the direct parent, includi
   assert.deepEqual((second.data as { feedback: { refs: Ref[] } }[])[0]?.feedback.refs, [ref])
   assert.deepEqual((await readDirectFeedback({ state, parentTaskId: 'unrelated', reader: cas })).data, [])
   await assert.rejects(readDirectFeedback({ state, parentTaskId: 'parent', reader: cas, cursor: 'feedback:unrelated:1' }), /cursor/)
+})
+
+void test('public refs and replies stay on the direct parent edge and survive source closure', async () => {
+  const cas = memoryCas(), parent = contract('parent'), child = contract('child', 'parent'), sibling = contract('sibling', 'parent')
+  const questionRef = await createTaskFeedback({ contract: child, runId: 'child-run', callId: 'question', input: { ...suggestion, refs: [ref] }, authorizedRefs: [ref], createdAt: 10, writer: cas })
+  const question = JSON.parse(new TextDecoder().decode((await cas.readObject(questionRef)).bytes)) as TaskFeedback
+  const replyInput = { kind: 'acceptance-concern' as const, summary: 'Continue under this unchanged contract.', replyTo: question.id, refs: [] }
+  const replyRef = await createTaskFeedback({ contract: parent, runId: 'parent-run', callId: 'reply', input: replyInput, reply: question, createdAt: 11, writer: cas })
+  await assert.rejects(createTaskFeedback({ contract: sibling, runId: 'sibling-run', callId: 'wrong-parent', input: replyInput, reply: question, createdAt: 11, writer: cas }), /direct child/)
+  await assert.rejects(createTaskFeedback({ contract: parent, runId: 'parent-run', callId: 'unknown', input: { ...replyInput, replyTo: 'unknown' }, reply: question, createdAt: 11, writer: cas }), /direct child/)
+  const state = { tasks: new Map([
+    ['parent', { contract: parent, childIds: ['child', 'sibling'], runIds: ['parent-run'] }],
+    ['child', { contract: child, parentTaskId: 'parent', childIds: [], runIds: ['child-run'] }],
+    ['sibling', { contract: sibling, parentTaskId: 'parent', childIds: [], runIds: [] }],
+  ]), runs: new Map([
+    ['parent-run', { closed: { source: 'run/closed', feedbackRefs: [replyRef] } }],
+    ['child-run', { closed: { source: 'run/closed', feedbackRefs: [questionRef] } }],
+  ]) } as unknown as TaskRunState
+  const received = await readDirectFeedback({ state, parentTaskId: 'child', reader: cas })
+  assert.match(canonicalize(received.data), /parent-worker/)
+  assert.match(canonicalize(received.data), /unchanged contract/)
+  assert.deepEqual((await readDirectFeedback({ state, parentTaskId: 'sibling', reader: cas })).data, [])
+  assert.match(canonicalize((await readDirectFeedback({ state, parentTaskId: 'parent', reader: cas })).data), /Need a complete input/)
 })

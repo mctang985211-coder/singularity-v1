@@ -3,8 +3,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { EXPLORE_BINDING_ID, EXPLORE_TEMPLATE_ID, sealMethodRevision, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
-import type { TaskContract } from '@singularity/protocol'
-import { CommandService, DomainStore, executeTaskTree, freezeGlobalResources } from '@singularity/runtime'
+import type { InputRef,TaskContract } from '@singularity/protocol'
+import { CommandService, DomainStore, executeTaskTree, freezeGlobalResources, readTreeBundle } from '@singularity/runtime'
 import type { RunVerifier } from '@singularity/runtime'
 
 import { buildSingleRunComposition } from '../src/host-composition.ts'
@@ -26,7 +26,7 @@ void test('empty Method plans three levels, commits direct children only, and in
   await withHarness((request, index) => {
     const call = (name: string, args: unknown) => ({ toolCalls: [{ id: `explore-${String(index)}`, name, arguments: JSON.stringify(args) }], usage: fixtureUsage(index) })
     assert.ok(scenario)
-    if ([0, 6, 10, 14, 20].includes(index)) {
+    if ([0, 6, 10, 14, 18, 21, 25].includes(index)) {
       if (index === 0) {
         const plan = request.tools?.find(tool => tool.function?.name === 'singularity_plan')
         assert.ok(plan)
@@ -39,17 +39,17 @@ void test('empty Method plans three levels, commits direct children only, and in
       }
       assert.match(messageTexts(request).join('\n'), /"mode":"exploration"/)
       assert.match(messageTexts(request).join('\n'), /public-handbook/)
-      if (index === 20) {
+      if (index === 25) {
         assert.match(messageTexts(request).join('\n'), /"feedback":\{"count":1,/)
         assert.match(messageTexts(request).join('\n'), /reason=children-terminal;.*remainingBudgetPct=\{"tokensPct":\d+,/)
       }
       return call('singularity_read', { kind: 'self' })
     }
-    if ([1, 7, 11, 15, 21].includes(index)) {
-      const current = index === 11 ? grandchild : index === 7 || index === 15 ? child : scenario.contract
+    if ([1, 7, 11, 15, 22, 26].includes(index)) {
+      const current = index === 11 ? grandchild : index === 7 || index === 15 || index === 22 ? child : scenario.contract
       assert.ok(current)
       const reply = planReply({ ...scenario, contract: current }, current.taskId,
-        index === 11 ? grandchildRunId : index === 7 || index === 15 ? childRunId : runId,
+        index === 11 ? grandchildRunId : index === 7 || index === 15 || index === 22 ? childRunId : runId,
         contextEpochFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) ?? '')
       assert.ok(reply.toolCalls)
       const args = JSON.parse(reply.toolCalls[0].arguments) as { sketch: { levels: unknown[]; directPlan: unknown[] } }
@@ -70,24 +70,35 @@ void test('empty Method plans three levels, commits direct children only, and in
       return call('singularity_decompose', { action: 'prepare', bindingId: EXPLORE_BINDING_ID })
     }
     if (index === 5 || index === 9) return call('singularity_decompose', { action: 'commit', children: [{ bindingId: EXPLORE_BINDING_ID, ackPreview: previewDigestFrom(request), task: {
-      goal: { summary: 'Write a local finding.', deliverable: 'child.txt', scope: [], constraints: [] },
-      localCriteria: [], inputs: [], localOutputs: [{ id: 'finding', path: 'child.txt', kind: 'file', description: 'One local finding.' }],
+      goal: { summary: 'Write a local finding.', deliverable: 'result/finding.txt', scope: [], constraints: [] },
+      acceptanceCriteria: [{ id: 'child-result', statement: 'The declared result contains the completed work.', check: 'test -s result/finding.txt' }], inputs: messageTexts(request).flatMap(text => {
+        try { const value = JSON.parse(text) as { data?: { inputs?: InputRef[] } | string }
+          const data = typeof value.data === 'string' ? JSON.parse(value.data) as { inputs?: InputRef[] } : value.data
+          return data?.inputs ?? [] } catch { return [] }
+      }), localOutputs: [],
     } }] })
-    if (index === 12) return call('bash', { command: "printf child-result > child.txt" })
-    if (index === 13 || index === 19) return call('singularity_submit', { outputIds: ['finding'], includeLearningDrafts: false })
+    if (index === 12) return call('bash', { command: `python3 -c "from pathlib import Path; assert Path('seed.bin').read_bytes() == bytes([0,255,7])" && mkdir -p result && printf child-result > result/finding.txt` })
+    if (index === 13 || index === 24) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
     if (index === 16) return call('singularity_read', { kind: 'children' })
-    if (index === 17) return call('singularity_feedback', { kind: 'needs-replan', summary: 'Preserve the reusable local finding as a skill draft.', proposedChanges: [{ field: 'outputs', suggestion: 'Include a public learning draft when integrating this finding.' }], refs: [] })
-    if (index === 18) {
-      assert.ok(grandchild)
-      return call('bash', { command: `cat 'children/${encodeURIComponent(grandchild.taskId)}/finding' > child.txt` })
+    if (index === 17) return call('singularity_feedback', { kind: 'needs-replan', summary: 'Preserve the reusable local finding as a skill draft.', refs: [] })
+    if (index === 19) {
+      const text = messageTexts(request).findLast(text => text.includes('reason=feedback; '))
+      assert.ok(text)
+      const question = JSON.parse(text.slice(text.indexOf('reason=feedback; ') + 17).split('. Read self;')[0]) as { feedback: { id: string } }
+      return call('singularity_feedback', { kind: 'needs-replan', summary: 'Confirmed. Deliver your result; I will preserve the reusable draft during integration.', replyTo: question.feedback.id, refs: [] })
     }
-    if (index === 22) return call('singularity_read', { kind: 'feedback' })
+    if (index === 20) return { content: 'Waiting for the direct result.', usage: fixtureUsage(index) }
     if (index === 23) {
+      assert.ok(grandchild)
+      return call('bash', { command: `mkdir -p result\ncat 'children/${encodeURIComponent(grandchild.taskId)}/result/finding.txt' > result/finding.txt` })
+    }
+    if (index === 27) return call('singularity_read', { kind: 'feedback' })
+    if (index === 28) {
       assert.ok(child)
       assert.match(messageTexts(request).join('\n'), /Preserve the reusable local finding as a skill draft/)
-      return call('bash', { command: `cat 'children/${encodeURIComponent(child.taskId)}/finding' > result.txt\nmkdir -p learning-drafts/skills/finding\nprintf '# Useful finding\n\nReuse the observed public approach.\n' > learning-drafts/skills/finding/SKILL.md` })
+      return call('bash', { command: `cat 'children/${encodeURIComponent(child.taskId)}/result/finding.txt' > result.txt\nmkdir -p learning-drafts/skills/finding\nprintf '# Useful finding\n\nReuse the observed public approach.\n' > learning-drafts/skills/finding/SKILL.md` })
     }
-    if (index === 24) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: true })
+    if (index === 29) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: true })
     return { content: 'Unexpected fixture request.', usage: fixtureUsage(index) }
   }, async ({ spike, storeRoot, workspace, fixture }) => {
     const original = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1, maxStepsPerRun: 30, maxDepth: 3, maxTasks: 3,
@@ -96,12 +107,13 @@ void test('empty Method plans three levels, commits direct children only, and in
     try {
       const method = sealMethodRevision({ v: 1, id: 'empty-method', templates: [], skills: [], tools: [] })
       await store.putObject(method.id, new TextEncoder().encode(JSON.stringify(method)), 'method')
+      const seedInput = await store.putObject('binary-seed', new Uint8Array([0,255,7]))
       const handbook = await store.putObject('public-handbook', new TextEncoder().encode('A public exploration document.'))
       const exploration = await freezeGlobalResources(store, 'public-resources', {
         documents: [{ id: 'public-handbook', description: 'Public local workflow guidance.', object: handbook }],
         skills: original.method.skills, tools: [], baseTools: original.contract.resources.baseTools, fallbackAcceptance: original.contract.acceptance,
       })
-      const contract = sealTaskContract({ ...contractPayload(original.contract), method: { id: method.id, digest: method.digest },
+      const contract = sealTaskContract({ ...contractPayload(original.contract), spec: { ...original.contract.spec, inputs: [{ id: 'binary-seed', object: seedInput, path: 'seed.bin', access: 'copy-to-work' }] }, method: { id: method.id, digest: method.digest },
         template: { id: EXPLORE_TEMPLATE_ID, digest: method.digest }, resources: { ...original.contract.resources, exploration } })
       const composition = await buildSingleRunComposition(spike.ctx, { store, id: 'empty-method-root', contract, agentOptions: agentOptions(), base: { v: 1, seed: contract.environment.seed } })
       scenario = { ...original, contract, composition, method, runAdmission: { ...original.runAdmission, contract } }
@@ -110,7 +122,10 @@ void test('empty Method plans three levels, commits direct children only, and in
     }
     const verifier = (contract: TaskContract): RunVerifier => ({ provider: contract.acceptance,
       async verify(request) {
-        assert.equal(new TextDecoder().decode((await request.readObject(request.outputs[0], 'object')).bytes), 'child-result')
+        const content = contract.origin.kind === 'child'
+          ? (await readTreeBundle({ readObject: request.readObject }, request.outputs[0], 4096)).contents.get('finding.txt')
+          : (await request.readObject(request.outputs[0], 'object')).bytes
+        assert.equal(new TextDecoder().decode(content), 'child-result')
         verified.push(contract.taskId)
         return sealPublicReceipt({ v: 1, provider: contract.acceptance, operationId: request.operationId, contractDigest: contract.digest,
           inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
@@ -140,14 +155,20 @@ void test('empty Method plans three levels, commits direct children only, and in
       assert.ok(child)
       assert.equal(child.method.digest, active.contract.method.digest)
       assert.equal(child.template.id, EXPLORE_TEMPLATE_ID)
+      assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['child-result', true]])
+      assert.deepEqual(child.spec.outputs.filter(output => output.required), [{ id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }])
       assert.equal(child.resources.exploration?.digest, active.contract.resources.exploration?.digest)
       assert.equal(result.root.manifest?.learningDrafts[0]?.id, '__skill-drafts')
       assert.ok(result.root.manifest.learningDrafts[0].object)
       assert.ok(grandchild)
+      assert.deepEqual(grandchild.spec.inputs, child.spec.inputs)
+      assert.equal(grandchild.spec.inputs[0].object.id, 'binary-seed')
+      assert.deepEqual(grandchild.spec.criteria, child.spec.criteria)
+      assert.deepEqual(grandchild.spec.outputs, child.spec.outputs)
       assert.deepEqual(grandchild.method, active.contract.method)
       assert.equal(grandchild.origin.kind === 'child' && grandchild.origin.parentId, child.taskId)
       assert.deepEqual(verified, [grandchild.taskId, child.taskId, taskId])
-      assert.equal(fixture.requests.length, 25)
+      assert.equal(fixture.requests.length, 30)
       const batches = writer.facts().filter(fact => fact.type === 'task/children-admitted')
       assert.equal(batches.length, 2)
       assert.deepEqual(batches.map(fact => fact.data.parentRunId), [runId, childRunId])
@@ -155,8 +176,8 @@ void test('empty Method plans three levels, commits direct children only, and in
       const rootSubmission = submissions.find(fact => fact.data.runId === runId)
       const childSubmission = submissions.find(fact => fact.data.runId === childRunId)
       assert.ok(rootSubmission)
-      assert.deepEqual(rootSubmission.data.feedbackRefs, childSubmission?.data.feedbackRefs)
-      assert.equal(rootSubmission.data.feedbackRefs.length, 1)
+      assert.ok(childSubmission?.data.feedbackRefs.every(ref => rootSubmission.data.feedbackRefs.some(rootRef => rootRef.digest === ref.digest)))
+      assert.equal(rootSubmission.data.feedbackRefs.length, 2)
       assert.equal([...((await writer.taskRunState([])).tasks.values())].filter(task => task.phase === 'closed').length, 3)
     } finally {
       await writer.close()

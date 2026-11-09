@@ -1,0 +1,41 @@
+[
+  {
+    "id": "buckyball-bbdev",
+    "name": "buckyball",
+    "description": "Existing bbdev CLI with project-local Nix activation.",
+    "kind": "mcp-server",
+    "server": {
+      "source": "environment",
+      "manifest": "environment/manifest.json",
+      "config": "environment/config.json",
+      "capabilities": ["public-ball-development"],
+      "exposedTools": [
+        {
+          "name": "checkout",
+          "description": "Copy the prepared baseline and install configs into a new absolute project path below the current Task workspace.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "project": { "type": "string", "pattern": "^/" }
+            },
+            "required": ["project"]
+          }
+        },
+        {
+          "name": "bbdev",
+          "description": "Run direct bbdev operations in a checked-out project below the current Task workspace with a normal argv array, for example [\"bebop-bemu\",\"--sim\",\"--chip\",\"toy\",\"--binary\",\"app\"]. The MCP server normalizes bbdev's operation arguments; Nix is already activated by this server.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "project": { "type": "string", "pattern": "^/" },
+              "args": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["project", "args"]
+          }
+        }
+      ]
+    }
+  }
+]

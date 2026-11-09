@@ -10,7 +10,7 @@ import { budgetReservationSchema } from './fact.ts'
 import type { BudgetReservation } from './fact.ts'
 import { validateInstanceSchema } from './instance-schema.ts'
 import { methodRevisionSchema, verifyMethodRevision } from './method.ts'
-import type { ChildBinding, MethodRevision, TaskTemplate } from './method.ts'
+import type { ChildBinding, MethodRevision } from './method.ts'
 import { refSchema } from './refs.ts'
 import { closedObject, parseProtocolValue } from './schema.ts'
 import {
@@ -54,6 +54,11 @@ export const MCP_DRAFTS_OUTPUT: OutputSpec = {
 
 const RESERVED_OUTPUT_IDS = new Set([SKILL_DRAFTS_OUTPUT.id, MCP_DRAFTS_OUTPUT.id])
 const RESERVED_OUTPUT_PATH_ROOT = 'learning-drafts'
+
+/** Every child delivers consumable files at the same simple interface. */
+export const CHILD_RESULT_OUTPUT: OutputSpec = {
+  id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true,
+}
 
 /** Existing protocol rejection codes used by pure admission; no new codes. */
 export type AdmissionErrorCode = Extract<
@@ -228,13 +233,6 @@ function validateBaseOutputs(outputs: readonly OutputSpec[], label: string): voi
     assertNoReservedOutput(output, label)
     assertNoDraftRole(output, label)
   }
-}
-
-/** Static interface checks shared by child admission and MethodPatch precheck. */
-export function assertTaskTemplateInterface(template: TaskTemplate): void {
-  assertUniqueIds(template.requiredCriteria, `Template ${JSON.stringify(template.id)} requiredCriteria`)
-  validateBaseOutputs(template.requiredOutputs, `Template ${JSON.stringify(template.id)} requiredOutputs`)
-  assertUniqueOutputs(template.requiredOutputs)
 }
 
 function validateLocalOutputs(outputs: readonly LocalOutput[]): void {
@@ -414,9 +412,10 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
   let totalTokens = 0
   let totalSteps = 0
   for (const request of parsed.children) {
-    if (seenBindings.has(request.bindingId)) {
+    const binding = findBinding(parentTemplate, request.bindingId)
+    if (binding.join === 'required' && seenBindings.has(request.bindingId)) {
       invalidArgument(
-        `Child batch contains duplicate binding ${JSON.stringify(request.bindingId)}`,
+        `Child batch contains duplicate required binding ${JSON.stringify(request.bindingId)}`,
       )
     }
     seenBindings.add(request.bindingId)
@@ -427,7 +426,6 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
     }
     seenTaskIds.add(request.taskId)
 
-    const binding = findBinding(parentTemplate, request.bindingId)
     const template = findTemplate(method, binding.templateId, parsed.exploration)
 
     assertChildLimitsWithinParent(parent.limits, request.limits)
@@ -447,11 +445,12 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
         `Child proposal does not satisfy template ${JSON.stringify(template.id)} instanceSchema: ${schemaValidation.reason}`,
       )
     }
-    assertTaskTemplateInterface(template)
     assertUniqueIds(request.proposal.inputs, 'Child spec.inputs')
     const localOutputs = request.proposal.localOutputs ?? []
     validateLocalOutputs(localOutputs)
-    const outputs = mergeOutputs(template.requiredOutputs, localOutputs)
+    const outputs = mergeOutputs([CHILD_RESULT_OUTPUT], localOutputs)
+    const criteria = request.proposal.acceptanceCriteria.map(criterion => ({ ...criterion, required: true }))
+    assertUniqueIds(criteria, 'Child spec.criteria')
 
     let contract: TaskContract
     try {
@@ -460,14 +459,7 @@ export function admitChildBatch(input: ChildBatchAdmissionInput): AdmittedChildB
         taskId: request.taskId,
         spec: {
           goal: request.proposal.goal,
-          criteria: template.requiredCriteria.map(criterion => ({ ...criterion })),
-          ...(request.proposal.localCriteria === undefined
-            ? {}
-            : {
-                localGuidance: request.proposal.localCriteria.map(criterion => ({
-                  ...criterion,
-                })),
-              }),
+          criteria,
           inputs: request.proposal.inputs,
           outputs: outputs,
         },

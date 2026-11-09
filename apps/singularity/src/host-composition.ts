@@ -7,7 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent,AgentOptions } from '@deepseek-ai/dsh-agent'
 import { loadProfileDirectory } from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
-import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { PERSONA_PREFIX_SECTION,renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { INSTALL_ANCHOR,runProfile } from '@deepseek-ai/dsh/profile-boot'
 import type { CompositionPayload,JsonValue,TaskContract } from '@singularity/protocol'
 import { canonicalize,computeDigest } from '@singularity/protocol'
@@ -23,6 +23,7 @@ mcpCompositionEntry,
 mcpPromptSections,
 renderWorkerCard,
 usesExploration,
+WORKER_PERSONA,
 } from '@singularity/runtime'
 
 const REQUIRED_DSH_VERSION = '0.2.2-alpha.2'
@@ -110,7 +111,8 @@ export async function buildSingleRunComposition(
       config: entry.fiber?.effectiveConfig,
     }))
   const mcpOrder = ctx.systemPrompt.getSectionOrder('MCP_SERVERS')
-  const mcpSections = mcpPromptSections(methodResources.mcpServers, mcpOrder)
+  const nativeMcpResources = ctx.get('mcpResources', false) !== undefined
+  const mcpSections = mcpPromptSections(methodResources.mcpServers, mcpOrder, nativeMcpResources)
   const resourceText = mcpSections.find(section => section.name === 'mcp-resource-servers')?.text ?? ''
   const disposers: (() => void)[] = []
   let assembly
@@ -129,7 +131,7 @@ export async function buildSingleRunComposition(
   } finally {
     for (const dispose of disposers.reverse()) dispose()
   }
-  if (methodResources.mcpServers.length > 0
+  if (nativeMcpResources && methodResources.mcpServers.length > 0
     && !assembly.sections.some(section => section.name === 'mcp-resource-servers')) {
     throw new MethodResourceError(
       'method',
@@ -141,6 +143,8 @@ export async function buildSingleRunComposition(
     ...assembly,
     sections: assembly.sections.map(section => section.name === 'mcp-resource-servers'
       ? { ...section, text: resourceText }
+      : section.name === PERSONA_PREFIX_SECTION
+        ? { ...section, text: WORKER_PERSONA }
       : section.name === 'singularity:worker-card'
         ? { ...section, text: renderWorkerCard(usesExploration(methodResources)) } : section),
   })

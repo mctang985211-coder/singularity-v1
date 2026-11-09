@@ -49,7 +49,6 @@ const rootBody: TaskContractPayload = {
       { id: 'contract-sealed', statement: 'The contract is sealed under the contract domain', required: true },
       { id: 'proposal-rejected', statement: 'Model-supplied binding fields are rejected', required: false },
     ],
-    localGuidance: [{ id: 'local-trace', statement: 'Keep local notes traceable to this task' }],
     inputs: [
       { id: 'input-rtl', object: ref('obj-rtl', digestB), path: 'inputs/rtl.sv', access: 'read' },
       { id: 'input-copy', object: ref('obj-copy', digestC), path: 'inputs/copy.txt', access: 'copy-to-work' },
@@ -115,12 +114,6 @@ function childOriginOf(body: TaskContractPayload): TaskChildOrigin {
   return body.origin
 }
 
-function firstLocalGuidance(body: TaskContractPayload) {
-  const first = body.spec.localGuidance?.[0]
-  if (first === undefined) throw new Error('expected local guidance')
-  return first
-}
-
 function explorationOf(body: TaskContractPayload) {
   const { exploration } = body.resources
   if (exploration === undefined) throw new Error('expected an exploration ref')
@@ -141,8 +134,6 @@ const tamperings: readonly Tampering[] = [
   { label: 'spec.criteria[0].id', mutate: body => { body.spec.criteria[0].id = 'changed-criterion' } },
   { label: 'spec.criteria[0].statement', mutate: body => { body.spec.criteria[0].statement += ' changed' } },
   { label: 'spec.criteria[0].required', mutate: body => { body.spec.criteria[0].required = false } },
-  { label: 'spec.localGuidance[0].id', mutate: body => { firstLocalGuidance(body).id = 'changed-guidance' } },
-  { label: 'spec.localGuidance[0].statement', mutate: body => { firstLocalGuidance(body).statement += ' changed' } },
   { label: 'spec.inputs[0].id', mutate: body => { body.spec.inputs[0].id = 'changed-input' } },
   { label: 'spec.inputs[0].object.id', mutate: body => { body.spec.inputs[0].object.id = 'changed-object' } },
   { label: 'spec.inputs[0].object.digest', mutate: body => { body.spec.inputs[0].object.digest = digestD } },
@@ -217,7 +208,6 @@ const unknownFieldMutations: readonly Tampering[] = [
   { label: 'unknown spec field', mutate: body => { (body.spec as unknown as Record<string, unknown>)['unexpected'] = true } },
   { label: 'unknown goal field', mutate: body => { (body.spec.goal as unknown as Record<string, unknown>)['unexpected'] = true } },
   { label: 'unknown criterion field', mutate: body => { (body.spec.criteria[0] as unknown as Record<string, unknown>)['unexpected'] = true } },
-  { label: 'unknown localGuidance field', mutate: body => { (firstLocalGuidance(body) as unknown as Record<string, unknown>)['unexpected'] = true } },
   { label: 'unknown input field', mutate: body => { (body.spec.inputs[0] as unknown as Record<string, unknown>)['unexpected'] = true } },
   { label: 'unknown input object field', mutate: body => { (body.spec.inputs[0].object as unknown as Record<string, unknown>)['unexpected'] = true } },
   { label: 'unknown output field', mutate: body => { (body.spec.outputs[0] as unknown as Record<string, unknown>)['unexpected'] = true } },
@@ -274,13 +264,11 @@ void test('sealTaskContract rejects partial payloads and outermost digest fields
 
 void test('sealTaskContract preserves supplied field and array order without merging or appending', () => {
   const body = clone(rootBody)
-  delete (body.spec as unknown as Record<string, unknown>)['localGuidance']
   delete (body.resources as unknown as Record<string, unknown>)['exploration']
 
   const original = sealTaskContract(rootBody)
   const sealed = sealTaskContract(body)
 
-  assert.equal('localGuidance' in sealed.spec, false)
   assert.equal('exploration' in sealed.resources, false)
   assert.equal(sealed.spec.criteria.length, rootBody.spec.criteria.length)
   assert.equal(sealed.spec.outputs.length, rootBody.spec.outputs.length)

@@ -270,8 +270,6 @@ export interface RetryPolicyInput {
   readonly now: number
   /** Known subtree input+output tokens, including summary usage. */
   readonly usageTokens: number
-  /** True when any subtree usage is unknown; retry then fails closed. */
-  readonly usageUnknown: boolean
 }
 
 /**
@@ -301,6 +299,7 @@ export function decideRetryPolicy(
       }
       break
     case 'failed':
+      if (closure.reason === 'blocked') return { allowed: false, reason: 'worker returned a blocker to its dispatcher' }
       break
   }
   if (input.runCount >= input.maxRuns) {
@@ -308,9 +307,6 @@ export function decideRetryPolicy(
   }
   if (input.now >= input.deadlineAt) {
     return { allowed: false, reason: 'deadline has been reached' }
-  }
-  if (input.usageUnknown) {
-    return { allowed: false, reason: 'usage is unknown, so budget cannot be proven' }
   }
   if (input.usageTokens >= input.maxTokens) {
     return { allowed: false, reason: 'known token budget is exhausted' }
@@ -557,16 +553,16 @@ function applyChildrenAdmitted(
         `Child ${JSON.stringify(child.taskId)} origin does not match the parent admission`,
       )
     }
-    if (pendingBindings.has(origin.bindingId)) {
+    const binding = resolveChildBinding(parentTemplate, origin, fact)
+    if (binding.join === 'required' && pendingBindings.has(origin.bindingId)) {
       fail(
         'CHILD_DUPLICATE',
         fact,
-        `Binding ${JSON.stringify(origin.bindingId)} appears more than once in one batch`,
+        `Required binding ${JSON.stringify(origin.bindingId)} appears more than once in one batch`,
       )
     }
     pendingBindings.add(origin.bindingId)
 
-    const binding = resolveChildBinding(parentTemplate, origin, fact)
     if (
       child.method.id !== parent.contract.method.id ||
       child.method.digest !== parent.contract.method.digest
@@ -701,7 +697,7 @@ function applyRunSubmitted(runtime: ReducerRuntime, fact: FactOf<'run/submitted'
   const method = resolveMethod(task.contract.method, runtime, fact)
   const template = resolveTemplate(method, task.contract, runtime, fact)
   for (const binding of template.children) {
-    if (binding.join !== 'required') continue
+    if (binding.join !== 'required' || !task.childIds.some(id => runtime.tasks.get(id)?.bindingId === binding.bindingId)) continue
     if (!hasBindingWinner(runtime, task, run.runId, binding.bindingId)) {
       fail(
         'JOIN_UNSATISFIED',
@@ -833,7 +829,7 @@ function closeVerified(
   const method = resolveMethod(task.contract.method, runtime, fact)
   const template = resolveTemplate(method, task.contract, runtime, fact)
   for (const binding of template.children) {
-    if (binding.join !== 'required') continue
+    if (binding.join !== 'required' || !task.childIds.some(id => runtime.tasks.get(id)?.bindingId === binding.bindingId)) continue
     if (!hasBindingWinner(runtime, task, decisiveRun.runId, binding.bindingId)) {
       fail(
         'JOIN_UNSATISFIED',
@@ -979,6 +975,7 @@ export function decideTaskRetryPolicy(
   const task = state.tasks.get(taskId)
   const run = state.runs.get(runId)
   if (task === undefined || run === undefined) return { allowed: false, reason: 'Run closure fact missing' }
+  if (task.join === 'probe') return { allowed: false, reason: 'probe Tasks have one Run; the parent chooses the next probe' }
   let owner: TaskState | undefined = task
   while (owner !== undefined) {
     const totals = subtreeUsage(state, owner.taskId)
@@ -991,7 +988,6 @@ export function decideTaskRetryPolicy(
       deadlineAt: owner.contract.limits.deadlineAt,
       now,
       usageTokens: totals.tokens,
-      usageUnknown: totals.unknown,
     }, transientInvalidReasons)
     if (!decision.allowed) {
       return owner.taskId === task.taskId ? decision

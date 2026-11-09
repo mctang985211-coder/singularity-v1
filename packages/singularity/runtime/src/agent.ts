@@ -18,7 +18,7 @@ createSkillResourceRoot,
 materializeSkills,registerSkills,removeSkillResourceRoot,
 } from './agent-skills.ts'
 import type { RemainingBudgetPct } from './prompt.ts'
-import { assertPromptBudget,renderWorkerCard } from './prompt.ts'
+import { renderWorkerCard,WORKER_PERSONA } from './prompt.ts'
 import type { PlatformPromptRenderer } from './resources.ts'
 import {
 METHOD_GUIDANCE_ORDER,
@@ -31,6 +31,7 @@ usesExploration,
 import type { ExecuteSingleRunRequest,PreparedRun } from './run.ts'
 import type { RunToolController } from './tools.ts'
 import type { WakeDeliveryOutcome } from './wake.ts'
+import type { WakeRequest } from './wake.ts'
 import { batchWakeRequest,deliverWakeOnceOrFail,startWakeText } from './wake.ts'
 
 export type OpenedRunMode = 'create' | 'resume'
@@ -53,11 +54,11 @@ interface DriveAgentOptions {
   readonly prepared: PreparedRun
   readonly request: ExecuteSingleRunRequest
   readonly mode: OpenedRunMode
+  readonly wake?: WakeRequest
   readonly controller: RunToolController
   readonly checkBudget: (tokens?: number, steps?: number) => boolean
   readonly stopBudget: () => void
   readonly budget: () => RemainingBudgetPct
-  readonly startBudget: RemainingBudgetPct
   readonly controllerState: () => Promise<TaskRunState>
   readonly renderView: () => string
 }
@@ -68,6 +69,8 @@ const zeroUsage: UsageRecord = {
   steps: 0,
   unknownRequests: 0,
 }
+
+class ToolSchemaBudgetError extends Error {}
 
 /** Drives only DSH lifecycle and returns observations for Run settlement. */
 export async function driveAgent(options: DriveAgentOptions): Promise<AgentDriveResult> {
@@ -118,21 +121,23 @@ export async function driveAgent(options: DriveAgentOptions): Promise<AgentDrive
     sessionAction = mode === 'create' ? 'created' : 'resumed'
     deadline.throwIfAborted()
     if (!options.checkBudget()) throw budgetExhausted
-    // Start percentages use the frozen run/opened boundary; a batch wake shows
-    // current percentages. The wake adapter checks native message identities.
+    // Start and batch wakes share the current Task budget projection.
     const state = await options.controllerState()
-    const wake = mode === 'resume'
-      ? batchWakeRequest(state, request.runId, options.budget()) : undefined
+    const wake = options.wake ?? (mode === 'resume'
+      ? batchWakeRequest(state, request.runId, options.budget()) : undefined)
     wakeOutcome = await deliverWakeOnceOrFail(handle.agent, wake ?? {
       wakeId: `${request.runId}:start`,
-      text: startWakeText(contract.taskId, request.runId, options.startBudget),
+      text: startWakeText(contract.taskId, request.runId, options.budget()),
     })
     await handle.agent.whenIdle()
     deadline.throwIfAborted()
     const toolFailure = options.controller.snapshot().failure
     if (toolFailure !== undefined) throw toolFailure
   } catch (error) {
-    if (!deadline.aborted && error !== budgetExhausted) failures.push(error)
+    if (error instanceof ToolSchemaBudgetError) {
+      agentErrorCode = 'UNSUPPORTED_RESOURCES'
+      agentErrorDetail = error.message
+    } else if (!deadline.aborted && error !== budgetExhausted) failures.push(error)
     else {
       agentErrorCode = 'budget-exhausted'
       agentErrorDetail = errorMessage(error)
@@ -190,6 +195,12 @@ function buildAgentSetup(
       return next()
     })
     agentCtx.systemPrompt.section({
+      name: 'deployment:persona-prefix',
+      order: agentCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
+      text: WORKER_PERSONA,
+      interpolate: false,
+    })
+    agentCtx.systemPrompt.section({
       name: 'singularity:worker-card',
       order: 100,
       text: renderWorkerCard(usesExploration(prepared.methodResources)),
@@ -234,7 +245,9 @@ function buildAgentSetup(
       agentCtx.tools.restrict({ deny: globalNames })
     }
     assertMcpSurface(agentCtx, agent, prepared.methodResources.mcpServers)
-    assertPromptBudget(JSON.stringify(agentCtx.tools.schemas(agent)), 12 * 1024, 'visible tool schemas')
+    const schemaBytes = new TextEncoder().encode(JSON.stringify(agentCtx.tools.schemas(agent))).byteLength
+    if (schemaBytes > 12 * 1024) throw new ToolSchemaBudgetError(
+      `visible tool schemas is ${String(schemaBytes)} bytes, above the 12288 byte budget`)
   }
 }
 
@@ -247,6 +260,9 @@ export function snapshotSession(session: Session, pendingUnknown = true): Sessio
 export function snapshotSessionEvents(sessionId: string, events: readonly SessionEvent[], pendingUnknown = true): SessionSnapshot {
   let inputTokens = 0
   let outputTokens = 0
+  let cacheReadTokens = 0
+  let cacheWriteTokens = 0
+  let cacheComplete = true
   let steps = 0
   let unknownRequests = 0
   let failure: string | undefined
@@ -264,6 +280,13 @@ export function snapshotSessionEvents(sessionId: string, events: readonly Sessio
     // alpha2 pi-ai supplies zero counters when its endpoint omits usage.
     const input = usage === undefined ? 0 : usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
     const output = usage?.outputTokens ?? 0
+    if (Number.isSafeInteger(usage?.cacheReadTokens) && Number.isSafeInteger(usage?.cacheWriteTokens)
+      && (usage?.cacheReadTokens ?? -1) >= 0 && (usage?.cacheWriteTokens ?? -1) >= 0) {
+      cacheReadTokens += usage?.cacheReadTokens ?? 0
+      cacheWriteTokens += usage?.cacheWriteTokens ?? 0
+    } else {
+      cacheComplete = false
+    }
     if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || input < 0 || output < 0 || input + output === 0) {
       unknownRequests += 1
       continue
@@ -276,6 +299,7 @@ export function snapshotSessionEvents(sessionId: string, events: readonly Sessio
     usage: {
       inputTokens,
       outputTokens,
+      ...(steps > 0 && cacheComplete ? { cacheReadTokens, cacheWriteTokens } : {}),
       steps: steps + pending.size,
       unknownRequests: unknownRequests + (pendingUnknown ? pending.size : 0),
     },

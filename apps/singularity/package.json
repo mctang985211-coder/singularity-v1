@@ -45,8 +45,6 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/server": "2.2.0",
-    "zod": "4.6.7",
-    "@singularity/domain-inventory": "workspace:*"
+    "@modelcontextprotocol/server": "2.2.0"
   }
 }

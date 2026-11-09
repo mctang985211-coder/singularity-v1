@@ -8,7 +8,7 @@ export {
 METHOD_GUIDANCE_ORDER,
 METHOD_GUIDANCE_SECTION,MethodResourceError,PLATFORM_PROMPT_SERVICE,
 assertCompositionResources,
-loadMethodResources
+loadMethodResources,resourceAssetCatalog
 } from './resources.ts'
 export * from './retry.ts'
 export {
@@ -46,3 +46,4 @@ export { withToolExample } from './tool-example.ts'
 export * from './trace.ts'
 
 export { readTreeBundle } from './resource-bundle.ts'
+export { AGENT_REVIEW_POLICY,createAgentVerifier } from './reviewer.ts'

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 
 import type {
@@ -54,8 +55,9 @@ settleExecutionRecord,
 settleSubmitted,
 } from './run-settlement.ts'
 import type { RunSessionAction,YieldedRunResult } from './run-yield.ts'
-import { yieldedActiveChildBatch } from './run-yield.ts'
+import { yieldedRun } from './run-yield.ts'
 import { CommandService } from './service.ts'
+import type { WakeRequest } from './wake.ts'
 import type { RunVerifier } from './verification.ts'
 import { buildExecutionRecord } from './verification.ts'
 import type { CasObjectReader } from './workspace.ts'
@@ -100,7 +102,7 @@ export interface ExecuteSingleRunRequest {
   /** Domain-owned derived summaries and their source Task usage. */
   readonly summaries?: ContractSummaryService
   /** Domain pool request-boundary check over reported ancestor/subtree usage. */
-  readonly checkReportedBudget?: (reported?: { readonly tokens: number; readonly unknown: boolean }) => boolean
+  readonly checkReportedBudget?: (reported?: { readonly tokens: number }) => boolean
   readonly canOpenRun?: () => boolean
   /** The tree owner drains native lifecycle before its single subtree closure. */
   readonly signal?: AbortSignal
@@ -171,6 +173,7 @@ export interface RuntimeContext {
 
 /** @internal One Run whose admission and `run/opened` fact are already durable. */
 export interface PreparedRun {
+  session?: Session
   readonly contract: TaskContract
   readonly runOpened: Extract<Fact, { readonly type: 'run/opened' }>
   readonly workspace: string
@@ -308,11 +311,15 @@ async function openSingleRun(
 /** Only yielded parents in this live writer can continue; archives cannot resume. */
 const yieldedRuns = new WeakMap<CommandService, Map<string, { prepared: PreparedRun; request: ExecuteSingleRunRequest }>>()
 
+export function yieldedRunSession(service: CommandService, runId: string): Session | undefined {
+  return yieldedRuns.get(service)?.get(runId)?.prepared.session
+}
+
 async function driveLiveRun(prepared: PreparedRun, request: ExecuteSingleRunRequest,
-  service: CommandService, mode: OpenedRunMode): Promise<DrivenRunResult> {
+  service: CommandService, mode: OpenedRunMode, wake?: WakeRequest): Promise<DrivenRunResult> {
   let result: DrivenRunResult
   try {
-    result = await drivePreparedRun(prepared, request, service, mode)
+    result = await drivePreparedRun(prepared, request, service, mode, wake)
   } catch (error) {
     try { await request.summaries?.cancelRun(request.runId) } catch (summaryError) {
       if (summaryError !== error) throw new AggregateError([error, summaryError], 'Run and owned Summary failed')
@@ -327,22 +334,16 @@ async function driveLiveRun(prepared: PreparedRun, request: ExecuteSingleRunRequ
 }
 
 /** Pool-only continuation of an observed yield in the current process. */
-export async function continueYieldedRun(service: CommandService, runId: string): Promise<DrivenRunResult> {
+export async function continueYieldedRun(service: CommandService, runId: string, wake?: WakeRequest): Promise<DrivenRunResult> {
   const waiting = yieldedRuns.get(service)
   const live = waiting?.get(runId)
   if (live === undefined) throw new SingleRunError('RUN_NOT_FOUND', 'Only a live yielded Run can continue')
-  const state = await service.taskRunState()
-  const batch = [...state.batches.values()].filter(batch => batch.parentRunId === runId).at(-1)
-  if (batch === undefined || batch.childIds.some(id => state.tasks.get(id)?.phase !== 'closed')) {
-    throw new SingleRunError('INVALID_ARGUMENT', 'The child batch must be terminal before continuing its parent')
-  }
-  waiting?.delete(runId)
-  return driveLiveRun(live.prepared, live.request, service, 'resume')
+  return driveLiveRun(live.prepared, live.request, service, 'resume', wake)
 }
 
 /**
- * Latest prior closed Run of this Task. The retry worker sees only the public
- * closure reason, never the previous transcript or receipt body (§12.2/§12.4).
+ * The latest prior closed Run authorizes public findings and frozen artifacts;
+ * it grants no access to the previous transcript or mutable workspace (§12.4).
  */
 function lastAttemptFromState(
   state: TaskRunState,
@@ -354,8 +355,9 @@ function lastAttemptFromState(
   for (let index = task.runIds.length - 1; index >= 0; index -= 1) {
     const runId = task.runIds[index]
     if (runId === currentRunId) continue
-    const closed = state.runs.get(runId)?.closed
-    if (closed !== undefined) return { runId, reason: closed.reason }
+    const run = state.runs.get(runId)
+    if (run?.closed !== undefined) return { runId, reason: run.closed.reason,
+      ...(run.submitted === undefined ? {} : { outputsPath: `attempts/${encodeURIComponent(runId)}` }) }
   }
   return null
 }
@@ -423,18 +425,19 @@ async function drivePreparedRun(
   request: ExecuteSingleRunRequest,
   service: CommandService,
   mode: OpenedRunMode,
+  wake?: WakeRequest,
 ): Promise<DrivenRunResult> {
   const { runtime } = prepared
-  const { controller, children, feedback, budget, checkBudget, stopBudget, startBudget } = await createToolController(prepared, request, service)
+  const { controller, children, feedback, budget, checkBudget, stopBudget } = await createToolController(prepared, request, service)
   const observation = await driveAgent({
     prepared,
     request,
     mode,
+    ...(wake === undefined ? {} : { wake }),
     controller,
     budget,
     checkBudget,
     stopBudget,
-    startBudget,
     controllerState: () => service.taskRunState(runtime.transientInvalidReasons),
     renderView: () => renderLiveNodeView({
       contract: runtime.contract,
@@ -445,6 +448,7 @@ async function drivePreparedRun(
       skills: prepared.methodResources.skills,
       ...(usesExploration(prepared.methodResources) ? { exploration: prepared.methodResources.exploration } : {}),
       mcpServers: prepared.methodResources.mcpServers,
+      mcpResources: request.ctx.get('mcpResources', false) !== undefined,
       budget: budget(),
       lastAttempt: runtime.lastAttempt,
       asOf: runtime.clock(),
@@ -457,7 +461,7 @@ async function drivePreparedRun(
   let { snapshot } = observation
   const tools = controller.snapshot()
   const state = await service.taskRunState(runtime.transientInvalidReasons)
-  const yielded = yieldedActiveChildBatch({
+  const yielded = yieldedRun({
     state,
     taskId: runtime.contract.taskId,
     runId: request.runId,

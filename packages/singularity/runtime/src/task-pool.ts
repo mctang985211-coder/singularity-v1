@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { BudgetReservation,TaskContract,UsageRecord } from '@singularity/protocol'
+import type { BudgetReservation,Ref,TaskContract,UsageRecord } from '@singularity/protocol'
 import { computeDigest } from '@singularity/protocol'
 
 import { snapshotSession } from './agent.ts'
@@ -11,8 +11,10 @@ import { DecomposeError,SingleRunError } from './errors.ts'
 import { retrySingleRun } from './retry.ts'
 import { usageCost } from './run-settlement.ts'
 import type { ExecuteSingleRunRequest,ExecuteSingleRunResult,InterruptedRunResult,RunAttemptResult } from './run.ts'
-import { continueYieldedRun,executeSingleRun } from './run.ts'
+import { continueYieldedRun,executeSingleRun,yieldedRunSession } from './run.ts'
 import { CommandService } from './service.ts'
+import { loadDirectFeedback } from './task-feedback.ts'
+import type { WakeRequest } from './wake.ts'
 
 export interface ResolveTaskRunInput {
   readonly contract: TaskContract
@@ -41,12 +43,13 @@ interface ReadyRun {
   readonly request: ExecuteSingleRunRequest
   readonly action: 'create' | 'resume' | 'retry'
   readonly previousRunId?: string
+  readonly wake?: WakeRequest
+  readonly feedbackWait?: Ref
 }
 
 /**
  * Capacity only: each dispatched Run uses the shared Run driver and fresh business retry. A
- * yielded parent holds no slot; its latest batch must be wholly terminal before
- * it is requeued. Workflow and direct-child choices remain with each worker.
+ * yielded Run holds no slot; feedback or a wholly terminal batch requeues it. Workflow and direct-child choices remain with each worker.
  */
 export async function executeTaskTree(
   request: ExecuteTaskTreeRequest,
@@ -109,7 +112,7 @@ export async function executeTaskTree(
         return taskId !== undefined && isBelow(taskId, owner.taskId) ? [record] : []
       })
       const cost = usageCost(records)
-      if (cost.unknown || cost.tokens >= owner.limits.maxTokens || clock() >= owner.limits.deadlineAt) return false
+      if (cost.tokens >= owner.limits.maxTokens || clock() >= owner.limits.deadlineAt) return false
       ancestor = owner.origin.kind === 'child' ? contracts.get(owner.origin.parentId) : undefined
     }
     const rootUsage = [...usage].flatMap(([runId, record]) => {
@@ -149,7 +152,7 @@ export async function executeTaskTree(
   }
   const dispatch = async (job: ReadyRun): Promise<RunAttemptResult> => {
     const run = job.request
-    if (job.action === 'resume') return continueYieldedRun(service, run.runId)
+    if (job.action === 'resume') return continueYieldedRun(service, run.runId, job.wake)
     if (job.action === 'retry') {
       return retrySingleRun({ ...run, previousRunId: job.previousRunId as string }, service)
     }
@@ -182,13 +185,16 @@ export async function executeTaskTree(
         continue
       }
       if (result.kind === 'yielded') {
-        waiting.set(result.runId, job)
+        waiting.set(result.runId, { ...job, ...(result.feedbackWait === undefined ? {} : { feedbackWait: result.feedbackWait }) })
         if (signal.aborted) continue
-        const batch = service.facts().find(fact => fact.type === 'task/children-admitted'
-          && fact.data.parentRunId === result.runId && fact.data.batchId === result.batchId)
-        if (batch?.type !== 'task/children-admitted') throw new Error('yielded batch is missing from the journal')
-        for (const child of batch.data.children) {
-          enqueue(await newAttempt(child.contract, 1, child.budgetReservation), 'create')
+        if (result.batchId !== undefined) {
+          const batch = service.facts().find(fact => fact.type === 'task/children-admitted'
+            && fact.data.parentRunId === result.runId && fact.data.batchId === result.batchId)
+          if (batch?.type !== 'task/children-admitted') throw new Error('yielded batch is missing from the journal')
+          for (const child of batch.data.children) {
+            if ([...requests.values()].some(run => run.admission.contract.taskId === child.contract.taskId)) continue
+            enqueue(await newAttempt(child.contract, 1, child.budgetReservation), 'create')
+          }
         }
       } else {
         settled.push(result)
@@ -199,12 +205,20 @@ export async function executeTaskTree(
       }
       if (signal.aborted) continue
       const state = await service.taskRunState(request.transientInvalidReasons ?? [])
+      const session = (runId: string) => request.ctx.sessions.get(state.runs.get(runId)?.opened.sessionId as SessionId) ?? yieldedRunSession(service, runId)
       for (const [runId, parent] of waiting) {
-        const batches = [...state.batches.values()].filter(batch => batch.parentRunId === runId)
-        const batch = batches.at(-1)
-        if (batch !== undefined && batch.childIds.every(id => state.tasks.get(id)?.phase === 'closed')) {
+        const entries = await loadDirectFeedback({ state, parentTaskId: parent.request.admission.contract.taskId, reader: service, session })
+        const feedback = entries.find(entry => parent.feedbackWait === undefined
+          ? waiting.get(entry.feedback.sourceRunId)?.feedbackWait?.id === entry.feedback.id
+            && !session(runId)?.deriveMessages().some(message => String(message.id) === `${runId}:${entry.feedbackRef.digest}`)
+          : entry.feedback.replyTo === parent.feedbackWait.id)
+        const batch = [...state.batches.values()].filter(batch => batch.parentRunId === runId).at(-1)
+        if (feedback !== undefined || (parent.feedbackWait === undefined && batch?.childIds.every(id => state.tasks.get(id)?.phase === 'closed'))) {
           waiting.delete(runId)
-          enqueue(parent.request, 'resume')
+          ready.unshift({ request: parent.request, action: 'resume', ...(feedback === undefined ? {} : { wake: {
+            wakeId: `${runId}:${feedback.feedbackRef.digest}`,
+            text: `reason=feedback; ${JSON.stringify(feedback)}. Read self; ${parent.feedbackWait === undefined ? 'reply with singularity_feedback(replyTo=feedback.id). Clarify the frozen contract, or explain the correction so the child can stop blocked and you can dispatch a corrected Task after this batch.' : 'your dispatcher replied. Continue under the frozen contract, or singularity_stop(reason=blocked) if correction is required.'}`,
+          } }) })
         }
       }
     }

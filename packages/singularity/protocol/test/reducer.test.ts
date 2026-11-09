@@ -53,8 +53,8 @@ function template(id: string, children: ChildBinding[] = []): TaskTemplate {
     guidance: ref(`${id}-guidance`, 11),
     example: ref(`${id}-example`, 12),
     instanceSchema: {},
-    requiredCriteria: [],
-    requiredOutputs: [],
+
+
     acceptancePolicy: ref(`${id}-acceptance`, 13),
     skills: [],
     tools: [],
@@ -705,6 +705,28 @@ void test('probe bindings do not block submit without a child', () => {
   assert.equal(mustGet(state.tasks, 'task-root').phase, 'active')
 })
 
+void test('one batch allows distinct probe instances but only one child per required obligation', () => {
+  for (const join of ['required', 'probe'] as const) {
+    const root = makeRootContract()
+    const bindingId = join === 'probe' ? 'child-probe' : 'child-required'
+    const children = ['task-a', 'task-b'].map(taskId =>
+      admittedChild(makeChildContract({ taskId, bindingId }), join))
+    const journal = new Journal()
+    journal.add('task/admitted', { taskId: root.taskId, contract: contractRef(root) })
+    journal.add('run/opened', runOpened(root.taskId, 'run-root-1', 1))
+    journal.add('task/children-admitted', admission('run-root-1', 'batch-1', children))
+    const context = makeContext([root])
+    if (join === 'required') {
+      expectReducerError(() => reduceTaskRunFacts(journal.facts, context), 'CHILD_DUPLICATE')
+    } else {
+      const state = reduceTaskRunFacts(journal.facts, context)
+      assert.deepEqual(state.batches.get(childBatchKey('run-root-1', 'batch-1'))?.childIds, ['task-a', 'task-b'])
+      assert.equal(state.tasks.get('task-a')?.phase, 'open')
+      assert.equal(state.tasks.get('task-b')?.phase, 'open')
+    }
+  }
+})
+
 void test('a verified probe leaves its binding available for another batch while a required winner stays fixed', () => {
   for (const join of ['required', 'probe'] as const) {
     const root = join === 'probe' ? makeProbeRootContract() : makeRootContract()
@@ -994,7 +1016,7 @@ void test('run/opened resolves a frozen Composition and checks contract id, dige
   )
 })
 
-void test('failed retry is allowed only while maxRuns, deadline, tokens, and unknown usage permit', () => {
+void test('failed retry is allowed only while maxRuns, deadline, and tokens permit', () => {
   const root = makePlainRootContract()
   const context = makeContext([root], [plainMethod])
   const journal = new Journal()
@@ -1034,6 +1056,25 @@ void test('failed retry is allowed only while maxRuns, deadline, tokens, and unk
   )
 })
 
+void test('a failed probe closes after one Run and leaves the next probe to its parent', () => {
+  const root = makeProbeRootContract()
+  const child = makeChildContract({ taskId: 'task-child', method: probeMethodRef, bindingId: 'child-probe' })
+  const context = makeContext([root], [probeMethod])
+  const journal = new Journal()
+  journal.add('task/admitted', { taskId: root.taskId, contract: contractRef(root) })
+  journal.add('run/opened', runOpened(root.taskId, 'run-root-1', 1))
+  journal.add('task/children-admitted', admission('run-root-1', 'batch-1', [admittedChild(child, 'probe')]))
+  journal.add('run/opened', runOpened(child.taskId, 'run-child-1', 1))
+  journal.add('run/closed', failedExecutionClosed('run-child-1'))
+  const failed = reduceTaskRunFacts(journal.facts, context)
+  assert.equal(protocol.decideTaskRetryPolicy(failed, child.taskId, 'run-child-1', [], 100).allowed, false)
+  journal.add('task/closed', failedTask(child.taskId, 'run-child-1'))
+  const terminal = reduceTaskRunFacts(journal.facts, context)
+  assert.equal(terminal.tasks.get(child.taskId)?.closed?.outcome, 'failed')
+  const retry = appendFact(journal.facts, 'run/opened', runOpened(child.taskId, 'run-child-2', 2))
+  expectReducerError(() => reduceTaskRunFacts([...journal.facts, retry], context), 'TASK_NOT_OPEN')
+})
+
 void test('a retry Run cannot open while an earlier child is still active', () => {
   const root = makeRootContract()
   const context = makeContext([root])
@@ -1054,7 +1095,7 @@ void test('a retry Run cannot open while an earlier child is still active', () =
   )
 })
 
-void test('deadline, token exhaustion, and unknown usage stop retry but permit task closure', () => {
+void test('deadline and token exhaustion stop retry but permit task closure', () => {
   const deadlineRoot = makePlainRootContract()
   const deadlineContext = makeContext([deadlineRoot], [plainMethod])
   const deadlineJournal = new Journal()
@@ -1123,36 +1164,6 @@ void test('deadline, token exhaustion, and unknown usage stop retry but permit t
     'failed',
   )
 
-  const unknownRoot = makePlainRootContract()
-  const unknownContext = makeContext([unknownRoot], [plainMethod])
-  const unknownJournal = new Journal()
-  unknownJournal.add('task/admitted', {
-    taskId: 'task-root',
-    contract: contractRef(unknownRoot),
-  })
-  unknownJournal.add('run/opened', runOpened('task-root', 'run-root-1', 1))
-  unknownJournal.add('run/submitted', submitted('run-root-1'))
-  unknownJournal.add(
-    'run/closed',
-    { ...failedClosed('run-root-1'), usage: usage({ unknownRequests: 1 }) },
-  )
-  const unknownRetry = appendFact(
-    unknownJournal.facts,
-    'run/opened',
-    runOpened('task-root', 'run-root-2', 2),
-  )
-  expectReducerError(
-    () => reduceTaskRunFacts([...unknownJournal.facts, unknownRetry], unknownContext),
-    'RETRY_NOT_ALLOWED',
-  )
-  const unknownClose = appendFact(unknownJournal.facts, 'task/closed', failedTask('task-root'))
-  assert.equal(
-    mustGet(
-      reduceTaskRunFacts([...unknownJournal.facts, unknownClose], unknownContext).tasks,
-      'task-root',
-    ).closed?.outcome,
-    'failed',
-  )
 })
 
 for (const exhaustedOwner of ['root', 'parent'] as const) {
@@ -1160,8 +1171,11 @@ for (const exhaustedOwner of ['root', 'parent'] as const) {
     const method = sealMethodRevision({
       v: 1,
       id: 'method-ancestor-retry',
-      templates: [templates[0], template('child-template', [
-        binding('grandchild-probe', 'grand-template', 'probe'),
+      templates: [template('root-template', [
+        binding('child-required', 'child-template', 'required'),
+        binding('child-probe', 'grand-template', 'probe'),
+      ]), template('child-template', [
+        binding('grandchild-probe', 'grand-template', 'required'),
         binding('grandchild-other', 'grand-template', 'probe'),
       ]), templates[2]],
       skills: [],
@@ -1171,7 +1185,7 @@ for (const exhaustedOwner of ['root', 'parent'] as const) {
     const root = makeRootContract({ method: methodRef })
     const parent = makeChildContract({ taskId: 'task-parent', method: methodRef, limits: { maxTokens: 400 } })
     const other = makeChildContract(exhaustedOwner === 'root'
-      ? { taskId: 'task-other', bindingId: 'child-probe', method: methodRef, limits: { maxTokens: 600 } }
+      ? { taskId: 'task-other', bindingId: 'child-probe', templateId: 'grand-template', method: methodRef, limits: { maxTokens: 600 } }
       : { taskId: 'task-other', parentId: parent.taskId, parentRunId: 'run-parent-2', batchId: 'batch-grand',
         bindingId: 'grandchild-other', templateId: 'grand-template', method: methodRef, limits: { maxTokens: 299 } })
     const grandchild = makeChildContract({
@@ -1191,7 +1205,7 @@ for (const exhaustedOwner of ['root', 'parent'] as const) {
     journal.add('run/closed', { ...failedExecutionClosed('run-parent-1'), usage: usage({ inputTokens: 1, outputTokens: 0 }) })
     journal.add('run/opened', runOpened(parent.taskId, 'run-parent-2', 2, { budgetReservation: reservation(399) }))
     journal.add('task/children-admitted', admission('run-parent-2', 'batch-grand', [
-      admittedChild(grandchild, 'probe'),
+      admittedChild(grandchild, 'required'),
       ...(exhaustedOwner === 'parent' ? [{ ...admittedChild(other, 'probe'), budgetReservation: reservation(299) }] : []),
     ]))
     journal.add('run/opened', runOpened(other.taskId, 'run-other-1', 1, { budgetReservation: reservation(other.limits.maxTokens) }))
@@ -1214,14 +1228,6 @@ for (const exhaustedOwner of ['root', 'parent'] as const) {
     assert.deepEqual(protocol.decideTaskRetryPolicy(failedState, grandchild.taskId, 'run-grandchild-1', [], 100), {
       allowed: false,
       reason: `ancestor Task ${JSON.stringify(exhaustedOwner === 'root' ? root.taskId : parent.taskId)}: known token budget is exhausted`,
-    })
-    const knownPrefix = journal.facts.slice(0, -2)
-    const unknownClosure = appendFact(knownPrefix, 'run/closed', { ...verifiedClosed('run-other-1'),
-      usage: usage({ inputTokens: 10, outputTokens: 0, unknownRequests: 1 }) })
-    const unknownState = reduceTaskRunFacts([...knownPrefix, unknownClosure], context)
-    assert.deepEqual(protocol.decideTaskRetryPolicy(unknownState, grandchild.taskId, 'run-grandchild-1', [], 100), {
-      allowed: false,
-      reason: `ancestor Task ${JSON.stringify(exhaustedOwner === 'root' ? root.taskId : parent.taskId)}: usage is unknown, so budget cannot be proven`,
     })
     const terminal = appendFact(journal.facts, 'task/closed', failedTask(grandchild.taskId, 'run-grandchild-1'))
     const closedState = reduceTaskRunFacts([...journal.facts, terminal], context)

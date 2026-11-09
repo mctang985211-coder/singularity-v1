@@ -76,7 +76,7 @@ void test('all Task tools return failed with a format example; corrected decompo
       return call(name, args)
     }
     return call('singularity_decompose', JSON.stringify({ action: 'commit', children: [{ bindingId, ackPreview: previewDigestFrom(request),
-      task: { goal: { summary: 'Inspect a component.', deliverable: 'A note.', scope: [], constraints: [] }, inputs: [], localCriteria: [], localOutputs: [] } }] }))
+      task: { goal: { summary: 'Inspect a component.', deliverable: 'A note.', scope: [], constraints: [] }, inputs: [], acceptanceCriteria: [{ id: 'child-result', statement: 'The declared result contains the completed work.', check: 'test -s notes.txt' }], localOutputs: [] } }] }))
   }, async ({ spike, fixture, workspace, storeRoot }) => {
     scenario = await makeScenario(storeRoot, spike.ctx, { taskId, maxRuns: 1, maxDepth: 2, maxTasks: 2, maxStepsPerRun: 20,
       childBinding: { bindingId, templateId: 'component', brief: 'Inspect one component.', join: 'probe', example: s4b2Example() } })

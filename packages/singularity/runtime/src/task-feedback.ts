@@ -21,9 +21,10 @@ interface FeedbackIdentity {
   readonly runId: string
   readonly createdAt: number
   readonly writer: CasObjectWriter
+  readonly reply?: TaskFeedback
 }
 
-/** Writes a non-blocking suggestion with host-derived direct-parent identity. */
+/** Writes a question or reply with host-derived direct-parent identity. */
 export async function createTaskFeedback(input: FeedbackIdentity & {
   readonly callId: string
   readonly input: TaskFeedbackInput
@@ -33,6 +34,10 @@ export async function createTaskFeedback(input: FeedbackIdentity & {
   const allowed = new Set((input.authorizedRefs ?? []).map(refKey))
   if (suggestion.refs.some(ref => !allowed.has(refKey(ref)))) {
     throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'feedback refs must be public objects owned by this source Run')
+  }
+  if (suggestion.replyTo !== undefined && (input.reply?.id !== suggestion.replyTo
+    || input.reply.directParentTaskId !== input.contract.taskId || input.reply.source !== 'child-worker')) {
+    throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'replyTo must identify feedback from a direct child')
   }
   return writeFeedback(input, `feedback:${input.runId}:${input.callId}`, 'child-worker', suggestion)
 }
@@ -45,7 +50,6 @@ export function createSchedulerFeedback(input: FeedbackIdentity & {
   return writeFeedback(input, `feedback:${input.runId}:scheduler`, 'scheduler', {
     kind: 'needs-replan',
     summary: input.reason,
-    proposedChanges: [],
     refs: [input.resultRef],
   })
 }
@@ -57,17 +61,17 @@ async function writeFeedback(
   suggestion: TaskFeedbackInput,
 ): Promise<Ref> {
   const origin = input.contract.origin
-  if (origin.kind !== 'child') {
+  if (input.reply === undefined && origin.kind !== 'child') {
     throw new DecomposeError('INPUT_NOT_AUTHORIZED', 'only a child Task can send feedback to its direct parent')
   }
   const feedback = parseProtocolValue(taskFeedbackSchema, {
     ...suggestion,
     v: 1,
     id,
-    source,
+    source: input.reply === undefined ? source : 'parent-worker',
     sourceTaskId: input.contract.taskId,
     sourceRunId: input.runId,
-    directParentTaskId: origin.parentId,
+    directParentTaskId: input.reply === undefined && origin.kind === 'child' ? origin.parentId : input.contract.taskId,
     sourceContract: input.contract.digest,
     createdAt: input.createdAt,
   })
@@ -104,7 +108,7 @@ export function feedbackRefsFromSession(session: Session): readonly Ref[] {
   return [...refs.values()]
 }
 
-/** Reads only feedback authored by the caller's direct children, across retries. */
+/** Reads direct-child questions and dispatcher replies, across retries. */
 export interface DirectFeedbackEntry {
   readonly feedbackRef: Ref
   readonly feedback: TaskFeedback
@@ -114,25 +118,32 @@ export async function loadDirectFeedback(input: {
   readonly state: TaskRunState
   readonly parentTaskId: string
   readonly reader: CasObjectReader
+  readonly session?: (runId: string) => Session | undefined
 }): Promise<readonly DirectFeedbackEntry[]> {
   const entries: { readonly feedbackRef: Ref; readonly feedback: TaskFeedback }[] = []
   const seen = new Set<string>()
   const parent = input.state.tasks.get(input.parentTaskId)
   if (parent === undefined) throw new DecomposeError('INVALID_ARGUMENT', 'parent Task is missing')
-  for (const childId of parent.childIds) {
+  const refsFor = (runId: string) => {
+    const run = input.state.runs.get(runId), session = input.session?.(runId)
+    return [...(session === undefined ? [] : feedbackRefsFromSession(session)),
+      ...(run?.submitted?.feedbackRefs ?? []), ...(run?.closed?.source === 'run/closed' ? run.closed.feedbackRefs ?? [] : [])]
+  }
+  const neighbors = [...parent.childIds, ...(parent.parentTaskId === undefined ? [] : [parent.parentTaskId])]
+  for (const childId of neighbors) {
     const child = input.state.tasks.get(childId)
     if (child === undefined) continue
     for (const runId of child.runIds) {
-      const run = input.state.runs.get(runId)
-      // The closed fact indexes suggestions after the source Run has settled.
-      const refs = [...(run?.submitted?.feedbackRefs ?? []), ...(run?.closed?.source === 'run/closed' ? run.closed.feedbackRefs ?? [] : [])]
-      for (const ref of refs) {
+      for (const ref of refsFor(runId)) {
         if (seen.has(refKey(ref))) continue
         seen.add(refKey(ref))
         const value = parseJsonText(decoder.decode((await input.reader.readObject(ref, 'object')).bytes))
         const feedback = parseProtocolValue(taskFeedbackSchema, value)
         if (feedback.sourceTaskId !== childId || feedback.sourceRunId !== runId
-          || feedback.directParentTaskId !== input.parentTaskId || feedback.sourceContract !== child.contract.digest) continue
+          || feedback.sourceContract !== child.contract.digest) continue
+        if (feedback.source === 'parent-worker'
+          ? !parent.runIds.some(id => refsFor(id).some(ref => ref.id === feedback.replyTo))
+          : feedback.directParentTaskId !== input.parentTaskId) continue
         entries.push({ feedbackRef: ref, feedback })
       }
     }
@@ -144,6 +155,7 @@ export async function readDirectFeedback(input: {
   readonly state: TaskRunState
   readonly parentTaskId: string
   readonly reader: CasObjectReader
+  readonly session?: (runId: string) => Session | undefined
   readonly id?: string
   readonly cursor?: string
   readonly page?: number

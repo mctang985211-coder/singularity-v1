@@ -93,8 +93,6 @@ export async function prepareDecompose(
     exampleRef: childTemplate.example,
     example,
     interface: {
-      requiredCriteria: childTemplate.requiredCriteria.map(criterion => ({ ...criterion })),
-      requiredOutputs: childTemplate.requiredOutputs.map(output => ({ ...output })),
       acceptance: childTemplate.acceptancePolicy,
       instanceSchema: structuredClone(childTemplate.instanceSchema),
     },

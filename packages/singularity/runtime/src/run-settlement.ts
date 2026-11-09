@@ -62,6 +62,7 @@ export async function settleSubmitted(
   let verification
   try {
     verification = await verifyRunSubmission({
+      shell: request.ctx.shell,
       contract: runtime.contract,
       runId: request.runId,
       inputs: frozen.inputRefs,
@@ -138,8 +139,8 @@ export async function settleExecutionRecord(
     recordReason = detail === undefined ? reason : `${reason}: ${detail}`
   } else if (tools.stopped !== undefined) {
     classification = 'failed'
-    reason = `stop:${tools.stopped.reason}: ${tools.stopped.message}`
-    recordReason = reason
+    reason = tools.stopped.reason === 'blocked' ? 'blocked' : 'unsolved'
+    recordReason = `stop:${tools.stopped.reason}: ${tools.stopped.message}`
   } else {
     classification = 'failed'
     reason = NO_SUBMISSION_REASON
@@ -218,28 +219,14 @@ async function commitRunClosed(
 ): Promise<Fact> {
   const feedbackRefs = [...(closure.feedbackRefs ?? [])]
   if (runtime.contract.origin.kind === 'child' && closure.classification !== 'verified') {
-    const state = await service.taskRunState(runtime.transientInvalidReasons)
-    const task = state.tasks.get(runtime.contract.taskId)
-    const runs = new Map(state.runs)
-    const run = runs.get(closure.runId)
-    if (run !== undefined) runs.set(closure.runId, {
-      ...run,
-      phase: 'closed',
-      closed: { ...closure, source: 'run/closed', factDigest: runtime.contract.digest },
-    })
-    const retry = decideTaskRetryPolicy({ ...state, runs }, runtime.contract.taskId,
-      closure.runId, runtime.transientInvalidReasons, runtime.clock())
-    if (closure.reason === NO_SUBMISSION_REASON || closure.classification === 'invalid'
-      || (task?.join === 'required' && !retry.allowed)) {
-      feedbackRefs.push(await createSchedulerFeedback({
-        contract: runtime.contract,
-        runId: closure.runId,
-        reason: closure.reason,
-        resultRef: 'evidenceRef' in closure ? closure.evidenceRef : closure.executionRecordRef,
-        createdAt: runtime.clock(),
-        writer: service,
-      }))
-    }
+    feedbackRefs.push(await createSchedulerFeedback({
+      contract: runtime.contract,
+      runId: closure.runId,
+      reason: closure.reason,
+      resultRef: 'evidenceRef' in closure ? closure.evidenceRef : closure.executionRecordRef,
+      createdAt: runtime.clock(),
+      writer: service,
+    }))
   }
   const base = {
     runId: closure.runId,
@@ -378,7 +365,7 @@ export function retryDecisionForRun(
 }
 
 /** The same frozen Task subtree contributes to retry eligibility and reservation. */
-export function closedSubtreeUsage(state: TaskRunState, taskId: string): { readonly tokens: number; readonly unknown: boolean } {
+export function closedSubtreeUsage(state: TaskRunState, taskId: string): { readonly tokens: number } {
   const records: UsageRecord[] = []
   const pending = [taskId]
   for (const id of pending) {
@@ -393,14 +380,12 @@ export function closedSubtreeUsage(state: TaskRunState, taskId: string): { reado
   return usageCost(records)
 }
 
-export function usageCost(records: readonly UsageRecord[]): { readonly tokens: number; readonly unknown: boolean } {
+export function usageCost(records: readonly UsageRecord[]): { readonly tokens: number } {
   let tokens = 0
-  let unknown = false
   for (const usage of records) {
     tokens += usage.inputTokens + usage.outputTokens + (usage.summary?.inputTokens ?? 0) + (usage.summary?.outputTokens ?? 0)
-    unknown ||= usage.unknownRequests > 0 || (usage.summary?.unknownRequests ?? 0) > 0
   }
-  return { tokens, unknown }
+  return { tokens }
 }
 
 export async function putSealed(

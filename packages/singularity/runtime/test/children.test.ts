@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { canonicalize, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
-import type { Ref, TaskState } from '@singularity/protocol'
+import { canonicalize, inputRefSchema, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
+import type { InputRef, Ref, TaskState } from '@singularity/protocol'
 
 import { readChildData } from '../src/children.ts'
 import type { DirectChildren } from '../src/children.ts'
@@ -26,8 +26,9 @@ void test('parent reads public child Evidence while the private receipt stays ou
     limits: { maxRuns: 1, maxStepsPerRun: 2, maxTokens: 1000, deadlineAt: 5000, maxDepth: 1, maxTasks: 1, maxBatchChildren: 1 },
   })
   const privateReceipt = await service.putObject('private-receipt', new TextEncoder().encode('private verifier details'))
+  const finding = `${'Observed boundary evidence. '.repeat(1000)}Fix the reset handshake.`
   const receipt = sealPublicReceipt({ v: 1, provider: contract.acceptance, operationId: 'child-run:verify',
-    contractDigest: contract.digest, inputDigests: [], outputDigests: [], criteria: [], exit: { code: 0, signal: null }, timedOut: false })
+    contractDigest: contract.digest, inputDigests: [], outputDigests: [], criteria: [{ id: 'boundary', verdict: 'fail', reason: finding }], exit: { code: 0, signal: null }, timedOut: false })
   const publicReceipt = await service.putObject('public-receipt', new TextEncoder().encode(canonicalize(receipt)))
   const evidence = sealEvidence({
     v: 1, task: { id: contract.taskId, digest: contract.digest }, runId: 'child-run', contractDigest: contract.digest,
@@ -40,13 +41,73 @@ void test('parent reads public child Evidence while the private receipt stays ou
   const task: TaskState = { taskId: 'child', contract, rootTaskId: 'parent', parentTaskId: 'parent',
     parentRunId: 'parent-run', depth: 1, phase: 'closed', runIds: ['child-run'], childIds: [],
     closed: { outcome: 'verified', reason: 'verified', source: 'task/closed', factDigest: ref('closure').digest } }
-  const children: DirectChildren = { results: [{ task, evidenceRef, outputs: [] }], inputs: [], requiredFailure: false,
+  const output: InputRef = { id: 'child:result', object: ref('frozen-result'), path: 'children/child/result', access: 'read' }
+  const children: DirectChildren = { results: [{ task, evidenceRef, outputs: [{ ...output, kind: 'file' }] }], inputs: [], requiredFailure: false,
     view: { requiredObligations: [], childBatch: null, childHistory: { total: 1, outcomes: { verified: 1 } }, recentChildResults: [] } }
-  const result = await readChildData(service, children, [], { kind: 'evidence', id: task.taskId })
-  const text = canonicalize(result.data)
-  assert.ok(text.includes(publicReceipt.id))
-  assert.ok(!text.includes('privateReceipt'))
-  assert.ok(!text.includes(privateReceipt.id))
+  for (const retry of [false, true]) {
+    const expected = retry ? { ...output, id: 'old-run:result', path: 'attempts/old-run/result' } : output
+    let text = '', cursor: string | undefined, pages = 0
+    do {
+      const result = await readChildData(service, children, [], { kind: 'evidence', id: retry ? 'old-run' : task.taskId, ...(cursor === undefined ? {} : { cursor }) },
+      retry ? { runId: 'old-run', evidenceRef, outputs: [{ ...expected, kind: 'file' }] } : undefined)
+      assert.equal(typeof result.data, 'string')
+      assert.ok(new TextEncoder().encode(JSON.stringify(result)).byteLength < 16 * 1024)
+      text += result.data as string
+      cursor = result.nextCursor
+      pages++
+    } while (cursor !== undefined)
+    assert.ok(pages > 1, 'long independent findings use bounded pages')
+    const payload = JSON.parse(text) as { outputs: InputRef[]; publicReceipt: typeof receipt }
+    assert.deepEqual(payload.outputs, [expected])
+    assert.deepEqual(inputRefSchema.array().parse(payload.outputs), [expected], 'wire refs are valid child inputs unchanged')
+    assert.equal(payload.publicReceipt.criteria[0]?.reason, finding)
+    assert.ok(text.includes(publicReceipt.id))
+    assert.ok(!text.includes('privateReceipt'))
+    assert.ok(!text.includes(privateReceipt.id))
+  }
+  await assert.rejects(readChildData(service, children, [], { kind: 'evidence', id: 'unrelated-run' }), { code: 'INPUT_NOT_AUTHORIZED' })
   await assert.rejects(readChildData(service, children, [], { kind: 'resource', id: privateReceipt.id }), { code: 'INPUT_NOT_AUTHORIZED' })
   assert.ok(new TextDecoder().decode((await service.readObject(evidenceRef, 'evidence')).bytes).includes(privateReceipt.id))
+})
+
+void test('children pages honor the byte budget and return every child exactly once', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'singularity-children-pages-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const service = await CommandService.open({ root, actor: { kind: 'runtime', id: 'child-page-test' }, clock: () => 1000 })
+  t.after(() => service.close())
+  const ref = (id: string): Ref => ({ id, digest: `sha256:${'a'.repeat(64)}` })
+  const contract = sealTaskContract({
+    v: 1, taskId: 'child', method: ref('method'), template: ref('template'),
+    spec: { goal: { summary: 'Child work', deliverable: 'Result', scope: [], constraints: [] }, criteria: [], inputs: [], outputs: [] },
+    origin: { kind: 'child', parentId: 'parent', parentRunId: 'parent-run', batchId: 'batch', bindingId: 'work' },
+    resources: { baseTools: [], skills: [], mcpServers: [] }, acceptance: ref('verifier'),
+    environment: { seed: ref('seed'), profile: ref('profile') },
+    limits: { maxRuns: 1, maxStepsPerRun: 2, maxTokens: 1000, deadlineAt: 5000, maxDepth: 1, maxTasks: 1, maxBatchChildren: 1 },
+  })
+  const results = Array.from({ length: 5 }, (_, index) => {
+    const task: TaskState = { taskId: `child:${'x'.repeat(700)}${String(index)}`, contract, rootTaskId: 'parent', parentTaskId: 'parent',
+      parentRunId: `parent-run:${'y'.repeat(700)}${String(index)}`, batchId: `batch:${'z'.repeat(700)}${String(index)}`,
+      bindingId: 'platform:explore-child', join: 'probe', depth: 1, phase: 'closed', runIds: [], childIds: [],
+      closed: { outcome: 'verified', reason: 'verified', source: 'task/closed', factDigest: ref('closure').digest } }
+    return { task, outputs: [{ id: `child:result:${String(index)}`, object: ref(`frozen-result-${String(index)}`), path: `children/child/result/${String(index)}`, access: 'read' as const, kind: 'file' as const }] }
+  })
+  const children: DirectChildren = { results, inputs: [], requiredFailure: false,
+    view: { requiredObligations: [], childBatch: null, childHistory: { total: results.length, outcomes: { verified: results.length } }, recentChildResults: [] } }
+  const seen: string[] = []
+  let cursor: string | undefined, pages = 0
+  do {
+    const result = await readChildData(service, children, [], { kind: 'children', page: 5, ...(cursor === undefined ? {} : { cursor }) })
+    assert.ok(Buffer.byteLength(JSON.stringify(result)) < 16 * 1024)
+    const rows = result.data as { taskId: string; goalSummary: string; deliverable: string }[]
+    assert.ok(rows.length > 0)
+    for (const row of rows) {
+      assert.equal(row.goalSummary, 'Child work')
+      assert.equal(row.deliverable, 'Result')
+    }
+    seen.push(...rows.map(row => row.taskId))
+    cursor = result.nextCursor
+    pages += 1
+  } while (cursor !== undefined)
+  assert.ok(pages > 1, 'the five-row result is split by bytes rather than failing the Run')
+  assert.deepEqual(seen, results.map(result => result.task.taskId))
 })

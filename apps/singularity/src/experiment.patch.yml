@@ -1,0 +1,30 @@
+- id: compaction-basic
+  config:
+    auto: true
+    thresholdRatio: 0.75
+    retainRatio: 0.16
+    maxTokens: 128000
+    compactionRetries: 0
+    maxOverflowRetries: 0
+
+- id: persistent-bash
+  disabled: true
+
+- id: mcp-resources
+  disabled: true
+
+- id: task-check-shell
+  config:
+    timeoutMs: 60000
+    maxTimeoutMs: 10800000
+
+- insert:
+    - id: experiment-shell-env
+      name: '@deepseek-ai/dsh-shell-env'
+    - id: experiment-bash
+      name: '@deepseek-ai/dsh-tool-bash'
+    - id: experiment-jobs
+      name: '@deepseek-ai/dsh-tool-jobs'
+      config:
+        completionDelivery: quiet
+        maxWaitTimeoutMs: 600000

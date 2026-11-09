@@ -381,7 +381,7 @@ export function s4b1Example(): TaskExample {
       scope: ['single child sample'],
       constraints: ['Use the frozen example only; this prepare slice creates no child task.'],
     },
-    localCriteria: [{
+    acceptanceCriteria: [{ check: 'test -s notes.txt',
       id: 's4b1-local-criterion',
       statement: 'The local note records the observed sample.',
     }],
@@ -414,7 +414,7 @@ export function s4b2Example(): TaskExample {
       scope: ['single committed child sample'],
       constraints: ['Commit only after this complete example was delivered on a later model step.'],
     },
-    localCriteria: [{
+    acceptanceCriteria: [{ check: 'test -s notes.txt',
       id: 's4b2-local-criterion',
       statement: 'The local note records the observed sample.',
     }],

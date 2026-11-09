@@ -18,6 +18,14 @@ export type EvaluationCase = z.infer<typeof evaluationCaseSchema>
 export const metricSpecSchema = jsonObjectSchema
 export type MetricSpec = z.infer<typeof metricSpecSchema>
 
+/** Select a domain-normalized, higher-is-better metric from a trusted receipt. */
+export const evaluationMetricSchema = closedObject({
+  criterion: z.string().min(1),
+  name: z.string().min(1),
+  unit: z.string().min(1),
+})
+export type EvaluationMetric = z.infer<typeof evaluationMetricSchema>
+
 /** Frozen purchase and comparison policy from framework §18. */
 export const roundPlanSchema = closedObject({
   v: z.literal(1),

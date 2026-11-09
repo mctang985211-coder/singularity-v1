@@ -1,24 +1,25 @@
-import type { Fact,SessionCut,TaskRunState,UsageRecord } from '@singularity/protocol'
+import type { Fact,Ref,SessionCut,TaskRunState,UsageRecord } from '@singularity/protocol'
 
 import type { AgentDriveResult } from './agent.ts'
 import { activeChildBatch } from './decompose-commit.ts'
 import type { RunToolSnapshot } from './tools.ts'
 import type { WakeDeliveryOutcome } from './wake.ts'
 
-/** A parent Run released its model slot while a committed child batch is active. */
+/** A Run released its model slot while waiting for children or its dispatcher. */
 export interface YieldedRunResult {
   readonly kind: 'yielded'
   readonly taskId: string
   readonly runId: string
   readonly sessionId: string
-  readonly batchId: string
+  readonly batchId?: string
+  readonly feedbackWait?: Ref
   readonly childTaskIds: readonly string[]
   readonly usage: UsageRecord
   readonly sessionCut: SessionCut
   readonly facts: readonly Fact[]
 }
 
-export interface ActiveBatchYieldInput {
+export interface RunYieldInput {
   readonly state: TaskRunState
   readonly taskId: string
   readonly runId: string
@@ -28,16 +29,12 @@ export interface ActiveBatchYieldInput {
   readonly facts: readonly Fact[]
 }
 
-/**
- * Returns the waiting-children outcome only when the Agent went idle without a
- * submission, stop, or infrastructure failure and the parent Run
- * still owns an active committed child batch. This function never settles.
- */
-export function yieldedActiveChildBatch(
-  input: ActiveBatchYieldInput,
+/** An idle Agent with pending children or a question yields without settlement. */
+export function yieldedRun(
+  input: RunYieldInput,
 ): (YieldedRunResult & RunSessionAction) | undefined {
   const activeBatch = activeChildBatch(input.state, input.runId)
-  if (activeBatch === undefined
+  if ((activeBatch === undefined && input.tools.feedbackWait === undefined)
     || input.tools.submission !== undefined
     || input.tools.stopped !== undefined
     || input.observation.agentErrorCode !== undefined
@@ -49,8 +46,9 @@ export function yieldedActiveChildBatch(
     taskId: input.taskId,
     runId: input.runId,
     sessionId: input.sessionId,
-    batchId: activeBatch.batchId,
-    childTaskIds: [...activeBatch.childIds],
+    ...(activeBatch === undefined ? {} : { batchId: activeBatch.batchId }),
+    ...(input.tools.feedbackWait === undefined ? {} : { feedbackWait: input.tools.feedbackWait }),
+    childTaskIds: [...(activeBatch?.childIds ?? [])],
     usage: input.observation.snapshot.usage,
     sessionCut: input.observation.snapshot.sessionCut,
     facts: input.facts,

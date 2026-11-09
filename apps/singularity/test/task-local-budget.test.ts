@@ -39,6 +39,8 @@ void test('local child cap settles failed while its sibling continues; parent re
     if (child !== undefined) {
       const step = childRequests.get(currentId) ?? 0
       childRequests.set(currentId, step + 1)
+      if (step === 0) assert.ok(messageTexts(request).some(text => text.includes('"depthPct":0')),
+        'a leaf sees that its remaining decomposition depth is zero')
       const bad = children.values().next().value
       assert.ok(bad)
       if (currentId === bad.contract.taskId) {
@@ -50,12 +52,16 @@ void test('local child cap settles failed while its sibling continues; parent re
         if (child.contract.origin.kind === 'child' && child.contract.origin.bindingId === 'sibling') siblingStarted.resolve(undefined)
         return plan(child.contract, child.runId)
       }
-      if (step === 2) return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt` })
+      if (step === 2) return call('bash', { command: `printf %s '${FROZEN_OUTPUT}' > child.txt && mkdir -p result && cp child.txt result/child.txt` })
       assert.equal(step, 3)
-      return call('singularity_submit', { outputIds: ['child-note'], includeLearningDrafts: false })
+      return call('singularity_submit', { outputIds: ['result', 'child-note'], includeLearningDrafts: false })
     }
     assert.equal(currentId, taskId)
     const step = parentRequests++
+    if (step === 5) assert.ok(messageTexts(request).some(text => text.includes('"taskSlotsPct":25')),
+      'the parent counts itself and both admitted children')
+    if (step === 11) assert.ok(messageTexts(request).some(text => text.includes('"taskSlotsPct":0')),
+      'the replacement uses the final Task slot')
     if (step === 0 || step === 5 || step === 11) return call('singularity_read', { kind: 'self' }, step === 0 ? 100 : 50)
     if (step === 1 || step === 8 || step === 12) return plan(scenario.contract, runId, step === 1 ? 100 : 50)
     if (step === 2 || step === 3 || step === 9) {
@@ -71,7 +77,7 @@ void test('local child cap settles failed while its sibling continues; parent re
       { bindingId: 'sibling', ackPreview: previewDigestFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) },
     ] : [{ bindingId: 'exhausted', ackPreview: previewDigestFrom({ ...request, messages: [...(request.messages ?? [])].reverse() }) }])
       .map(item => ({ ...item, task: {
-        goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, inputs: [],
+        goal: { summary: 'Produce child.txt.', deliverable: 'child.txt', scope: [], constraints: [] }, acceptanceCriteria: [{ id: 'exact-child', statement: 'Produce the declared child result.', check: 'test -s child.txt' }], inputs: [],
         localOutputs: [{ id: 'child-note', path: 'child.txt', kind: 'file', description: 'Direct public output.' }],
       } })) }, step === 4 ? 100 : 50)
     if (step === 6 || step === 15) return call('singularity_submit', { outputIds: ['result'], includeLearningDrafts: false })
@@ -103,10 +109,10 @@ void test('local child cap settles failed while its sibling continues; parent re
       scenario = { ...original, method, contract, composition }
       const verifier = (task: TaskContract): RunVerifier => ({ provider: task.acceptance,
         async verify(request) {
-          const output = request.outputs[0]
+          const output = request.outputs.find(ref => ref.id.endsWith(':child-note')) ?? request.outputs[0]
           assert.ok(output)
           assert.equal(new TextDecoder().decode((await request.readObject(output, 'object')).bytes), FROZEN_OUTPUT)
-          if (task.taskId === taskId) assert.equal(request.inputs.length, 3, 'root verifier receives its source and both verified required winners')
+          if (task.taskId === taskId) assert.equal(request.inputs.length, 5, 'root verifier receives its source and both verified required winners')
           return sealPublicReceipt({ v: 1, provider: task.acceptance, operationId: request.operationId, contractDigest: task.digest,
             inputDigests: request.inputs.map(ref => ref.digest), outputDigests: request.outputs.map(ref => ref.digest),
             criteria: task.spec.criteria.filter(value => value.required).map(value => ({ id: value.id, verdict: 'pass', reason: 'Exact declared bytes.' })),

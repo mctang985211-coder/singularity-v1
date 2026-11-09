@@ -18,6 +18,7 @@ export interface NodeViewCatalogInput {
   readonly template: TaskTemplate
   readonly skills: readonly FrozenSkillResource[]
   readonly mcpServers: readonly FrozenMcpServer[]
+  readonly mcpResources?: boolean
   readonly budget: RemainingBudgetPct
   readonly lastAttempt: NodeView['lastAttempt']
   readonly asOf: number
@@ -37,7 +38,7 @@ interface ProjectionInput extends NodeViewCatalogInput {
 function projectNodeView(input: ProjectionInput): NodeView {
   const toolNames = [...input.baseToolNames]
   if (input.skills.length > 0 && !toolNames.includes('skill')) toolNames.push('skill')
-  const mcpPlan = mcpDispatchPlan(input.mcpServers)
+  const mcpPlan = mcpDispatchPlan(input.mcpServers, input.mcpResources !== false)
   for (const name of [...mcpPlan.publicToolNames, ...mcpPlan.resourceToolNames]) {
     if (!toolNames.includes(name)) toolNames.push(name)
   }
@@ -50,6 +51,9 @@ function projectNodeView(input: ProjectionInput): NodeView {
       ...(input.contract.origin.kind === 'child' ? { parentId: input.contract.origin.parentId } : {}),
       runId: input.runId,
       goalSummary: input.contract.spec.goal.summary,
+      deliverable: input.contract.spec.goal.deliverable,
+      criteria: input.contract.spec.criteria.filter(criterion => criterion.required).map(({ id, statement }) => ({ id, statement })),
+      inputs: input.contract.spec.inputs.map(({ id, path }) => ({ id, path })),
       contractDigest: input.contract.digest,
       phase: input.phase,
       mode: input.exploration === undefined ? 'guided' : 'exploration',

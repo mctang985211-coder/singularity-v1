@@ -1,12 +1,18 @@
+import { mkdtemp,mkdir,rm,writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname,join } from 'node:path'
+import type { ShellExecutor,ShellRunResult } from '@deepseek-ai/dsh-shell'
 import type {
 Evidence,
 ExecutionRecord,
 JsonValue,
 PublicReceipt,
+PublicCriterionResult,
 PublicReceiptValidation,
 Ref,
 SessionCut,
 TaskContract,
+TaskCriterion,
 UsageRecord,
 VerifyRequest,
 } from '@singularity/protocol'
@@ -15,18 +21,21 @@ canonicalize,
 errorMessage,
 executionRecordPayloadSchema,
 parseProtocolValue,
+publicMetricSchema,
 seal,
 sealEvidence,
+sealPublicReceipt,
 validateEvidence,
 validatePublicReceipt,
 } from '@singularity/protocol'
 import { SingleRunError } from './errors.ts'
+import { readTreeBundle } from './resource-bundle.ts'
 
 import type { CasDigestDomain } from './store.ts'
+import { prepareWorkspace } from './workspace.ts'
 import type { CasObjectReader,CasObjectWriter } from './workspace.ts'
 
 /** Stable closure reasons used by the fixed retry policy. */
-export const VERIFIER_ERROR_REASON = 'verifier-error'
 export const VERIFIER_TIMEOUT_REASON = 'verifier-timeout'
 export const VERIFIER_SIGNAL_REASON = 'verifier-signal'
 export const VERIFIER_INVALID_REASON = 'verifier-invalid'
@@ -44,7 +53,7 @@ export type InvalidVerificationCode =
 
 /** Runtime-side verifier request: data fields plus read-only CAS access. */
 export interface VerifierRequest extends VerifyRequest {
-  /** The domain adapter forwards cancellation and settles after its verifier stops. */
+  /** The host-owned verifier adapter forwards cancellation and settles after its work stops. */
   readonly signal: AbortSignal
   /**
    * Read one frozen CAS object and verify its digest under `domain`. The
@@ -57,10 +66,14 @@ export interface VerifierRequest extends VerifyRequest {
 }
 
 /** Independent domain verifier from docs/framework.md §19. */
-export interface RunVerifier {
+export type RunVerifier = {
   /** This host uses the frozen acceptance object itself as provider identity. */
   readonly provider: Ref
+  readonly checksOnly?: false
   verify(request: VerifierRequest): Promise<PublicReceipt>
+} | {
+  readonly provider: Ref
+  readonly checksOnly: true
 }
 
 /** Worker, trace and comparator views never expose the opaque private receipt. */
@@ -73,6 +86,7 @@ export function publicVerificationOf(verification: Evidence['verification']): Om
 }
 
 export interface RunVerificationInput {
+  readonly shell: ShellExecutor
   readonly contract: TaskContract
   readonly runId: string
   readonly inputs: readonly Ref[]
@@ -124,17 +138,52 @@ export async function verifyRunSubmission(
   try {
     signal.throwIfAborted()
     if (remaining <= 0) throw timeout
-    // Await the domain operation itself; a timer must not abandon a live verifier.
-    receipt = await input.verifier.verify({
-      operationId,
-      task: input.contract,
-      inputs: input.inputs,
-      outputs: input.outputs,
-      signal,
-      readObject: (ref, domain) => input.reader.readObject(ref, domain),
-    })
+    if (input.verifier.checksOnly === true
+      && input.contract.spec.criteria.some(criterion => criterion.required && criterion.check === undefined)) {
+      throw new SingleRunError('COMPOSITION_MISMATCH', 'check-only acceptance requires one frozen check per required criterion')
+    }
+    const checks = await rerunChecks(input, signal)
+    if (input.verifier.checksOnly === true) {
+      receipt = sealPublicReceipt({ v: 1, provider: input.contract.acceptance, operationId,
+        contractDigest: input.contract.digest, inputDigests: input.inputs.map(ref => ref.digest), outputDigests: input.outputs.map(ref => ref.digest),
+        criteria: input.contract.spec.criteria.flatMap(criterion => {
+          const check = checks.get(criterion.id)
+          return check === undefined ? [] : [checkCriterionResult(criterion, check)]
+        }),
+        exit: { code: 0, signal: null }, timedOut: false })
+    } else {
+      receipt = await input.verifier.verify({
+        operationId,
+        task: input.contract,
+        inputs: input.inputs,
+        outputs: input.outputs,
+        signal,
+        readObject: (ref, domain) => input.reader.readObject(ref, domain),
+      })
+    }
     signal.throwIfAborted()
     if (clock() >= input.contract.limits.deadlineAt) throw timeout
+    if (checks.size > 0 && input.verifier.checksOnly !== true && validatePublicReceipt(receipt, {
+      provider: input.contract.acceptance, operationId, contractDigest: input.contract.digest,
+      inputDigests: input.inputs.map(ref => ref.digest), outputDigests: input.outputs.map(ref => ref.digest), requiredCriteria,
+    }).verdict !== 'invalid') {
+      const { digest, ...payload } = receipt
+      void digest
+      receipt = sealPublicReceipt({ ...payload, criteria: receipt.criteria.map(criterion => {
+        const check = checks.get(criterion.id)
+        const definition = input.contract.spec.criteria.find(value => value.id === criterion.id)
+        if (check !== undefined && definition?.checkOutput === 'metric-json') {
+          const measured = checkCriterionResult(definition, check)
+          const reason = `${criterion.reason}\n${measured.reason}`
+          return measured.verdict === 'pass' && criterion.verdict !== 'pass'
+            ? { id: criterion.id, verdict: criterion.verdict, reason }
+            : { ...measured, reason }
+        }
+        return check === undefined ? criterion : { ...criterion,
+          verdict: check.exitCode === 0 && !check.timedOut && check.signal === null ? criterion.verdict : 'fail',
+          reason: `${criterion.reason}\nFrozen check: ${JSON.stringify(check)}` }
+      }) })
+    }
   } catch (error) {
     const aborted = signal.aborted && (error === signal.reason
       || (error instanceof Error && error.name === 'AbortError' && error.cause === signal.reason))
@@ -178,6 +227,51 @@ export async function verifyRunSubmission(
     receipt: validation.receipt,
     receiptRef,
   }
+}
+
+function checkCriterionResult(criterion: TaskCriterion, check: ShellRunResult): PublicCriterionResult {
+  const result = { id: criterion.id,
+    verdict: check.exitCode === 0 && !check.timedOut && check.signal === null ? 'pass' as const : 'fail' as const,
+    reason: `Frozen check: ${JSON.stringify(check)}` }
+  if (result.verdict !== 'pass' || criterion.checkOutput !== 'metric-json') return result
+  if (check.stdout.truncated) return { ...result, verdict: 'invalid', reason: 'Frozen metric output was truncated' }
+  let value: unknown
+  try { value = JSON.parse(check.stdout.text) } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    return { ...result, verdict: 'invalid', reason: `Frozen check did not emit one metric JSON value: ${error.message}` }
+  }
+  const metric = publicMetricSchema.safeParse(value)
+  return metric.success ? { ...result, metric: metric.data }
+    : { ...result, verdict: 'invalid', reason: `Frozen check emitted an invalid metric: ${metric.error.message}` }
+}
+
+/** Reuse native shell lifecycle; only CAS inputs and outputs enter the fresh check directory. */
+async function rerunChecks(input: RunVerificationInput, signal: AbortSignal) {
+  const checks = input.contract.spec.criteria.flatMap(criterion => criterion.required && criterion.check !== undefined
+    ? [{ id: criterion.id, command: criterion.check }] : [])
+  const results = new Map<string, ShellRunResult>()
+  if (checks.length === 0) return results
+  const workspace = await mkdtemp(join(tmpdir(), 'singularity-check-'))
+  try {
+    await prepareWorkspace(workspace, input.contract.spec.inputs.map(ref => ({ ...ref, access: 'copy-to-work' as const })), input.reader)
+    for (const spec of input.contract.spec.outputs) {
+      const ref = input.outputs.find(ref => ref.id.endsWith(`:output:${spec.id}`))
+      if (ref === undefined) continue
+      const files = spec.kind === 'tree' ? (await readTreeBundle(input.reader, ref, Number.MAX_SAFE_INTEGER)).contents
+        : new Map([['', (await input.reader.readObject(ref, 'object')).bytes]])
+      for (const [path, bytes] of files) {
+        const target = join(workspace, spec.path, path)
+        await mkdir(dirname(target), { recursive: true })
+        await writeFile(target, bytes)
+      }
+    }
+    for (const criterion of checks) {
+      const execution = await input.shell.execute(input.shell.resolve({ command: `set -e -o pipefail\n${criterion.command}`, workdir: workspace, signal, timeoutMs: input.contract.limits.deadlineAt - Date.now() }))
+      results.set(criterion.id, await execution.result())
+      signal.throwIfAborted()
+    }
+    return results
+  } finally { await rm(workspace, { recursive: true, force: true }) }
 }
 
 function invalidFromValidation(

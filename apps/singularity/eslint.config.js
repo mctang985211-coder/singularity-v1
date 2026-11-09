@@ -3,7 +3,7 @@ import { defineConfig } from 'eslint/config'
 import tseslint from 'typescript-eslint'
 
 export default defineConfig(
-  { ignores: ['dist/**', 'node_modules/**'] },
+  { ignores: ['dist/**', 'node_modules/**', '.tmp/**'] },
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {

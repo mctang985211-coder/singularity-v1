@@ -1,11 +1,11 @@
 import { z } from 'zod'
 
 import { computeDigest } from './digest.ts'
-import type { JsonValue } from './json.ts'
 import { skillAssetSchema, toolAssetSchema } from './method.ts'
 import type { MethodRevision, TaskTemplate } from './method.ts'
 import { refSchema } from './refs.ts'
 import { closedObject } from './schema.ts'
+import { DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA } from './task.ts'
 import type { TaskExample } from './task.ts'
 
 /** Frozen public resources explicitly selected by domain/operator (§6.1). */
@@ -26,42 +26,38 @@ export const EXPLORE_BINDING_ID = 'platform:explore-child'
 
 export const EXPLORE_GUIDANCE = {
   v: 1,
-  text: 'Discover this Task\'s local workflow from frozen public documents, skills and tools. Refine the initial sketch after inspecting relevant resources. Delegate stages with distinct outputs and checks to direct children; sequential stages use successive batches. Each child owns deeper work. Perform bounded local technical work and integrate direct results. A leaf goal is one bounded, directly verifiable unit. Public-resource work may use inputs:[]. Preserve reusable skill or MCP drafts under learning-drafts for RSI registration.',
+  text: 'Use frozen public resources for the current goal and deliver consumable files under result/.',
 } as const
 
-export const EXPLORE_EXAMPLE: TaskExample = {
+export const EXPLORE_EXAMPLE = {
   goal: {
-    summary: 'Inspect an authorized input and produce a useful local result.',
-    deliverable: 'A concise result that supports the parent goal.',
-    scope: ['One independently useful local question.'],
-    constraints: ['Use only frozen inputs and public resources authorized for this Task.'],
+    summary: 'Implement the callable consumer for the declared input.',
+    deliverable: 'result/consumer.sh and a declared output produced by invoking it with the frozen input.',
+    scope: ['Own implementation, invocation and local checks for this consumer; discover any direct responsibilities needed.'],
+    constraints: ['Consume only the frozen declared input and emit a deterministic output at the declared interface.',
+      'The parent retains final integration and end-to-end checks; the next batch consumes the frozen output.'],
   },
-  localCriteria: [{ id: 'local-result', statement: 'The result answers the local question using the supplied input.' }],
-  inputs: [{ id: 'source', exampleText: 'A public input that the parent may explicitly pass to this child.' }],
-  localOutputs: [{ id: 'result', path: 'result.txt', kind: 'file', description: 'The local result for parent integration.' }],
-}
+  acceptanceCriteria: [{ id: 'consumer-interface', statement: 'The child provides an executable consumer and the declared output at stable paths.', check: `test -x result/consumer.sh
+test -f result/output.bin` }],
+  inputs: [{ id: 'input', exampleText: 'A representative sample of the frozen input bytes.' }],
+  localOutputs: [{ id: 'output', path: 'result/output.bin', kind: 'file', description: 'Declared output consumed by the parent integration stage.' }],
+} satisfies TaskExample
 
 export const EXPLORE_GUIDANCE_REF = { id: 'platform:explore-guidance', digest: computeDigest('object', EXPLORE_GUIDANCE) }
-export const EXPLORE_EXAMPLE_REF = { id: 'platform:explore-example', digest: computeDigest('object', EXPLORE_EXAMPLE as unknown as JsonValue) }
+export const EXPLORE_EXAMPLE_REF = { id: 'platform:explore-example', digest: computeDigest('object', EXPLORE_EXAMPLE) }
 
 /** Fixed platform template, bound only to this frozen domain resource snapshot. */
 export function explorationTemplate(snapshot: GlobalResourceSnapshot): TaskTemplate {
   return {
     id: EXPLORE_TEMPLATE_ID,
-    brief: 'Explore one local goal using frozen public resources.',
+    brief: 'Own one workflow scope, its technical work and result integration.',
     guidance: EXPLORE_GUIDANCE_REF,
     example: EXPLORE_EXAMPLE_REF,
-    instanceSchema: {
-      type: 'object', additionalProperties: false,
-      required: ['goal', 'inputs'],
-      properties: { goal: { type: 'object' }, localCriteria: { type: 'array' }, inputs: { type: 'array' }, localOutputs: { type: 'array' } },
-    },
-    requiredCriteria: [],
-    requiredOutputs: [],
+    instanceSchema: structuredClone(DEFAULT_TASK_PROPOSAL_INSTANCE_SCHEMA),
     acceptancePolicy: snapshot.fallbackAcceptance,
     skills: snapshot.skills.map(skill => skill.id),
     tools: snapshot.tools.map(tool => tool.id),
-    children: [{ bindingId: EXPLORE_BINDING_ID, templateId: EXPLORE_TEMPLATE_ID, brief: 'Explore a useful direct subproblem.', join: snapshot.fallbackJoin }],
+    children: [{ bindingId: EXPLORE_BINDING_ID, templateId: EXPLORE_TEMPLATE_ID, brief: 'Own a direct workflow scope with consumable outputs and checks.', join: snapshot.fallbackJoin }],
   }
 }
 
@@ -71,12 +67,12 @@ export function resolveTemplateView(method: MethodRevision, templateId: string, 
   if (templateId === EXPLORE_TEMPLATE_ID) return snapshot === undefined ? undefined : explorationTemplate(snapshot)
   const matches = method.templates.filter(candidate => candidate.id === templateId)
   const template = matches.length === 1 ? matches[0] : undefined
-  if (template === undefined || snapshot === undefined || template.children.length > 0) return template
+  if (template === undefined || snapshot === undefined) return template
   const fallback = explorationTemplate(snapshot)
   return {
     ...template,
     skills: [...new Set([...template.skills, ...fallback.skills])],
     tools: [...new Set([...template.tools, ...fallback.tools])],
-    children: fallback.children,
+    children: template.children.length === 0 ? fallback.children : template.children,
   }
 }

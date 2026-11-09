@@ -45,7 +45,7 @@ export function startWakeText(
 ): string {
   return [
     `Task ${taskId}; Run ${runId}; reason=start;`,
-    `remaining-budget=${String(percentages.tokensPct ?? 'unknown')}/${String(percentages.stepsPct)}/${String(percentages.wallClockPct)}/${String(percentages.taskSlotsPct)}%.`,
+    `Remaining percentages: tokens=${String(percentages.tokensPct ?? 'unknown')}%, steps=${String(percentages.stepsPct)}%, wall-clock=${String(percentages.wallClockPct)}%, task-slots=${String(percentages.taskSlotsPct)}%. These are percentages, not counts.`,
     'Read self, submit a planning sketch, then work toward this Task\'s goal.',
   ].join(' ')
 }

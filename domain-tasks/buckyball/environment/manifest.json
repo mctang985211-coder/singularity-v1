@@ -1,0 +1,9 @@
+{
+  "serverName": "buckyball",
+  "transport": "stdio",
+  "instructions": "Use the current Task workspace as the only project area: choose a new absolute checkout path below the current working directory, for example <cwd>/bbdev-checkout, and keep all edits, builds and run outputs below that path. Never use the shared baseline directly or create a checkout in a sibling/global runs directory. For direct bbdev operations, call mcp__buckyball__bbdev with project=<checkout> and a normal argv array such as [\"bebop-bemu\",\"--sim\",\"--chip\",\"poly\",\"--core-index\",\"2\",\"--binary\",<name>]. The server normalizes bbdev's operation arguments; Nix is already activated by this server. Use bash for source edits and other standalone tools, not to duplicate this bbdev entry.",
+  "entrypoint": "server.cjs",
+  "limits": {
+    "maxBundleBytes": 1048576
+  }
+}

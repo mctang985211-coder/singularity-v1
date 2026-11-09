@@ -1,0 +1,48 @@
+{
+  "v": 1,
+  "id": "buckyball-consumer-transfer",
+  "task": "task.json",
+  "acceptance": "checks",
+  "source": {
+    "project": "cases/source.json"
+  },
+  "cases": [
+    {
+      "id": "long-k",
+      "description": "MXMM long-K chain and minimal block with original frozen bytes and repeated calls.",
+      "inputs": {
+        "project": "cases/long-k.json"
+      }
+    },
+    {
+      "id": "output-tiling",
+      "description": "MXMM output exceeds a bank; independent M/N tiling and K continuation validation.",
+      "inputs": {
+        "project": "cases/output-tiling.json"
+      },
+      "validation": true
+    },
+    {
+      "id": "smatmul-bias",
+      "description": "Different operator and TaskSpec: exact int8 SMatMul with bias and two-term accumulation on focused BEMU.",
+      "task": "transfer/smatmul-task.json",
+      "acceptance": "checks",
+      "inputs": {
+        "project": "transfer/smatmul-case.json",
+        "acceptance": "transfer/smatmul-acceptance.py"
+      }
+    },
+    {
+      "id": "inventory-transfer",
+      "description": "Different non-accelerator consumer TaskSpec: independent CSV row counting and signed SKU aggregation.",
+      "task": "transfer/inventory-task.json",
+      "acceptance": "checks",
+      "inputs": {
+        "records": "transfer/inventory.csv",
+        "acceptance": "transfer/inventory-acceptance.py"
+      },
+      "validation": true
+    }
+  ],
+  "tools": "environment/tools.json"
+}

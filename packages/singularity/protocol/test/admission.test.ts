@@ -9,6 +9,7 @@ RootAdmissionInput,
 } from '../src/admission.ts'
 import {
 AdmissionError,
+CHILD_RESULT_OUTPUT,
 MCP_DRAFTS_OUTPUT,
 SKILL_DRAFTS_OUTPUT,
 admitChildBatch,
@@ -109,14 +110,6 @@ const childTemplate: TaskTemplate = {
   guidance: ref('guidance-child', digestA),
   example: ref('example-child', digestB),
   instanceSchema: {},
-  requiredCriteria: [
-    { id: 'required-a', statement: 'The required result is complete', required: true },
-    { id: 'required-b', statement: 'The log is traceable', required: false },
-  ],
-  requiredOutputs: [
-    { id: 'result', path: 'outputs/result.json', kind: 'file', role: 'deliverable', required: true },
-    { id: 'trace', path: 'outputs/trace', kind: 'tree', role: 'supporting', required: false },
-  ],
   acceptancePolicy: ref('acceptance-child', digestD),
   skills: ['skill-child'],
   tools: [],
@@ -127,8 +120,8 @@ const rootTemplate: TaskTemplate = {
   ...childTemplate,
   id: 'template-root',
   brief: 'Coordinate the bounded root work.',
-  requiredCriteria: [],
-  requiredOutputs: [],
+
+
   acceptancePolicy: ref('acceptance-root', digestA),
   children: [
     { bindingId: 'build-part', templateId: 'template-child', brief: 'Build one part.', join: 'required' },
@@ -161,7 +154,6 @@ const rootInput: RootAdmissionInput = {
     criteria: [
       { id: 'root-required', statement: 'The root result is verified', required: true },
     ],
-    localGuidance: [{ id: 'root-local', statement: 'Keep root notes with the result' }],
     inputs: [inputA, inputB],
     outputs: rootBaseOutputs,
   },
@@ -176,9 +168,9 @@ const rootInput: RootAdmissionInput = {
 
 const childProposal: TaskProposal = {
   goal,
-  localCriteria: [
-    { id: 'local-first', statement: 'Keep local notes in proposal order' },
-    { id: 'local-second', statement: 'Keep local notes separate from acceptance' },
+  acceptanceCriteria: [
+    { check: 'test -s notes.txt', id: 'local-first', statement: 'Keep local notes in proposal order' },
+    { check: 'test -s notes.txt', id: 'local-second', statement: 'Include the required local notes' },
   ],
   inputs: [inputA, inputB],
   localOutputs: [
@@ -264,7 +256,6 @@ void test('root admission appends fixed drafts last and seals a verifiable contr
   assert.deepEqual(contract.template, rootTemplateRef)
   assert.deepEqual(contract.spec.inputs, [inputA, inputB])
   assert.deepEqual(contract.spec.criteria, rootInput.spec.criteria)
-  assert.deepEqual(contract.spec.localGuidance, rootInput.spec.localGuidance)
   assert.deepEqual(contract.spec.outputs, [
     ...rootBaseOutputs,
     SKILL_DRAFTS_OUTPUT,
@@ -301,7 +292,6 @@ void test('root admission preserves optional absence instead of adding defaults'
   const before = clone(input)
   const contract = admitRootTask(input)
 
-  assert.equal('localGuidance' in contract.spec, false)
   assert.equal('exploration' in contract.resources, false)
   assert.deepEqual(input, before)
 })
@@ -411,7 +401,7 @@ void test('root admission rejects inconsistent method/template refs and unknown 
   )
 })
 
-void test('child admission merges template obligations, proposal guidance, and supporting outputs in order', () => {
+void test('child admission merges template obligations, parent acceptance, and supporting outputs in order', () => {
   const input = childBatchInput()
   const before = clone(input)
   const batch = admitChildBatch(input)
@@ -440,11 +430,10 @@ void test('child admission merges template obligations, proposal guidance, and s
   assert.deepEqual(child.contract.environment, childEnvironment)
   assert.deepEqual(child.contract.limits, childLimits)
 
-  assert.deepEqual(child.contract.spec.criteria, childTemplate.requiredCriteria)
-  assert.deepEqual(child.contract.spec.localGuidance, childProposal.localCriteria)
+  assert.deepEqual(child.contract.spec.criteria, childProposal.acceptanceCriteria.map(criterion => ({ ...criterion, required: true })))
   assert.deepEqual(child.contract.spec.inputs, [inputA, inputB])
   assert.deepEqual(child.contract.spec.outputs, [
-    ...childTemplate.requiredOutputs,
+    CHILD_RESULT_OUTPUT,
     { id: 'local-log', path: 'local/run.log', kind: 'file', role: 'supporting', required: false },
     { id: 'local-notes', path: 'local/notes', kind: 'tree', role: 'supporting', required: false },
     SKILL_DRAFTS_OUTPUT,
@@ -550,7 +539,57 @@ void test('child admission derives probe join from the fixed binding', () => {
   })
 })
 
-void test('child admission rejects empty batches, duplicate bindings, oversized batches, and active batches', () => {
+void test('empty Method children freeze parent-authored criteria and cannot verify with an empty receipt', () => {
+  const emptyMethod = sealMethodRevision({ v: 1, id: 'empty', templates: [], skills: [], tools: [] })
+  const pinned = { id: emptyMethod.id, digest: emptyMethod.digest }
+  const exploration: protocol.GlobalResourceSnapshot = { v: 1, documents: [], skills: [], tools: [],
+    baseTools: [], fallbackAcceptance: childTemplate.acceptancePolicy, fallbackJoin: 'probe' }
+  const parent = admitRootTask({ ...rootInput, method: pinned,
+    template: { id: protocol.EXPLORE_TEMPLATE_ID, digest: pinned.digest },
+    resources: { ...resources, exploration: { id: 'global', digest: computeDigest('object', exploration) } } })
+  const request = childRequest(childBatchInput())
+  const child = firstChild(admitChildBatch({ parent, method: emptyMethod, exploration,
+    parentRunId: 'run-root-1', batchId: 'batch-1', children: [{ ...request,
+      bindingId: protocol.EXPLORE_BINDING_ID, proposal: { ...request.proposal, acceptanceCriteria: [{ id: 'child-result', statement: 'The declared result contains the completed work.', check: 'test -s notes.txt' }] } }] })).contract
+  assert.deepEqual(child.spec.criteria.map(criterion => [criterion.id, criterion.required]), [['child-result', true]])
+  const resultOutput: OutputSpec = { id: 'result', path: 'result', kind: 'tree', role: 'deliverable', required: true }
+  for (const localOutputs of [undefined, []]) {
+    const proposal: TaskProposal = { goal, inputs: [], acceptanceCriteria: request.proposal.acceptanceCriteria, ...(localOutputs === undefined ? {} : { localOutputs }) }
+    const input = { parent, method: emptyMethod, exploration, parentRunId: 'run-root-1', batchId: 'batch-result',
+      children: [{ ...request, bindingId: protocol.EXPLORE_BINDING_ID, authorizedInputs: [], proposal }] }
+    assert.deepEqual(firstChild(admitChildBatch(input)).contract.spec.outputs.filter(output => output.required), [resultOutput])
+    assert.throws(() => admitChildBatch({ ...input, children: [{ ...input.children[0], proposal: {
+      ...proposal, localOutputs: [{ id: 'result', path: 'other.txt', kind: 'file', description: 'Cannot replace the delivery tree.' }],
+    } }] }), admissionError('INVALID_ARGUMENT'))
+  }
+  assert.deepEqual(parent.spec.outputs.filter(output => output.required), rootBaseOutputs.filter(output => output.required))
+  const expected: protocol.PublicReceiptExpectation = { provider: child.acceptance, operationId: 'verify-child',
+    contractDigest: child.digest, inputDigests: [], outputDigests: [], requiredCriteria: child.spec.criteria.map(value => value.id) }
+  const payload = { v: 1, provider: expected.provider, operationId: expected.operationId,
+    contractDigest: expected.contractDigest, inputDigests: [], outputDigests: [], exit: { code: 0, signal: null }, timedOut: false }
+  assert.equal(protocol.validatePublicReceipt(protocol.sealPublicReceipt({ ...payload, criteria: [] }), expected).verdict, 'invalid')
+  for (const verdict of ['pass', 'fail'] as const) {
+    const receipt = protocol.sealPublicReceipt({ ...payload, criteria: [{ id: 'child-result', verdict, reason: 'Independent local goal finding.' }] })
+    assert.equal(protocol.validatePublicReceipt(receipt, expected).verdict, verdict === 'pass' ? 'verified' : 'failed')
+  }
+})
+
+void test('child admission allows multiple instances of a probe binding in one batch', () => {
+  const input = childBatchInput()
+  const request = childRequest(input)
+  input.children = [
+    { ...request, bindingId: 'probe-part', taskId: 'task-probe-a' },
+    { ...request, bindingId: 'probe-part', taskId: 'task-probe-b' },
+  ]
+  const batch = admitChildBatch(input)
+  assert.deepEqual(batch.children.map(child => [child.contract.taskId, child.join]), [
+    ['task-probe-a', 'probe'], ['task-probe-b', 'probe'],
+  ])
+  input.children[1] = { ...input.children[1], taskId: 'task-probe-a' }
+  assert.throws(() => admitChildBatch(input), admissionError('INVALID_ARGUMENT'))
+})
+
+void test('child admission rejects empty batches, duplicate required bindings, oversized batches, and active batches', () => {
   const empty = childBatchInput()
   empty.children = []
   assert.throws(() => admitChildBatch(empty), admissionError('INVALID_ARGUMENT'))
@@ -637,35 +676,12 @@ void test('child admission rejects duplicate criteria and input ids', () => {
   assert.throws(() => admitChildBatch(duplicateInputs), admissionError('INVALID_ARGUMENT'))
   assert.deepEqual(inputRequest.authorizedInputs, authorized)
 
-  const duplicateCriteriaTemplate: TaskTemplate = {
-    ...childTemplate,
-    requiredCriteria: [
-      childTemplate.requiredCriteria[0],
-      { ...childTemplate.requiredCriteria[0], statement: 'A second required criterion with the same id' },
-    ],
-  }
-  const duplicateCriteriaMethod = sealMethodRevision({
-    v: 1,
-    id: 'method-duplicate-criteria',
-    entryTemplateId: rootTemplate.id,
-    templates: [rootTemplate, duplicateCriteriaTemplate],
-    skills: [],
-    tools: [],
-  })
-  const duplicateCriteriaParent = admitRootTask({
-    ...rootInput,
-    method: { id: duplicateCriteriaMethod.id, digest: duplicateCriteriaMethod.digest },
-    template: { id: rootTemplate.id, digest: duplicateCriteriaMethod.digest },
-  })
-  const duplicateCriteriaInput: ChildBatchAdmissionInput = {
-    ...childBatchInput(),
-    parent: duplicateCriteriaParent,
-    method: duplicateCriteriaMethod,
-  }
-  assert.throws(
-    () => admitChildBatch(duplicateCriteriaInput),
-    admissionError('INVALID_ARGUMENT'),
-  )
+  const duplicateCriteriaInput = childBatchInput()
+  const request = childRequest(duplicateCriteriaInput)
+  request.proposal = { ...request.proposal, acceptanceCriteria: [
+    request.proposal.acceptanceCriteria[0], request.proposal.acceptanceCriteria[0],
+  ] }
+  assert.throws(() => admitChildBatch(duplicateCriteriaInput), admissionError('INVALID_ARGUMENT'))
 })
 
 void test('child admission rejects model-supplied authority fields in proposals', () => {
@@ -688,7 +704,7 @@ void test('child admission rejects model-supplied authority fields in proposals'
     ['parentRunId', 'run-model'],
     ['batchId', 'batch-model'],
     ['bindingId', 'model-binding'],
-    ['criteria', childTemplate.requiredCriteria],
+    ['criteria', childProposal.acceptanceCriteria],
     ['digest', digestA],
   ]
 
@@ -784,36 +800,7 @@ void test('child admission rejects a binding whose template is absent from the m
   assert.throws(() => admitChildBatch(input), admissionError('INVALID_ARGUMENT'))
 })
 
-void test('child admission rejects template draft roles/paths and duplicate or reserved local outputs', () => {
-  const draftRoleTemplate: TaskTemplate = {
-    ...childTemplate,
-    requiredOutputs: [
-      ...childTemplate.requiredOutputs,
-      { id: 'platform-draft', path: 'custom/draft', kind: 'tree', role: 'skill-draft', required: false },
-    ],
-  }
-  const draftRoleMethod = sealMethodRevision({
-    v: 1,
-    id: 'method-draft-role',
-    entryTemplateId: rootTemplate.id,
-    templates: [rootTemplate, draftRoleTemplate],
-    skills: [],
-    tools: [],
-  })
-  const draftRoleParent = admitRootTask({
-    ...rootInput,
-    method: { id: draftRoleMethod.id, digest: draftRoleMethod.digest },
-    template: { id: rootTemplate.id, digest: draftRoleMethod.digest },
-  })
-  assert.throws(
-    () => admitChildBatch({
-      ...childBatchInput(),
-      parent: draftRoleParent,
-      method: draftRoleMethod,
-    }),
-    admissionError('INVALID_ARGUMENT'),
-  )
-
+void test('child admission rejects duplicate or reserved local outputs', () => {
   const localCases: readonly {
     readonly label: string
     readonly localOutputs: LocalOutput[]
@@ -824,7 +811,7 @@ void test('child admission rejects template draft roles/paths and duplicate or r
     },
     {
       label: 'duplicate with template output path',
-      localOutputs: [{ id: 'local-result', path: 'outputs/result.json', kind: 'file', description: 'duplicate path' }],
+      localOutputs: [{ id: 'local-result', path: 'result', kind: 'file', description: 'duplicate path' }],
     },
     {
       label: 'duplicate local id',
@@ -978,9 +965,7 @@ void test('child admission validates proposal, local output, and template output
     }
     assert.throws(() => admitChildBatch(local), admissionError('INVALID_ARGUMENT'), `local ${JSON.stringify(badPath)}`)
 
-    assert.throws(() => admissionWithChildTemplate({
-      requiredOutputs: [{ id: 'template-bad', path: badPath, kind: 'file', role: 'supporting', required: false }],
-    }), `template schema ${JSON.stringify(badPath)}`)
+
 
   }
 })
@@ -989,7 +974,7 @@ void test('child admission validates the template instanceSchema over the propos
   const accepted = admissionWithChildTemplate({
     instanceSchema: {
       type: 'object',
-      required: ['goal', 'localCriteria', 'inputs', 'localOutputs'],
+      required: ['goal', 'acceptanceCriteria', 'inputs', 'localOutputs'],
       additionalProperties: false,
       properties: {
         goal: {
@@ -1003,7 +988,7 @@ void test('child admission validates the template instanceSchema over the propos
             constraints: { type: 'array', items: { type: 'string' } },
           },
         },
-        localCriteria: { type: 'array', items: { type: 'object' } },
+        acceptanceCriteria: { type: 'array', items: { type: 'object' } },
         inputs: { type: 'array' },
         localOutputs: { type: 'array' },
       },

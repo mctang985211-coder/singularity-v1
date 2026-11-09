@@ -145,8 +145,8 @@ function templateFor(guidance: Ref, toolIds: readonly string[]): TaskTemplate {
     guidance,
     example: guidance,
     instanceSchema: {},
-    requiredCriteria: [],
-    requiredOutputs: [],
+
+
     acceptancePolicy: guidance,
     skills: [],
     tools: [...toolIds],
