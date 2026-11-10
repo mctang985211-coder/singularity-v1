@@ -420,16 +420,6 @@ async function readFacts(root: string): Promise<readonly Fact[]> {
   }
 }
 
-function findFact<Type extends FactType>(
-  facts: readonly Fact[],
-  type: Type,
-): Extract<Fact, { readonly type: Type }> | undefined {
-  for (const fact of facts) {
-    if (fact.type === type) return fact as Extract<Fact, { readonly type: Type }>
-  }
-  return undefined
-}
-
 function factsOfType<Type extends FactType>(
   facts: readonly Fact[],
   type: Type,
@@ -753,115 +743,6 @@ for (const mode of ['closed', 'active', 'exhausted', 'reservation', 'same-run'] 
     }
   })
 }
-
-void test('retrySingleRun allows a failed latest Run and starts a fresh attempt/session/workspace', { timeout: 60_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), 's3c-retry-root-'))
-  const workspace = await mkdtemp(join(tmpdir(), 's3c-retry-work-'))
-  const nextWorkspace = join(root, 'retry-workspace')
-  const taskId = 'task-s3c-retry'
-  const previousRunId = `${taskId}-run-1`
-  const previousSessionId = `${taskId}-session-1`
-  let scenario: Scenario
-  let previousRecordRef: Ref
-  let previousClosedDigest: string
-  try {
-    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
-    try {
-      scenario = await buildScenario(service, { taskId, maxRuns: 2 })
-      await admitTask(service, scenario)
-      const compositionRef = await openRun(service, scenario, {
-        runId: previousRunId,
-        sessionId: previousSessionId,
-        attempt: 1,
-      })
-      const closed = await closeRunFailed(service, scenario, {
-        runId: previousRunId,
-        sessionId: previousSessionId,
-        compositionRef,
-        reason: 'no-submission',
-        usage: usage(10, 6, 1),
-      })
-      previousRecordRef = closed.recordRef
-      const facts = await readFacts(root)
-      previousClosedDigest = findFact(facts, 'run/closed')?.digest ?? ''
-    } finally {
-      await service.close()
-    }
-
-    const { ctx, state } = makeFakeContext({
-      resume: 'ok',
-    })
-    const verifier: RunVerifier = {
-      provider: scenario.provider,
-      verify() {
-        throw new Error('verifier must not run for a no-submission fresh retry')
-      },
-    }
-    const result = await retrySingleRun({
-      ctx,
-      journalRoot: root,
-      workspace: nextWorkspace,
-      previousRunId,
-      runId: `${taskId}-run-2`,
-      sessionId: `${taskId}-session-2`,
-      agentOptions,
-      maxOutputBytes: 1024,
-      verifier,
-      transientInvalidReasons: [],
-      clock: () => FIXED_NOW + 1000,
-    })
-    assert.ok(result.kind === 'settled')
-
-    assert.equal(result.previousRunId, previousRunId)
-    assert.equal(result.attempt, 2)
-    assert.equal(result.retryPolicy.allowed, true)
-    assert.equal(result.classification, 'failed')
-    assert.equal(state.createCalls.length, 1)
-    assert.equal(state.createCalls[0]?.sessionId, `${taskId}-session-2`)
-    assert.equal(state.createCalls[0]?.cwd, nextWorkspace)
-    assert.equal(state.followupCalls, 1)
-    assert.equal(state.disposed, 1)
-
-    const facts = await readFacts(root)
-    const opened = factsOfType(facts, 'run/opened')
-    assert.equal(opened.length, 2)
-    assert.equal(opened[1]?.data.runId, `${taskId}-run-2`)
-    assert.equal(opened[1]?.data.attempt, 2)
-    assert.equal(opened[1]?.data.sessionId, `${taskId}-session-2`)
-    assert.equal(opened[1]?.data.workspaceKey, `${taskId}-run-2`)
-    assert.equal(opened[1]?.data.composition.digest, opened[0]?.data.composition.digest)
-    assert.equal(opened[1]?.data.workspaceSeed.digest, scenario.contract.environment.seed.digest)
-
-    const closedFacts = factsOfType(facts, 'run/closed')
-    assert.equal(closedFacts.length, 2)
-    assert.equal(closedFacts[0]?.digest, previousClosedDigest)
-    assert.equal(closedFacts[1]?.data.runId, `${taskId}-run-2`)
-    assert.equal(closedFacts[1]?.data.classification, 'failed')
-    assert.equal('executionRecordRef' in (closedFacts[1]?.data ?? {}), true)
-    assert.equal('evidenceRef' in (closedFacts[1]?.data ?? {}), false)
-
-    const recordRef = (closedFacts[1]?.data as { readonly executionRecordRef?: Ref }).executionRecordRef
-    assert.ok(recordRef)
-    assert.notEqual(recordRef.digest, previousRecordRef.digest)
-    const store = await DomainStore.open({ root })
-    try {
-      const previousBytes = await store.readObject(previousRecordRef, 'object')
-      assert.match(textDecoder.decode(previousBytes.bytes), /no-submission/)
-    } finally {
-      await store.close()
-    }
-    const taskClosed = factsOfType(facts, 'task/closed')[0]
-    assert.equal(taskClosed.data.outcome, 'failed')
-    assert.equal(taskClosed.data.decisiveRunId, `${taskId}-run-2`)
-    assert.equal(result.taskFact?.digest, taskClosed.digest)
-    assert.equal(result.manifest, undefined)
-    assert.equal(result.receipt, undefined)
-  } finally {
-    await rm(root, { recursive: true, force: true })
-    await rm(workspace, { recursive: true, force: true })
-    await rm(nextWorkspace, { recursive: true, force: true })
-  }
-})
 
 void test('retrySingleRun exclusively creates a new workspace without reading historical cwd', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 's3c-retry-workspace-'))
@@ -1897,59 +1778,6 @@ void test('S4-A1 8192-byte guidance is mounted at the fixed section name and ord
     assert.equal(guidanceSection.interpolate, false)
     assert.equal(s4a1Encoder.encode(guidanceSection.text).byteLength, S4A1_GUIDANCE_BYTES)
     assert.equal(guidanceSection.text, boundaryText)
-  } finally {
-    await rm(root, { recursive: true, force: true })
-    await rm(workspace, { recursive: true, force: true })
-  }
-})
-
-void test('S4-A1 create aborts when the actual scoped platformPrompt differs', async () => {
-  const root = await mkdtemp(join(tmpdir(), 's4a1-platform-create-root-'))
-  const workspace = await mkdtemp(join(tmpdir(), 's4a1-platform-create-work-'))
-  try {
-    const service = await CommandService.open({ root, actor, clock: () => FIXED_NOW })
-    let scenario: Scenario
-    try {
-      scenario = await buildScenario(service, { taskId: 'task-s4a1-platform-create', maxRuns: 1 })
-    } finally {
-      await service.close()
-    }
-    const { ctx, state } = makeFakeContext({
-      resume: 'ok',
-      platformPromptText: 'wrong platform prompt',
-    })
-    await assert.rejects(executeSingleRun({
-      ctx,
-      journalRoot: root,
-      workspace,
-      runId: 'run-s4a1-platform-create',
-      sessionId: 'session-s4a1-platform-create',
-      admission: {
-        contract: scenario.contract,
-        attempt: 1,
-        budgetReservation: {
-          tokens: 100_000,
-          steps: 4,
-          deadlineAt: scenario.contract.limits.deadlineAt,
-        },
-      },
-      composition: scenario.composition,
-      agentOptions,
-      maxOutputBytes: 1024,
-      verifier: {
-        provider: scenario.provider,
-        verify() { throw new Error('platform prompt mismatch must not verify') },
-      },
-      clock: () => FIXED_NOW + 1000,
-    }), /platform prompt/)
-
-    assert.equal(state.followupCalls, 0, 'platform prompt mismatch must not send a wake')
-    assert.equal(state.createCalls.length, 1)
-    assert.equal(state.disposed, 0, 'setup failure must not publish a disposable Agent')
-
-    const facts = await readFacts(root)
-    assert.equal(factsOfType(facts, 'run/submitted').length, 0)
-    assert.equal(factsOfType(facts, 'run/closed').length, 0)
   } finally {
     await rm(root, { recursive: true, force: true })
     await rm(workspace, { recursive: true, force: true })

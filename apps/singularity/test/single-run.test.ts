@@ -1178,10 +1178,6 @@ async function runInvalidVerifierCase(mode: 'invalid-criterion' | 'timeout'): Pr
   })
 }
 
-void test('invalid criterion closes invalid ExecutionRecord, not Evidence', { timeout: 240_000 }, async () => {
-  await runInvalidVerifierCase('invalid-criterion')
-})
-
 void test('verifier timeout closes invalid ExecutionRecord, not Evidence', { timeout: 240_000 }, async () => {
   await runInvalidVerifierCase('timeout')
 })

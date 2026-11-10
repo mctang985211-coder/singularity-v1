@@ -42,16 +42,9 @@
               supportsFinishReason: true
               thinkingFormat: deepseek
             models:
-              - id: deepseek-v4-flash
-                name: DeepSeek V4 Flash
-                contextWindow: 700000
-                maxTokens: 128000
-                input: [text]
-                reasoningEfforts:
-                  max: max
               - id: deepseek-v4.1-flash
-                name: DeepSeek V4.1 Flash (legacy alias)
-                contextWindow: 700000
+                name: DeepSeek V4.1 Flash
+                contextWindow: 500000
                 maxTokens: 128000
                 input: [text]
                 reasoningEfforts:

@@ -16,6 +16,7 @@ import type {
   PublicReceipt,
   Ref,
   RoundPlan,
+  TaskContract,
   TaskRunState,
   UsageRecord,
 } from '@singularity/protocol'
@@ -53,6 +54,61 @@ export function frozenEvaluationSlots(roundId: string, plan: RoundPlan, base: Re
     }
   }
   return slots
+}
+
+export type LocalEvaluationPlan = Pick<RoundPlan, 'cases' | 'trialsPerCase'>
+  & Partial<Pick<RoundPlan, 'validationCases'>>
+
+/**
+ * Local slice slots. Baseline identities are candidate-independent within a
+ * campaign scope, so a closed and matching shared baseline is never purchased
+ * twice; every candidate gets its own deterministic slot and Task identities.
+ */
+export function frozenLocalSlots(
+  roundId: string,
+  plan: LocalEvaluationPlan,
+  base: Ref,
+  candidate?: Ref,
+  scope = 'shared-baseline',
+): readonly EvaluationSlot[] {
+  const slots: EvaluationSlot[] = []
+  const partitions = [
+    ['evaluation', plan.cases],
+    ['validation', plan.validationCases ?? []],
+  ] as const
+  const push = (partition: EvaluationSlot['partition'], caseRef: Ref, repetition: number): void => {
+    const baselineDigest = computeDigest('object', { roundId, scope, partition, caseRef, repetition, arm: 'baseline' })
+    const baselineId = `${roundId}:local-slot:${baselineDigest.slice('sha256:'.length)}`
+    slots.push({
+      id: baselineId, roundId, taskId: localTaskId(baselineDigest), partition, caseRef,
+      arm: 'baseline', repetition, method: base,
+    })
+  }
+  for (const [partition, cases] of partitions) {
+    for (const caseRef of cases) {
+      for (let repetition = 0; repetition < plan.trialsPerCase; repetition += 1) push(partition, caseRef, repetition)
+    }
+  }
+  if (candidate === undefined) return slots
+  const pushCandidate = (partition: EvaluationSlot['partition'], caseRef: Ref, repetition: number): void => {
+    const digest = computeDigest('object', { roundId, scope, partition, caseRef, repetition, arm: 'candidate', candidate })
+    const id = `${roundId}:local-slot:${digest.slice('sha256:'.length)}`
+    slots.push({
+      id, roundId, taskId: localTaskId(digest), partition, caseRef,
+      arm: 'candidate', repetition, method: candidate,
+    })
+  }
+  for (const [partition, cases] of partitions) {
+    for (const caseRef of cases) {
+      for (let repetition = 0; repetition < plan.trialsPerCase; repetition += 1) pushCandidate(partition, caseRef, repetition)
+    }
+  }
+  return slots
+}
+
+/** Task ids become session and attempt path components; keep them short. */
+function localTaskId(digest: string): string {
+  return `local:${digest.slice('sha256:'.length, 'sha256:'.length + 32)}`
 }
 
 export interface EvaluationUsage {
@@ -318,6 +374,141 @@ export interface EvaluationTaskRequest {
   readonly signal: AbortSignal
 }
 
+/** Per-arm execution caps, separate from the shared RoundPlan purchase fuse. */
+export interface EvaluationArmBudget {
+  readonly maxTokens: number
+  readonly maxRuns: number
+}
+
+export interface EvaluationSlotBudgets {
+  readonly baseline?: EvaluationArmBudget
+  readonly candidate?: EvaluationArmBudget
+  /** Combined cap across both arms; root evaluation maps the frozen plan here. */
+  readonly total?: EvaluationArmBudget
+}
+
+export interface EnsureEvaluationSlotsRequest {
+  readonly service: CommandService
+  readonly slots: readonly EvaluationSlot[]
+  readonly runTask: (request: EvaluationTaskRequest) => Promise<void>
+  /** Build the ordinary runner request from the budgets observed before purchase. */
+  readonly requestFor?: (slot: EvaluationSlot, requestRef: Ref, manifest: EvaluationManifest) => EvaluationTaskRequest
+  /** Optional slot-id order; every other frozen slot follows in `slots` order. */
+  readonly executionOrder?: readonly (EvaluationSlot | string)[]
+  readonly budget?: EvaluationSlotBudgets
+  /** Synchronous campaign gate; false stops all further purchases. */
+  readonly canPurchase?: () => boolean
+  readonly clock?: () => number
+  readonly deadlineAt?: number
+  readonly maxActive?: number
+  readonly signal?: AbortSignal
+  readonly checkReportedBudget?: EvaluationTaskRequest['checkReportedBudget']
+  readonly canOpenRun?: EvaluationTaskRequest['canOpenRun']
+}
+
+function defaultEvaluationTaskRequest(request: EnsureEvaluationSlotsRequest, slot: EvaluationSlot, requestRef: Ref): EvaluationTaskRequest {
+  return {
+    slot, requestRef,
+    maxActive: request.maxActive ?? 1,
+    deadlineAt: request.deadlineAt ?? Number.MAX_SAFE_INTEGER,
+    signal: request.signal ?? new AbortController().signal,
+    checkReportedBudget: request.checkReportedBudget ?? (() => true),
+    canOpenRun: request.canOpenRun ?? (() => true),
+  }
+}
+
+/**
+ * Ensure every frozen slot owns a matching ordinary evaluation Task.
+ *
+ * A closed slot is never reused unless its contract Method and
+ * `{v:1,roundId:slot.roundId,slot}` request both match. An existing in-flight
+ * identity is never re-entered. `requestRef` always binds `slot.roundId`, even
+ * when the caller names a wider local campaign.
+ */
+export async function ensureEvaluationSlots(request: EnsureEvaluationSlotsRequest): Promise<void> {
+  const clock = request.clock ?? Date.now
+  for (const slot of orderedEvaluationSlots(request.slots, request.executionOrder)) {
+    const state = await request.service.taskRunState([])
+    const existing = state.tasks.get(slot.taskId)
+    if (existing !== undefined) {
+      if (existing.phase !== 'closed') continue
+      if (!(await closedSlotMatches(request.service, existing.contract, slot))) {
+        throw new MethodRoundError(`Closed evaluation slot ${slot.id} does not match its frozen Method and request`)
+      }
+      continue
+    }
+    if (request.deadlineAt !== undefined && clock() >= request.deadlineAt) break
+    if (request.canPurchase?.() === false) break
+    const manifest = await readEvaluationManifest(request.service, request.slots, state)
+    if (request.budget?.total !== undefined
+      && exceedsBudget(tokenCount(manifest.usage), manifest.runCount, request.budget.total)) break
+    const armBudget = request.budget?.[slot.arm]
+    if (armBudget !== undefined) {
+      const arm = reportedEvaluationUsage(request.service, request.slots.filter(value => value.arm === slot.arm))
+      if (exceedsBudget(arm.tokens, arm.runCount, armBudget)) continue
+    }
+    const requestRef = await request.service.putObject(slot.id,
+      new TextEncoder().encode(canonicalize({ v: 1, roundId: slot.roundId, slot })))
+    await request.runTask(request.requestFor === undefined
+      ? defaultEvaluationTaskRequest(request, slot, requestRef)
+      : request.requestFor(slot, requestRef, manifest))
+    if ((await readEvaluationManifest(request.service, [slot])).slots[0]?.status !== 'complete') break
+  }
+}
+
+function orderedEvaluationSlots(
+  slots: readonly EvaluationSlot[],
+  order: readonly (EvaluationSlot | string)[] | undefined,
+): readonly EvaluationSlot[] {
+  if (order === undefined) return slots
+  const byId = new Map(slots.map(slot => [slot.id, slot]))
+  const ordered: EvaluationSlot[] = []
+  const seen = new Set<string>()
+  for (const entry of order) {
+    const id = typeof entry === 'string' ? entry : entry.id
+    const slot = byId.get(id)
+    if (slot === undefined) throw new MethodRoundError(`Unknown evaluation slot in execution order: ${id}`)
+    if (seen.has(id)) continue
+    seen.add(id)
+    ordered.push(slot)
+  }
+  for (const slot of slots) if (!seen.has(slot.id)) ordered.push(slot)
+  return ordered
+}
+
+async function closedSlotMatches(service: CommandService, contract: TaskContract, slot: EvaluationSlot): Promise<boolean> {
+  if (!same(contract.method, slot.method)) return false
+  if (contract.origin.kind !== 'root' || contract.origin.purpose !== 'evaluation') return false
+  const request = await readRoundObject(service, contract.origin.requestRef)
+  return canonicalize(request) === canonicalize({ v: 1, roundId: slot.roundId, slot })
+}
+
+function exceedsBudget(tokens: number, runCount: number, budget: EvaluationArmBudget): boolean {
+  return tokens >= budget.maxTokens || runCount >= budget.maxRuns
+}
+
+export interface LocalCandidateComparisonRequest {
+  readonly service: CommandService
+  readonly roundId: string
+  readonly planRef: Ref
+  readonly plan: RoundPlan
+  readonly slots: readonly EvaluationSlot[]
+  readonly comparator?: EvaluationComparator
+  readonly state?: TaskRunState
+  readonly manifest?: EvaluationManifest
+}
+
+/**
+ * Read-only local paired comparison. Reuses manifest, paired-contract and
+ * comparator logic; it never writes a comparison object or closes a Round.
+ */
+export async function compareLocalCandidate(request: LocalCandidateComparisonRequest): Promise<EvaluationComparison> {
+  const state = request.state ?? await request.service.taskRunState([])
+  await assertPairedEvaluationContracts(request.service, state, request.slots, request.plan)
+  const manifest = request.manifest ?? await readEvaluationManifest(request.service, request.slots, state)
+  return compareEvaluation(request.roundId, request.planRef, request.plan, manifest, request.comparator)
+}
+
 /** Sequential arms share the ordinary tree runner's capacity and retry policy. */
 export async function evaluateRsiCandidate(request: RoundCommandContext & {
   readonly roundId: string
@@ -340,16 +531,12 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
   const clock = request.clock ?? Date.now
   const deadlineAt = ready.at + plan.budget.maxWallClockMs
   const signal = AbortSignal.timeout(Math.max(0, deadlineAt - clock()))
-  for (const slot of slots) {
-    if (request.comparator === undefined || !same(request.comparator.asset, plan.comparator)) break
-    const state = await service.taskRunState([])
-    const existing = state.tasks.get(slot.taskId)
-    if (existing?.phase === 'closed') continue
-    const manifest = await readEvaluationManifest(service, slots, state)
-    if (existing === undefined && (clock() >= deadlineAt
-      || tokenCount(manifest.usage) >= plan.budget.maxTokens || manifest.runCount >= plan.budget.maxRuns)) break
-    const requestRef = await service.putObject(slot.id, new TextEncoder().encode(canonicalize({ v: 1, roundId, slot })))
-    await request.runTask({
+  await ensureEvaluationSlots({
+    service, slots, clock, deadlineAt,
+    budget: { total: { maxTokens: plan.budget.maxTokens, maxRuns: plan.budget.maxRuns } },
+    canPurchase: () => request.comparator !== undefined && same(request.comparator.asset, plan.comparator),
+    runTask: request.runTask,
+    requestFor: (slot, requestRef, manifest) => ({
       slot, requestRef, maxActive: plan.budget.maxActiveRuns, deadlineAt, signal,
       checkReportedBudget: reported => {
         if (reported === undefined) return reportedEvaluationBudget(service, slots, plan, clock, deadlineAt)
@@ -358,11 +545,10 @@ export async function evaluateRsiCandidate(request: RoundCommandContext & {
         return otherUsage + reported.tokens < plan.budget.maxTokens && clock() < deadlineAt
       },
       canOpenRun: () => reportedEvaluationUsage(service, slots).runCount < plan.budget.maxRuns,
-    })
-    if ((await readEvaluationManifest(service, [slot])).slots[0]?.status !== 'complete') break
-  }
+    }),
+  })
   const state = await service.taskRunState([])
-  await assertPairedContracts(service, state, slots, plan)
+  await assertPairedEvaluationContracts(service, state, slots, plan)
   const manifest = await readEvaluationManifest(service, slots, state)
   if (manifest.slots.some(slot => slot.reason === 'not-terminal')) throw new MethodRoundError('Ordinary evaluation Tasks must drain before Round closure')
   const comparison = compareEvaluation(roundId, round.plan, plan, manifest, request.comparator)
@@ -393,7 +579,7 @@ function reportedEvaluationUsage(service: CommandService, slots: readonly Evalua
   return { runCount: runs.size, tokens }
 }
 
-async function assertPairedContracts(service: CommandService, state: TaskRunState, slots: readonly EvaluationSlot[], plan: RoundPlan): Promise<void> {
+export async function assertPairedEvaluationContracts(service: CommandService, state: TaskRunState, slots: readonly EvaluationSlot[], plan: RoundPlan): Promise<void> {
   const cases = new Map<string, string>()
   const environments = new Map<string, string>()
   const sessions = new Set<string>()

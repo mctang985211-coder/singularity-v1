@@ -38,6 +38,7 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       assert.match(messageTexts(request).filter(text => text.includes('"proposer":')).join('\n'), /"tokens":100/, 'an in-flight request must not hide the remaining reported-token budget')
       const context = messageTexts(request).filter(text => text.includes('"proposer":')).join('\n')
       assert.ok(context.includes(canonicalize({ inputTokens: 220, outputTokens: 32, steps: 4, unknownRequests: 0 })))
+      assert.ok(context.includes('"history":{"count":0,"readKind":"history"}'))
       assert.ok(scenario)
       assert.ok(context.includes(canonicalize(scenario.method.templates[0].guidance)))
       assert.ok(context.includes(canonicalize(scenario.method.templates[0].example)))
@@ -57,14 +58,16 @@ void test('C-14 sealed public trace drives an independent scoped DSH proposer an
       return { toolCalls: [{ id: 'submit-patch', name: 'rsi_submit_patch', arguments: JSON.stringify({ patch }) }], usage: fixtureUsage(index) }
     }
     if (index === 13) {
-      assert.match(messageTexts(request).join('\n'), /"previousRound":\{"outcome":"no-improvement","readKind":"previous-round","roundId":"round:s5"\}/)
-      return { toolCalls: [{ id: 'previous-feedback', name: 'rsi_read', arguments: JSON.stringify({ kind: 'previous-round' }) }], usage: fixtureUsage(index) }
+      assert.match(messageTexts(request).join('\n'), /"history":\{"count":1,"readKind":"history"\}/)
+      return { toolCalls: [{ id: 'history', name: 'rsi_read', arguments: JSON.stringify({ kind: 'history', page: 0 }) }], usage: fixtureUsage(index) }
     }
     if (index === 14) {
       const texts = messageTexts(request).join('\n')
       assert.ok(texts.includes('Reuse a local review skill for the declared output.'))
       assert.ok(texts.includes('aggregateDelta'))
-      assert.ok(texts.includes('no-improvement'))
+      assert.ok(texts.includes('operations'))
+      assert.ok(texts.includes('"outcome":"no-improvement"'))
+      assert.ok(!texts.includes('worstRegression'))
       assert.ok(!texts.includes('PRIVATE-COMPARISON-CASE'))
       return { toolCalls: [{ id: 'deny-previous-comparison', name: 'rsi_read', arguments: JSON.stringify({ kind: 'asset', id: comparisonDigest }) }], usage: fixtureUsage(index) }
     }

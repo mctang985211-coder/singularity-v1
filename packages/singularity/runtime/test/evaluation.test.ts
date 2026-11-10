@@ -4,11 +4,30 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { canonicalize, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
-import type { Ref, RoundPlan, TaskRunState, TaskState } from '@singularity/protocol'
+import { admitRootTask, canonicalize, sealEvidence, sealPublicReceipt, sealTaskContract } from '@singularity/protocol'
+import type { Fact, Ref, RoundPlan, TaskContract, TaskRunState, TaskState } from '@singularity/protocol'
 
-import { compareEvaluation, compareMetricScores, compareVerifiedFraction, frozenEvaluationSlots, readEvaluationManifest } from '../src/evaluation.ts'
-import type { EvaluationComparator, EvaluationManifest, PublicEvaluationEvidence, EvaluationSlotResult, EvaluationUsage } from '../src/evaluation.ts'
+import {
+  assertPairedEvaluationContracts,
+  compareEvaluation,
+  compareLocalCandidate,
+  compareMetricScores,
+  compareVerifiedFraction,
+  ensureEvaluationSlots,
+  frozenEvaluationSlots,
+  frozenLocalSlots,
+  readEvaluationManifest,
+} from '../src/evaluation.ts'
+import type {
+  EvaluationComparator,
+  EvaluationManifest,
+  EvaluationSlot,
+  EvaluationTaskRequest,
+  PublicEvaluationEvidence,
+  EvaluationSlotResult,
+  EvaluationUsage,
+} from '../src/evaluation.ts'
+import { evaluationCaseFromContract, freezeEvaluationCase } from '../src/evaluation-case.ts'
 import { CommandService } from '../src/service.ts'
 
 const ref = (id: string): Ref => ({ id, digest: `sha256:${'a'.repeat(64)}` })
@@ -24,6 +43,54 @@ const plan: RoundPlan = {
 }
 const usage: EvaluationUsage = { inputTokens: 20, outputTokens: 5, cacheReadTokens: 6, cacheWriteTokens: 2,
   steps: 2, unknownRequests: 0, complete: true, cacheComplete: true }
+
+function emptyState(tasks: readonly TaskState[] = []): TaskRunState {
+  return { tasks: new Map(tasks.map(task => [task.taskId, task])), runs: new Map(), batches: new Map() }
+}
+
+function fakeService(
+  state: TaskRunState | (() => TaskRunState),
+  objects: ReadonlyMap<string, unknown> = new Map(),
+): { readonly service: CommandService; readonly writes: Map<string, Uint8Array> } {
+  const writes = new Map<string, Uint8Array>()
+  const facts: Fact[] = []
+  const service = {
+    facts: () => facts,
+    taskRunState: () => Promise.resolve(typeof state === 'function' ? state() : state),
+    putObject: (id: string, bytes: Uint8Array) => { writes.set(id, bytes); return Promise.resolve(ref(id)) },
+    readObject: (value: Ref) => {
+      const object = objects.get(value.id)
+      if (object === undefined) return Promise.reject(new Error(`Missing fake object ${value.id}`))
+      return Promise.resolve({ bytes: new TextEncoder().encode(canonicalize(object)) })
+    },
+  } as unknown as CommandService
+  return { service, writes }
+}
+
+function evaluationContract(slot: EvaluationSlot, requestRef: Ref, summary = 'fixture', method: Ref = slot.method): TaskContract {
+  return sealTaskContract({
+    v: 1, taskId: slot.taskId, method, template: ref('template'),
+    spec: { goal: { summary, deliverable: 'fixture', scope: [], constraints: [] }, criteria: [], inputs: [], outputs: [] },
+    origin: { kind: 'root', purpose: 'evaluation', requestRef },
+    resources: { baseTools: [], skills: [], mcpServers: [] }, acceptance: ref('verifier'),
+    environment: { seed: ref('seed'), profile: ref('profile') },
+    limits: { maxRuns: 1, maxStepsPerRun: 1, maxTokens: 1000, deadlineAt: 5000, maxDepth: 1, maxTasks: 1, maxBatchChildren: 1 },
+  })
+}
+
+function closedTask(slot: EvaluationSlot, contract: TaskContract): TaskState {
+  return {
+    taskId: slot.taskId, contract, rootTaskId: slot.taskId, depth: 0, phase: 'closed', runIds: [], childIds: [],
+    closed: { outcome: 'verified', reason: 'fixture', source: 'task/closed', factDigest: ref('fact').digest },
+  }
+}
+
+function runner(slot: EvaluationSlot, requestRef: Ref): EvaluationTaskRequest {
+  return {
+    slot, requestRef, maxActive: 1, deadlineAt: 5000, signal: new AbortController().signal,
+    checkReportedBudget: () => true, canOpenRun: () => true,
+  }
+}
 
 function manifest(policy: RoundPlan = plan): EvaluationManifest {
   const slots: EvaluationSlotResult[] = frozenEvaluationSlots('round', policy, base, candidate).map(slot => {
@@ -218,4 +285,239 @@ void test('validation-only verified-fraction gain is never averaged into public 
   const evidence = manifest().slots.flatMap(slot => slot.publicEvidence === undefined ? [] : [{ ...slot.publicEvidence,
     verdict: slot.slot.partition === 'validation' && slot.slot.arm === 'candidate' ? 'verified' as const : 'failed' as const }])
   assert.equal(compareVerifiedFraction(plan, evidence).aggregateDelta, 0)
+})
+
+void test('local slots share baseline identities and keep every candidate independent', () => {
+  const localPlan = { cases: [ref('local-a'), ref('local-b')], trialsPerCase: 2 }
+  const baseline = frozenLocalSlots('round-local', localPlan, base)
+  const first = frozenLocalSlots('round-local', localPlan, base, ref('candidate-a'))
+  const second = frozenLocalSlots('round-local', localPlan, base, ref('candidate-b'))
+  assert.equal(baseline.length, 4)
+  assert.equal(first.length, 8)
+  assert.deepEqual(first.slice(0, 4).map(slot => slot.id), baseline.map(slot => slot.id))
+  assert.deepEqual(second.slice(0, 4).map(slot => slot.id), baseline.map(slot => slot.id))
+  const firstCandidates = first.slice(4), secondCandidates = second.slice(4)
+  assert.equal(firstCandidates.length, 4)
+  assert.ok(firstCandidates.every(slot => slot.arm === 'candidate' && slot.method.id === 'candidate-a'))
+  assert.ok(secondCandidates.every(slot => slot.arm === 'candidate' && slot.method.id === 'candidate-b'))
+  assert.equal(new Set([...firstCandidates, ...secondCandidates].map(slot => slot.id)).size, 8)
+  assert.ok([...first, ...second].every(slot => slot.roundId === 'round-local'))
+  assert.equal(new Set(baseline.map(slot => `${slot.taskId}:${slot.id}`)).size, 4)
+})
+
+void test('ensureEvaluationSlots binds requestRef to slot.roundId', async () => {
+  const slots = frozenLocalSlots('slot-owned-round', { cases: [ref('case')], trialsPerCase: 1 }, base, ref('candidate'))
+  const candidateSlot = slots.find(slot => slot.arm === 'candidate')
+  assert.ok(candidateSlot)
+  const fake = fakeService(emptyState())
+  let captured: EvaluationTaskRequest | undefined
+  await ensureEvaluationSlots({
+    service: fake.service, slots: [candidateSlot],
+    runTask: request => { captured = request; return Promise.resolve() },
+    requestFor: runner,
+  })
+  const bytes = fake.writes.get(candidateSlot.id)
+  assert.ok(bytes)
+  assert.ok(captured)
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(bytes)), { v: 1, roundId: 'slot-owned-round', slot: candidateSlot })
+  assert.equal(captured.slot.id, candidateSlot.id)
+  assert.equal(captured.requestRef.id, candidateSlot.id)
+})
+
+void test('executionOrder controls purchase order while keeping every slot addressable', async () => {
+  const slots = frozenLocalSlots('round-order', { cases: [ref('case')], trialsPerCase: 1 }, base, ref('candidate'))
+  const baselineSlot = slots.find(slot => slot.arm === 'baseline')
+  const candidateSlot = slots.find(slot => slot.arm === 'candidate')
+  assert.ok(baselineSlot && candidateSlot)
+  const fake = fakeService(emptyState())
+  const purchased: string[] = []
+  await ensureEvaluationSlots({
+    service: fake.service, slots: [baselineSlot, candidateSlot], executionOrder: [candidateSlot],
+    runTask: value => { purchased.push(value.slot.id); return Promise.resolve() }, requestFor: runner,
+  })
+  assert.deepEqual(purchased, [candidateSlot.id])
+  await assert.rejects(ensureEvaluationSlots({
+    service: fakeService(emptyState()).service, slots: [baselineSlot], executionOrder: ['unknown-slot'],
+    runTask: () => { throw new Error('an unknown order entry must not purchase') }, requestFor: runner,
+  }), /Unknown evaluation slot in execution order/)
+})
+
+void test('ensureEvaluationSlots never re-enters an in-flight identity', async () => {
+  const slot = frozenLocalSlots('round-flight', { cases: [ref('case')], trialsPerCase: 1 }, base, ref('candidate'))[0]
+  const requestRef = ref('flight-request')
+  const task: TaskState = { ...closedTask(slot, evaluationContract(slot, requestRef)), phase: 'open', closed: undefined }
+  const fake = fakeService(emptyState([task]))
+  await ensureEvaluationSlots({
+    service: fake.service, slots: [slot],
+    runTask: () => { throw new Error('in-flight identities must not run again') },
+    requestFor: runner,
+  })
+  assert.equal(fake.writes.size, 0)
+})
+
+void test('closed slots are reused only after their Method and request match', async () => {
+  const slots = frozenLocalSlots('round-closed', { cases: [ref('case')], trialsPerCase: 1 }, base, ref('candidate'))
+  const baselineSlot = slots.find(slot => slot.arm === 'baseline')
+  const candidateSlot = slots.find(slot => slot.arm === 'candidate')
+  assert.ok(baselineSlot && candidateSlot)
+  const requestRef = ref('baseline-request')
+  const request = { v: 1, roundId: baselineSlot.roundId, slot: baselineSlot }
+  const fake = fakeService(
+    emptyState([closedTask(baselineSlot, evaluationContract(baselineSlot, requestRef))]),
+    new Map([[requestRef.id, request]]),
+  )
+  const purchased: string[] = []
+  await ensureEvaluationSlots({
+    service: fake.service, slots: [baselineSlot, candidateSlot],
+    runTask: value => { purchased.push(value.slot.id); return Promise.resolve() },
+    requestFor: runner,
+  })
+  assert.deepEqual(purchased, [candidateSlot.id], 'a matching closed baseline is shown but not repurchased')
+
+  const wrongRequestFake = fakeService(
+    emptyState([closedTask(baselineSlot, evaluationContract(baselineSlot, requestRef))]),
+    new Map([[requestRef.id, { ...request, roundId: 'stale-round' }]]),
+  )
+  await assert.rejects(ensureEvaluationSlots({
+    service: wrongRequestFake.service, slots: [baselineSlot],
+    runTask: () => { throw new Error('mismatched closed slots must not run') }, requestFor: runner,
+  }), /does not match its frozen Method and request/)
+
+  const wrongMethodFake = fakeService(
+    emptyState([closedTask(baselineSlot, evaluationContract(baselineSlot, requestRef, 'fixture', ref('other-method')))]),
+    new Map([[requestRef.id, request]]),
+  )
+  await assert.rejects(ensureEvaluationSlots({
+    service: wrongMethodFake.service, slots: [baselineSlot],
+    runTask: () => { throw new Error('mismatched closed slots must not run') }, requestFor: runner,
+  }), /does not match its frozen Method and request/)
+})
+
+void test('per-arm budgets stop only their own arm while the total fuse stops all purchases', async () => {
+  const slots = frozenLocalSlots('round-budget', { cases: [ref('case')], trialsPerCase: 1 }, base, ref('candidate'))
+  const baselineSlot = slots.find(slot => slot.arm === 'baseline')
+  const candidateSlot = slots.find(slot => slot.arm === 'candidate')
+  assert.ok(baselineSlot && candidateSlot)
+  const fake = fakeService(emptyState())
+  const purchased: string[] = []
+  await ensureEvaluationSlots({
+    service: fake.service, slots: [candidateSlot, baselineSlot],
+    budget: { candidate: { maxTokens: 1000, maxRuns: 0 } },
+    runTask: value => { purchased.push(value.slot.id); return Promise.resolve() }, requestFor: runner,
+  })
+  assert.deepEqual(purchased, [baselineSlot.id], 'candidate cap cannot suppress the baseline arm')
+
+  let totalPurchases = 0
+  await ensureEvaluationSlots({
+    service: fakeService(emptyState()).service, slots: [baselineSlot],
+    budget: { total: { maxTokens: 1000, maxRuns: 0 } },
+    runTask: () => { totalPurchases += 1; return Promise.resolve() }, requestFor: runner,
+  })
+  assert.equal(totalPurchases, 0)
+
+  const blocked = fakeService(emptyState())
+  await ensureEvaluationSlots({
+    service: blocked.service, slots: [baselineSlot], canPurchase: () => false,
+    runTask: () => { throw new Error('the synchronous campaign gate must stop purchase') }, requestFor: runner,
+  })
+  assert.equal(blocked.writes.size, 0)
+})
+
+void test('compareLocalCandidate is read-only and never closes a Round', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'singularity-local-comparison-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const service = await CommandService.open({ root, actor: { kind: 'runtime', id: 'local-comparison-test' }, clock: () => 1000 })
+  t.after(() => service.close())
+  const localPlan: RoundPlan = {
+    ...plan, cases: [ref('local-case')], validationCases: [], validation: 'none', claim: 'source-replay',
+  }
+  const slots = frozenLocalSlots('round-readonly', localPlan, base, candidate)
+  const comparison = await compareLocalCandidate({
+    service, roundId: 'round-readonly', planRef: ref('local-plan'), plan: localPlan, slots, comparator: comparator(),
+  })
+  assert.equal(comparison.outcome, 'insufficient-evidence')
+  assert.equal(comparison.complete, false)
+  assert.equal(comparison.slots.length, slots.length)
+  assert.equal(service.facts().length, 0)
+  assert.equal((await service.taskRunState([])).tasks.size, 0)
+  assert.equal((await service.methodRoundState()).rounds.size, 0)
+})
+
+void test('paired contracts normalize host learning drafts on both sides', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'singularity-paired-case-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const service = await CommandService.open({ root, actor: { kind: 'runtime', id: 'paired-case-test' }, clock: () => 1000 })
+  t.after(() => service.close())
+  const requestRef = await service.putObject('paired-request', new TextEncoder().encode(canonicalize({ v: 1, purpose: 'fixture' })))
+  const contract = admitRootTask({
+    taskId: 'paired-task',
+    spec: {
+      goal: { summary: 'fixture', deliverable: 'fixture', scope: [], constraints: [] },
+      criteria: [], inputs: [],
+      outputs: [{ id: 'deliverable', path: 'result.txt', kind: 'file', role: 'deliverable', required: true }],
+    },
+    origin: { kind: 'root', purpose: 'evaluation', requestRef },
+    method: candidate, template: { id: 'template', digest: candidate.digest },
+    resources: { baseTools: [], skills: [], mcpServers: [] }, acceptance: ref('verifier'),
+    environment: { seed: ref('seed'), profile: ref('profile') },
+    limits: { maxRuns: 1, maxStepsPerRun: 1, maxTokens: 1000, deadlineAt: 5000, maxDepth: 1, maxTasks: 1, maxBatchChildren: 1 },
+  })
+  assert.deepEqual(contract.spec.outputs.map(output => output.id).slice(-2), ['__skill-drafts', '__mcp-drafts'])
+  const caseRef = await freezeEvaluationCase(service, 'paired-case', evaluationCaseFromContract(contract))
+  const slot: EvaluationSlot = {
+    id: 'paired-slot', roundId: 'paired-round', taskId: contract.taskId, partition: 'evaluation',
+    caseRef, arm: 'candidate', repetition: 0, method: candidate,
+  }
+  const state: TaskRunState = {
+    tasks: new Map([[contract.taskId, {
+      taskId: contract.taskId, contract, rootTaskId: contract.taskId, depth: 0, phase: 'closed' as const,
+      runIds: [], childIds: [], closed: { outcome: 'verified' as const, reason: 'fixture', source: 'task/closed' as const, factDigest: ref('fact').digest },
+    }]]),
+    runs: new Map(), batches: new Map(),
+  }
+  await assertPairedEvaluationContracts(service, state, [slot], plan)
+  const changed = sealTaskContract({
+    v: contract.v, taskId: contract.taskId,
+    spec: { ...contract.spec, goal: { ...contract.spec.goal, summary: 'different' } },
+    origin: contract.origin, method: contract.method, template: contract.template,
+    resources: contract.resources, acceptance: contract.acceptance,
+    environment: contract.environment, limits: contract.limits,
+  })
+  const originalTask = state.tasks.get(contract.taskId)
+  assert.ok(originalTask)
+  const changedState: TaskRunState = {
+    ...state,
+    tasks: new Map([[changed.taskId, { ...originalTask, contract: changed }]]),
+  }
+  await assert.rejects(assertPairedEvaluationContracts(service, changedState, [slot], plan), /Paired Task differs/)
+})
+
+void test('ensureEvaluationSlots propagates host runner and request CAS failures unchanged', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'singularity-evaluation-host-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const service = await CommandService.open({ root, actor: { kind: 'runtime', id: 'evaluation-host-test' }, clock: () => 1000 })
+  t.after(() => service.close())
+  const slot = frozenLocalSlots('round-host', { cases: [ref('case')], trialsPerCase: 1 }, base, ref('candidate'))[0]
+  const failure = new Error('native provider transport failed')
+  await assert.rejects(ensureEvaluationSlots({
+    service, slots: [slot],
+    runTask: () => Promise.reject(failure),
+    requestFor: runner,
+  }), error => error === failure)
+  assert.equal(service.facts().length, 0)
+  assert.equal((await service.taskRunState([])).tasks.size, 0)
+
+  const missingRef = ref('missing-request')
+  const fake = fakeService(emptyState([closedTask(slot, evaluationContract(slot, missingRef))]))
+  let casFailure: unknown
+  try {
+    await ensureEvaluationSlots({
+      service: fake.service, slots: [slot],
+      runTask: () => { throw new Error('missing request must not purchase') }, requestFor: runner,
+    })
+  } catch (error) {
+    casFailure = error
+  }
+  assert.ok(casFailure instanceof Error)
+  assert.match(casFailure.message, /Missing fake object/)
 })

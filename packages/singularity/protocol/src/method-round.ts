@@ -78,6 +78,10 @@ export function projectMethodRounds(
       }
       case 'rsi/candidate-ready': {
         const round = requireRound(rounds, fact.data.roundId)
+        if (round.status === 'evaluating'
+          && same(round.patch, fact.data.patch)
+          && same(round.candidateMethod, fact.data.candidateMethod)
+          && same(round.precheckReceipt, fact.data.precheckReceipt)) break
         guard(round.status === 'checking' && same(round.patch, fact.data.patch), 'Candidate does not match the submitted proposal')
         validateRevision(fact.data.candidateMethod, round.baseMethod, revisions)
         guard(!methods.has(fact.data.candidateMethod.id), 'Candidate revision already exists')

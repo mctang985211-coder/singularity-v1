@@ -720,3 +720,54 @@ PID/SID **113994** 已通过独立session启动，凭据只经stdin一次注入�
 根 `pnpm verify` 全部通过 **457/457**（protocol 209、runtime 145、app 103），project/build/typecheck/lint 通过，0 fail/skip。该结果证明当前主工作区恢复可构建；不产生新模型证据、comparison、winner 或 activation。
 
 下一轮方向已定为真实 Buckyball 加速器/大型芯片设计的模型 workload 适配，而不是继续使用单 root 可解的小算子任务。领域包仍只写外部目标、冻结 workload/参考、根最终验收、少量案例和环境资源，不写阶段树、child 验收、MLIR/PPA 流程或 RSI 控制流。具体 workload、预算、绝对 deadline 和 case 数在零模型领域与验收预检完成后另行固定；在此之前不启动付费 campaign。
+
+### RSI V1 精简切片施工（2026-11-10）
+
+依据用户提供的《Singularity V1 RSI 最终架构与首轮测试·整合终稿》完成了最小可用施工。终稿作为架构输入，实际入口仍以当前仓库代码和 `docs/framework.md` 为准；没有启动新的真实模型 campaign，也没有把设计建议写成实验结果。
+
+当前实现新增 Task 级 `ReplayPoint`/`SliceSelection`/`SliceAttempt`/`SliceCampaignResult` strict CAS 记录、固定 `utility-v1` 选点器、best-effort/closed replay 闭包、共享 baseline 与最多两个局部候选、局部 paired comparator、跨 Method base 的有界 public history，以及按唯一 native request ID 折叠的 campaign ledger。局部 finalist 仍必须经过原有 root precheck、完整 public/validation evaluation；只有 root `improved` 才保留 activation 权限。
+
+`runExperiment` 保持 `root-only` 默认行为；显式传入 `searchMode: "slice-v1"` 才启用局部 campaign，`autoActivate: false` 可用于受控诊断。局部 case 重放使用新的绝对 deadline 和普通 Task/Run runner；无闭包证明时不会伪称 closed replay。当前默认 `sourceMustVerify` 保持兼容值，首轮真实 pilot 应由操作者显式冻结为 `true`。
+
+本次代码验证使用 Node 24.9.0、pnpm 11.18.0；`pnpm verify` 的 project/build/typecheck/lint/test 全部通过，新增协议、runtime、账本、历史和 draft 测试均通过。该验证只证明机制与工程闭合，不证明 RSI 质量收益、性能收益或多层 workflow 已经出现。
+
+### 精简、路径边界与真实 slice 修复（2026-11-10）
+
+用户要求能删则删、能改则改、不做兜底。本轮删除 `apps/singularity/src/execution-ledger.ts`（175 行）及其 181 行专用测试，把 campaign 成本折叠缩成 `accounting.ts` 的 `campaignLedger`；删除 `replay.ts` 中与 `evaluation-case.ts` 重复的 learning-draft 过滤器、未使用的 Slice 类型别名，并去掉 proposer history 的结构签名与 token-costs 投影（历史仅保留 hypothesis、operations、outcome、aggregateDelta 和 public refs）。删除遗留研究/平台测试：`acceptance-authoring` 与其 Python 工具/fixtures、`wake-delivery` 的 crash-resume 用例与 fixture、`mcp-stdio`/`mcp-streamable-http` 两套 DSH 平台测试及 fixture、runtime 的重复 retry/prompt 用例、`single-run` 的重复 invalid-criterion 包装、`runtime/evaluation-case` 专用测试。测试从 505 降到 **491**（protocol 217、runtime 173、app 101；含新增 expand 正负例），根 `pnpm verify` 通过；测试源码约减少 1,900 行。
+
+实跑修复三处：session/attempt/child 路径不再直接使用无界 business ID（task-pool 对超长 session 做稳定 hash，local slot 的 taskId 改为 `local:<32hex>`，slice proposer workspace 用短 attemptKey）；slice proposer 的 cwd 在创建前显式 `mkdir`；无 finalist 时 Round 必须关闭为 `insufficient-evidence`，不能写成需要 comparison 的 `no-improvement`（旧实现会在 reducer 触发 `Compared outcome requires candidate and comparison`）。baseline 缺失 Evidence 时的 reason 不再伪称 `baseline-drift`。
+
+真实模型使用 `deepseek-v4.1-flash`、max 推理、500k context、128k 输出、本地 `127.0.0.1:16660`，共启动 11 个隔离 campaign。已确认：源 failed、fresh baseline verified 时，旧的 strict 保真以 `baseline-verdict` 停止（卡点 2 的历史证据）；源 verified 时 binary 质量饱和，slice 返回 `no-eligible-task`；源 failed 但 baseline child `blocked` 且无 Evidence 时，slice 返回 `not-replayable`；源与基线均 failed、唯一候选也 failed 时，Round 以 `slice-campaign-no-qualified-candidate` 关闭，不再触发 reducer 的 `Compared outcome requires candidate and comparison`。
+
+### 卡点修复：expand-template 与 fresh-paired（2026-11-10）
+
+按用户要求修改两个卡点。`assertScopedCandidate` 现在接受受约束的 `expand-template`：非空 base 中选中 template 恰好新增一个新 child template 和一个指向它的新 binding，两个 `put-template`，禁止 entry/remove/共享资产覆盖；新/改 child binding 必须解析到候选模板或 `platform:` fallback。局部结果 `affectedTemplateIds` 同时记录选中与新模板；共享 fan-out、edit budget、根门不变。协议 `SliceAttempt.scope.kind` 增加 `expand-template`。新增 runtime 正/负例；`pnpm verify` **491/491**（protocol 217、runtime 173、app 101）通过。
+
+`ReplayPoint` 增加可选 `baselinePolicy`：默认 `strict` 保留原有 `not-replayable`；`fresh-paired` 在 fresh baseline verdict 与源不同时返回 `fidelity=verdict-drift`，继续真实局部 paired 评价，结果写 `SliceCampaignResult.baselineFidelity=verdict-drift`，qualified 只能归档 `diagnostic-finalist`，仍走同一根 precheck/evaluation/activation；不会声称修复源失败。真实 campaign 11 已命中：源 failed、fresh baseline verified，slice 结果含 `baselineFidelity: verdict-drift`，继续执行 proposer attempt 并以 `no-qualified-candidate` 关闭，而不是 `not-replayable`。真实 expand 仍需要先有一个 bootstrap finalist 激活出非空 base；本轮没有伪造这个前提，expand 只有 runtime 正负例和对象级复现。
+
+### 真实全流程 RSI 首次触达 activation（2026-11-10）
+
+在独立操作者领域 `billing/legacy pipe-delimited order normalizer` 上完成一次真实模型全流程 campaign。领域只有三个冻结 case（source/public/validation），`acceptance=checks`，check 是宿主机上冻结的 `check2/acceptance.py`，输入为 legacy `orders.csv`（`|` 分隔、`\\`/`\|`/`\n` 转义、BOM/CRLF、重复 order_id 取最大 updated_at、重复并列取更早行、currency/status 大小写不敏感）。source 任务和 candidate 任务使用同一 TaskSpec；`searchMode=slice-v1`、`sourceMustVerify=false`、`autoActivate=true`、`baselinePolicy=fresh-paired`、`maxCandidates=2`、每 Task `maxStepsPerRun=2000`、campaign 上限 200M reported tokens。
+
+实测结果（根 `/home/ROXY/code/bb_work/rsi-fullflow-20261110/full-slice-3/`）：
+
+- source `failed` 且带 Evidence，27 steps、1,026,624 input / 27,630 output；原因是 `orders.csv` 的 currency/status 大小写未归一。ReplayPoint 选中 root bootstrap 点；共享 local baseline 重放同样 `failed`，`baselineFidelity=exact`（14 steps、440,615 / 24,188）。
+- attempt 1 被 scope/precheck 拒绝：`Method asset IDs must be nonempty and unique`，10 steps、392,930 / 43,742，`runCount=0`，未购买 local candidate。
+- attempt 2 提交 `bootstrap-entry`：新增 entry template `template:consumer-implementation` 与 skill `skill:legacy-export-normalizer`，skill 内含 `normalize.py` 和自测；局部 candidate `verified`，attempt 2 合计 26 steps、839,246 / 51,478，`outcome=local-qualified`。slice campaign 合计 50 请求、1,672,791 input / 119,408 output、unknown=0，`outcome=finalist`。
+- root precheck `accepted=true`，candidate Method `method:a6daab02…`；根评价 4 个 slot（public/validation × baseline/candidate）全部 `complete`。public 与 validation 的 baseline 均 0、candidate 均 1；`aggregateDelta=1`、`worstRegression=0`、`outcome=improved`。根 baseline 2,095,985 input / 60,559 output（53 steps），根 candidate 360,655 / 14,540（21 steps）。
+- `method/activated` 已发生：`expectedPrevious=method-empty`、`previous=method-empty`、`next=method:a6daab02…`，带 `evaluationRef` 与 approval；activation fact seq 42。根 Round 1 共 151 请求、5,156,055 input / 222,137 output、unknown=0。
+- Round 2 使用已激活 Method，source `verified`（该轮 13 请求、246,720 input / 10,262 output），slice 返回 `candidatePoints=1` 但 `no-eligible-task-for-frozen-policy`：已验证且质量饱和的 source 没有被选点。这证明 activation 在后续 Round 生效，同时说明 binary 满分 case 仍会饱和。
+
+证据对象：`round-1.json` 含 precheck/comparison/activation；`round-2.json` 含 production Method 的 verified source；`launch.json`、`domain/domain.sqlite` 的 events/facts、`domain/objects/` 的 selection/attempt/comparison/activation CAS；slice 结果 `sha256:b1f96a7d…`，成功 attempt `sha256:28a6af5d…`，comparison `sha256:d8cbf2e8…`。本轮没有修改 `singularity` 生产代码，没有为验收增加 helper；`check2` 只是冻结验收的诊断文本，不改变判定逻辑。
+
+边界：这是单领域、单 public + 单 validation、每 case 1 trial、单次 source replicate 的 `root-improved` 证据，不能外推为稳定质量 RSI；领域仍是操作者本地构造的小型 case，不是 Buckyball/Qwen 长树。`expand-template` 仍未在真实非空 base 上命中：Round 2 source 直接 verified，没有可选失败点。另有两个中止对照：`full-slice-1` 在无诊断提示时 2 个 candidate 均 `no-improvement` 且 Round 关闭 `insufficient-evidence`；`full-slice-2` 因 provider `PI_AI_ERROR` 在 source 第 9 步中止，未形成虚假 Evidence。`full-root-1`（root-only 对照）的 proposer patch 因空/重复 asset ID 被 precheck 拒绝，未进入根评价。
+
+需要区分本轮测试边界与架构能力：本轮 `domain2` **没有声明 `domain.metric`**，check 也没有 `checkOutput:"metric-json"`，`trialsPerCase=1`，因此走的是 `compareVerifiedFraction` 的二值路径；Round 2 的 source verified 是二值满分，按 framework §18.2 没有 headroom。连续评分路径已在 PR40/后续提交中实现：`domain.metric + metric-json`、`compareMetricScores`、几何平均相对增益≥1%、validation 不回退、`MIN_CONTINUOUS_TRIALS=3`，并且 `qualityHeadroom` 对 `metric.value > 0` 保留正数 headroom（`runtime/replay.ts`）。本轮没有覆盖这条连续 metric 路径，不能把二值 case 的满分解释成连续评分缺失；后续应使用明确 metric 的领域、至少三次 trial，验证 verified-but-suboptimal source 的选点与 root 比较。
+
+同理，本轮所有真实 Task 都是单 root，且 c3 的 proposer skill 明确写了不委派单个 bounded 任务；这不是“架构禁止分解”的证据。PR40 前后的 guidance 变动需要单独核对：旧版 `EXPLORE_GUIDANCE` 明确要求 “Delegate stages with distinct outputs and checks to direct children”，当前版本只剩 “Use frozen public resources...”；`WORKER_CARD` 仍有 “Dispatch ready responsibilities”，但默认探索 guidance 的长链分解提示已明显变弱。`docs/progress.md` 的 guided-1 证据是 Method 的 required bindings/guidance 指定了 root→region→warehouse 34 Task；空 Method 自主发现多层 workflow 仍未被本轮证明，也不能由本轮单 root 反证。真实 `expand-template` 需要非空 base + failed source，本轮 Round 2 source verified，因此仍未覆盖。
+
+### 连续 metric 测试集修正与首次连续 campaign（2026-11-10）
+
+按用户要求先修正测试集：新增 `bb_work/rsi-valid-20261110/domain` 自包含压缩领域，`domain.json` 声明 `metric:{criterion:"compression",name:"compression-ratio",unit:"ratio"}`，required criterion 声明 `checkOutput:"metric-json"`，`acceptance.py` 是领域包内 ordinary frozen input（`access:"read"`，check 相对路径 `python3 acceptance.py`），source/public/validation 为三个独立 1 MiB corpus，`trialsPerCase=3`。该领域不包含 child 树、非 root 验收、reviewer、Method/skill、预算、retry 或 activation；只提供 root 目标、验收、输入和 case。实验宿主 `apps/singularity/src/experiment.ts` 只补了可选的 `metricRelativeTolerance` 并把已有的 `ReplayPoint.replayTolerance` 传给 `captureReplayPoints`，这是宿主配置接线，不改协议/runtime authority；根 `pnpm verify` 通过 **491/491**（protocol 217、runtime 173、app 101）。
+
+`valid-slice-1`（coverage 二值化 metric）source 直接达到 coverage=1.0，无 headroom，已停止；`valid-slice-2`（无 starter 开放压缩）source 在 30 步内持续探索 context-mixing/brotli，未提交，已停止。`valid-slice-3`（带 gzip starter、每 Task 60 步）source 在 60 步内产出 `archive.bin` 113,575 bytes、`decompress.py` 9,467 bytes，域外手工验收得到 `compression-ratio=8.8047` 且解压完全一致；但 source 在 60 步结束时仍未调用 `singularity_submit`，Run 被正确结算为 `no-submission`/failed，无 Evidence、无 ReplayPoint、无 candidate/activation。这不是连续评分或状态机缺陷：source 的输出若被提交本应通过验收；问题是 source 在开放优化目标下耗尽步数且没有提交，属于任务/agent 预算和提交纪律的测试集问题。下一步应把提交检查点或更小预算写进有效任务设计，再重跑连续 metric；不得把这个 no-submission 结果归因于 V1。
