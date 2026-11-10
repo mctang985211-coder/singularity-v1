@@ -8,7 +8,7 @@ import test from 'node:test'
 
 import { QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 
-import { nativeAccounting } from '../src/accounting.ts'
+import { campaignLedger,nativeAccounting } from '../src/accounting.ts'
 import { bootSpikeProfile } from '../src/host-composition.ts'
 
 void test('native provider balance failure cancels the campaign and prevents another purchase', { timeout: 60_000 }, async t => {
@@ -33,6 +33,8 @@ void test('native provider balance failure cancels the campaign and prevents ano
   const log = join(root, 'requests.jsonl')
   const meter = nativeAccounting(spike.ctx, { cancellation, log, deadlineAt: Date.now() + 60_000, maxRequests: 100, maxReportedTokens: 1_000_000 })
   t.after(meter.dispose)
+  const ledger = campaignLedger(meter, () => [])
+  const mark = ledger.mark()
   const call = { provider: 'singularity-local', model: 'deepseek-v4.1-flash', messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'Fixture.' }] }] }
   for await (const chunk of spike.ctx.llm.stream(call)) assert.ok(chunk.type)
   assert.equal(requests, 1)
@@ -44,6 +46,20 @@ void test('native provider balance failure cancels the campaign and prevents ano
   }, error => error === cancellation.signal.reason)
   assert.equal(requests, 1, 'no second HTTP request reaches the provider')
   assert.equal(meter.usage.requests, 1)
+  assert.equal(meter.records.length, 1)
+  const observed = meter.records[0]
+  assert.equal(observed.id, 1)
+  assert.equal(observed.purpose, 'agent')
+  assert.ok(observed.startedAt <= (observed.settledAt ?? 0))
+  assert.equal(observed.failure?.code, QUOTA_EXCEEDED_CODE)
+  const reportedUsage = observed.reported
+  assert.ok(reportedUsage !== undefined)
+  assert.equal(reportedUsage.inputTokens, 0)
+  assert.equal(reportedUsage.outputTokens, 0)
+  assert.deepEqual(ledger.foldSince(mark), {
+    usage: { inputTokens: 0, outputTokens: 0, steps: 0, unknownRequests: 1 },
+    nativeRequests: 1, nativeCompleted: 1, runCount: 0, cacheComplete: false,
+  })
   const row = JSON.parse((await readFile(log, 'utf8')).trim()) as { failure: { code: string; message: string } }
   assert.equal(row.failure.code, QUOTA_EXCEEDED_CODE)
   assert.match(row.failure.message, /Insufficient balance/)

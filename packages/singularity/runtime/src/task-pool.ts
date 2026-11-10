@@ -39,6 +39,19 @@ export interface ExecuteTaskTreeResult {
   readonly facts: ExecuteSingleRunResult['facts']
 }
 
+const MAX_SESSION_ID_LENGTH = 120
+
+/**
+ * Session persistence encodes the id into one path component. Business ids are
+ * allowed to be long, so bound the native session id with a stable digest once
+ * it would exceed a safe single-component length.
+ */
+function boundedSessionId(sessionId: string, runId: string): string {
+  if (sessionId.length <= MAX_SESSION_ID_LENGTH) return sessionId
+  const digest = computeDigest('object', { runId }).slice('sha256:'.length)
+  return `session:${digest.slice(0, 40)}`
+}
+
 interface ReadyRun {
   readonly request: ExecuteSingleRunRequest
   readonly action: 'create' | 'resume' | 'retry'
@@ -134,7 +147,7 @@ export async function executeTaskTree(
   const newAttempt = async (contract: TaskContract, attempt: number, reservation: BudgetReservation,
     previous?: ExecuteSingleRunRequest): Promise<ExecuteSingleRunRequest> => {
     const runId = `${contract.taskId}:run:${String(attempt)}`
-    const sessionId = `${runId}:session`
+    const sessionId = boundedSessionId(`${runId}:session`, runId)
     const key = computeDigest('object', { runId }).slice('sha256:'.length)
     const workspace = join(request.workspaceRoot, key)
     const composition = previous === undefined
@@ -161,7 +174,7 @@ export async function executeTaskTree(
   }
 
   try {
-    enqueue(request, 'create')
+    enqueue({ ...request, sessionId: boundedSessionId(request.sessionId, request.runId) }, 'create')
     while (ready.length > 0 || running.size > 0) {
       while (!signal.aborted && ready.length > 0 && running.size < request.maxActive) {
         const job = ready.shift()

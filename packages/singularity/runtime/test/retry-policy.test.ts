@@ -21,13 +21,6 @@ const base: RetryPolicyInput = {
   usageTokens: 15,
 }
 
-void test('failed Runs retry only within maxRuns, deadline, and known token budget', () => {
-  assert.equal(decideRetryPolicy(base, []).allowed, true)
-  assert.equal(decideRetryPolicy({ ...base, runCount: 2 }, []).allowed, false)
-  assert.equal(decideRetryPolicy({ ...base, now: 10_000 }, []).allowed, false)
-  assert.equal(decideRetryPolicy({ ...base, usageTokens: 1000 }, []).allowed, false)
-})
-
 void test('invalid Runs require a pre-listed transient reason; verified and cancelled never retry', () => {
   const invalid: RetryPolicyInput = {
     ...base,

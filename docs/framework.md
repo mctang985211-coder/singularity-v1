@@ -2111,6 +2111,37 @@ async function improveOneRoot(sourceTrace: TraceRef, plan: RoundPlan) {
 
 round outcome 是统计结果；report 只渲染这些事实。report 写入失败不反转结果，也不会导致重跑本轮。下一 Round 必须引用新的 sealed root trace，并把当前 active Method 作为 `expectedPreviousActiveMethod`；CAS 失败时保留候选和结果，要求重新规划并由 activation operator 决定，不能覆盖并发激活。
 
+### 18.2 Task 切片候选筛选（amendment 029）
+
+一个已打开根 Round 可以在正式 proposal 前进行一次有界 Task 切片筛选。它只减少无效根评价，不降低根晋级标准，也不形成新的业务 authority：
+
+~~~text
+sealed source trace
+→ 从带独立 Evidence 的 verified/failed terminal Task 构造 ReplayPoint
+→ 共享 fresh baseline 一次并通过 source-case 保真检查
+→ 同一 proposer 总预算内最多两个 MethodPatchDraft
+→ 每个 draft 经同一 applyPatch 物化并做局部范围检查
+→ 普通 Task/Run + 原 EvaluationSlot/manifest/comparator 做真实局部 paired evaluation
+→ 至多一个 local finalist
+→ 只向根 Round 提交该 finalist 的同一 MethodPatch
+→ 原 precheck、完整 public+validation 根评价、expected-head activation
+~~~
+
+- `ReplayPoint`、`SliceSelection`、`SliceAttempt`、`SliceCampaignResult` 是带 strict schema 的 CAS 研究记录，不是 fact、Round、Task 状态或注册表。CAS 没有按前缀枚举的权威；当前执行宿主只把已完成前序 campaign 的 attempt refs 显式传给后续历史投影，不能从归档重建 live 执行。
+- 局部候选只写 `method` CAS，并由普通 `task/admitted` 合同进入本次 fold 的 revision 读取上下文。不得为其另写 `method/registered`；根 `rsi/candidate-ready` 仍是唯一候选注册路径，现有 reducer 不变。局部比较始终是 `claim=source-replay`，没有 `slice/activated` 或第二 production head。
+- Task 是唯一切片单位。锚点必须有 decisive Run 的独立 Evidence，且 Task outcome 为 verified 或 failed；invalid、cancelled、no-submission、只有 ExecutionRecord 的节点不可作为锚点。child 以普通 root evaluation Task 重放原冻结合同与源 binding，不恢复旧进程、旧 workspace 或 transcript。
+- ReplayPoint 固定 source trace、contract、Evidence、base Method、template/binding path、source case、最多两个局部 public cases、宿主环境 fingerprint、fan-out、可选唯一局部 metric 与闭包等级。局部 case 的 canonical 形式不含 host 自动追加的 learning-draft outputs；`admitRootTask` 重加它们，paired 比较两侧使用同一规范化。每次 campaign 重冻结绝对 deadline，不能沿用已过期的源 deadline。
+- 闭包只有 `closed` 与 `best-effort`。`closed` 需要可信 runner 出具的 fresh CAS inputs、全新 workspace/session、网络禁用或冻结 broker、宿主文件拒绝或只读 CAS mount 的可验证 executionProof；独立目录、MCP、cwd、公开 fixture 和模型声明都不是证明。当前普通 experiment runner 没有该证明，只能生成 `best-effort`，`requireClosed=true` 时不可选择。
+- root 空 Method 仅允许一个新 template、其必要新资产和一次指向新 template 的 set-entry。非空 base 的局部候选可替换选中 template，也可恰好新增一个 child template 并在选中 template 增加恰好一个新 binding（两个 `put-template`，新 binding 必须只指向新 template）；可附加绑定到被改 template 的新 ID skill/MCP；禁止 remove、set-entry 和覆盖共享资产。共享 template 的 fan-out 从 base Method 重算并归档，局部评价不缩小其真实影响范围。
+- 局部执行复用 `ensureEvaluationSlots`、`readEvaluationManifest`、paired contract assert 和原 comparator。request 对象固定为 `{v:1,roundId:slot.roundId,slot}`。共享 baseline 的 slots 与每个 candidate 的 slots 使用不同确定身份；已关闭且合同/request 完全匹配的 baseline 不重复购买，在途身份不得重入。局部 RoundPlan 的 budget 保持两臂计划保险丝语义；每个 arm 的执行帽与整个 campaign 的唯一 native-request/fact 总帽分开，不得把同一 RoundPlan budget 解释成两份新预算。
+- baseline 先于 proposer/candidate 购买。`baselinePolicy=strict`（默认）要求 source-case verdict 保持；`fresh-paired` 允许 fresh baseline verdict 与源不同，但必须记录 `baselineFidelity=verdict-drift`，局部 qualified 只能标记 `diagnostic-finalist`，仍走同一根评价，不能宣称修复源失败。metric 只能在候选生成前按 ReplayPoint 冻结的容差核对；host fingerprint 漂移、baseline 缺失或 strict 保真失败以 `not-replayable/insufficient-evidence` 停止。宿主 CAS、provider、session、资源与清理异常原样抛出，不能归档成候选 rejected 或 baseline drift。
+- `utility-v1@1` 是固定、确定性、读历史的选点器，不是学习型 SliceMethod。选择记录保存当时特征、可见历史前缀、评分与理由。verified-fraction 的质量 headroom 只来自带独立 failed Evidence 的源点；连续 metric 保留正数无上限 headroom。满分二值点不能在 `root-quality` 策略下制造成长目标。
+- `root-quality` 只接受原 comparator 的 `improved` 作为 `local-qualified`。`engineering-cost-diagnostic` 仅用于 `autoActivate=false` 的公开工程诊断，要求全部局部 case 两臂 verified、质量 delta/regression 为 0、usage 完整且 unknownRequests=0，再应用预冻结 token 降幅；它只产生 `diagnostic-finalist`，不改变根 improved 或 activation 规则。budget-exhausted campaign 不提交 finalist。
+- 所有 draft、scope rejection、局部 missing/invalid/no-improvement、finalist 与成本均归档。成本按唯一 native request ID 折 tokens/unknown，按 Run closure 与 proposer record 折 steps；paired comparison 中的共享 baseline 可以在每个局部评价里展示，但 campaign 总账只计一次。根评价、source 与前序工作由实验总账另计，不能把 comparison usage 相加冒称总研究成本。
+- Proposer 的 draft 阶段只返回 MethodPatchDraft、独立 proposal record 和 usage，不写 `rsi/proposal-submitted`，也不关闭 Round。root-only 与 slice-v1 复用同一 draft 实现；root-only 随后提交唯一 draft，slice-v1 只提交 finalist 的 frozen patch。模型 draft 仍严格拒绝 base，frozen finalist 必须核对 Round base，二者不能用字段猜测混用解析路径。
+- `rsi_read(kind='history')` 取代 `previous-round`：历史含当前 Round 打开前已关闭的跨 base 根 Round，以及宿主显式提供的前序 SliceAttempt；recent 至多 32 条、sameFocus 至多 8 条。每条只含公开操作、hypothesis 和 public aggregateDelta，不含 per-case、worstRegression、validation reason、slot、receipt 或私有 payload。第二棒只能通过显式 extendHistory 看到第一棒已归档 attempt，不能读取未来记录。
+- 实验宿主显式提供 `searchMode=root-only|slice-v1`、`autoActivate`、`sourceMustVerify`、局部 finalist policy、局部预算和 host fingerprint。根 `domain-evaluation` 的完整 improved、operator approval 和 expectedPrevious 仍是唯一 activation 条件；激活后必须核对返回 fact 与 productionHead。
+
 ## 19. 领域包边界
 
 领域目录只提供目标、参考资料、根评判标准、可选的不同算子/不同任务真实 consumer 测试集和环境资源。非 root 合同和检查仍由派发模型编写。领域目录不实现 RSI 流程、reviewer Agent、预算、重试或 activation；这些都由宿主和协议承载。
@@ -2376,6 +2407,9 @@ C-24 single-case gain with validation regression is not improved
 
 | 027 | 2026-11-08 用户要求按详细重建文档实施；已纳入 §4/§5/§6/§12/§17/§19 | 删除 TaskTemplate/TemplateDraft 的 requiredCriteria、requiredOutputs；实际 child 验收只由 parent 编写并冻结，统一 required result/ tree。公共环境在所有层由 host 组合，Method 只含自有增量，冲突显式拒绝。NodeView 持续展示交付物、required criteria 文字与输入路径。旧 Method/CAS 仅归档，不保留双格式。验收疑义先 feedback；replyTo 不改合同，blocked 后新 Task 复用旧 CAS。离线正误产物评测不加入生产准入；质量、独立 validation 与总成本分别报告。真实模型实验仍在工程和真实领域预检后单独固定预算、窗口与 deadline。 |
 | 028 | 2026-11-08 用户要求参考 KernelBench 以性能比例持续评分并继续测试；已纳入 §19.3 | 冻结 check 可声明 metric-json 并通过现有 PublicMetric/PublicReceipt 返回宿主测量；领域声明业务指标选择和公式，参考=1、正数且无人工上限。通用比较全部 public trials/cases 的几何平均和相对增益，validation 独立不回退；功能失败为0、缺失/invalid不得填0。性能主目标不默认受2×生成tokens约束；成本另报。没有新增调度器、领域算法或模型自报评分 authority。 |
+| 029 | 2026-11-10 用户要求评估 RSI 终稿并按计划施工；已纳入 §16–§18 | 增加 Task 级 ReplayPoint、固定 utility-v1、共享 baseline 的最多两候选局部真实筛选与跨 base 有界历史；draft/submit 分离，frozen finalist 与根 precheck 共用物化。局部对象只存 CAS，不写 method/registered、不改 reducer、不新增 fact 或 production head；根完整评价仍是唯一晋级门。保留宿主异常、预算、闭包证明、public-only 历史和唯一原生成本折叠边界。 |
+| 030 | 2026-11-10 用户要求能删则删、能改则改、不做兜底；精简 slice 实现与遗留测试 | 删除独立 ExecutionLedger（折叠进 accounting.campaignLedger）、重复 learning-draft 过滤器、history 的 patchSignature/token-costs 投影和未使用 Slice 类型；无 finalist 的 Round 固定关闭 insufficient-evidence，不写无 comparison 的 no-improvement。保留 strict baseline fidelity、root gate 与 CAS 记录；不新增 fallback 或第二套 authority。 |
+| 031 | 2026-11-10 用户要求改卡点并开真实测试 | 局部候选新增受约束 `expand-template`：恰好一个新 child template + 选中 template 的一个新 child binding，两个 put-template，禁止 entry/remove/共享资产覆盖；`baselinePolicy=fresh-paired` 允许记录 verdict-drift 后继续用 fresh baseline 做局部 paired，但只产 diagnostic-finalist，根评价与 activation 不变。strict 仍是默认。 |
 
 用户于 2026-10-30 对 amendment 002 回复：“全部确定，以后不需要向我确认任何事，自行推进”。该批准冻结 A0–A9 语义；`PublicReceipt`/`SubmissionManifest` 的 protocol/runtime 实现、真实 verifier/DSH/模型证据和 §20 中 acceptance/submission/replay 场景的状态由实现变更独立证明，当前记录见 `docs/progress.md`。规范、lock、相关协议和进度的更新必须与本次批准保持同一语义。
 

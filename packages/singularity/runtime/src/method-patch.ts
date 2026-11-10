@@ -46,15 +46,70 @@ export type PatchPrecheckResult =
   | { readonly accepted: true; readonly candidate: MethodRevision; readonly candidateMethod: Ref; readonly precheckReceipt: Ref }
   | { readonly accepted: false; readonly reason: string; readonly precheckReceipt: Ref }
 
+export type RoundPatchMode = 'draft' | 'frozen'
+
+export function parseRoundPatch(value: unknown, expectedBase: Ref, mode: RoundPatchMode): MethodPatch {
+  const patch = mode === 'draft' ? parseMethodPatch(value, expectedBase) : parseMethodPatch(value)
+  if (!sameRef(patch.base, expectedBase)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')
+  return patch
+}
+
+export interface RoundMaterializationContext {
+  readonly roundId: string
+  readonly baseMethod: Ref
+  readonly base: MethodRevision
+  readonly defaultAcceptance: Ref
+  readonly exploration?: GlobalResourceSnapshot
+}
+
+export interface MaterializedRoundPatch {
+  readonly patch: MethodPatch
+  readonly candidate: MethodRevision
+  readonly candidateMethod: Ref
+}
+
+export async function readRoundMaterializationContext(service: CommandService, roundId: string): Promise<RoundMaterializationContext> {
+  const opened = service.facts().find(fact => fact.type === 'rsi/round-opened' && fact.data.roundId === roundId)
+  if (opened?.type !== 'rsi/round-opened') throw new Error('Round is not open')
+  const status = (await service.methodRoundState()).rounds.get(roundId)?.status
+  if (status !== 'proposing' && status !== 'checking') throw new Error('Round no longer accepts candidate materialization')
+  const base = parseProtocolValue(methodRevisionSchema, await readJson(service, opened.data.baseMethod, 'method'))
+  if (!sameRef(base, opened.data.baseMethod)) throw new Error('Pinned base Method identity is invalid')
+  const trace = await readPublicTrace(service, opened.data.sourceTrace)
+  const contractChapter = trace.chapters.find(chapter => chapter.id === 'contract')
+  if (contractChapter === undefined) throw new Error('Sealed trace has no root contract')
+  const root = parseProtocolValue(taskContractSchema, await readJson(service, contractChapter.object))
+  const exploration = root.resources.exploration === undefined ? undefined
+    : parseProtocolValue(globalResourceSnapshotSchema, await readJson(service, root.resources.exploration))
+  const defaultAcceptance = exploration?.fallbackAcceptance ?? root.acceptance
+  await service.readObject(defaultAcceptance)
+  return { roundId, baseMethod: opened.data.baseMethod, base, defaultAcceptance, ...(exploration === undefined ? {} : { exploration }) }
+}
+
+export async function materializeRoundPatch(
+  service: CommandService,
+  context: RoundMaterializationContext,
+  value: unknown,
+  mode: RoundPatchMode,
+): Promise<MaterializedRoundPatch> {
+  const patch = parseRoundPatch(value, context.baseMethod, mode)
+  for (const change of patch.changes) if (change.op === 'put-skill' && !isSkillName(change.skill.name))
+    throw new MethodPatchRejection(`skill name ${JSON.stringify(change.skill.name)} is not DSH kebab-case`)
+  const candidate = await applyPatch(service, context.base, patch, context.defaultAcceptance, context.exploration)
+  const candidateMethod = await putJson(service, candidate.id, candidate, 'method')
+  return { patch, candidate, candidateMethod }
+}
+
 export async function submitMethodPatch(request: {
   readonly service: CommandService
   readonly actor: FactActor
   readonly roundId: string
   readonly value: unknown
+  readonly mode?: RoundPatchMode
 }): Promise<Ref> {
   const opened = request.service.facts().find(fact => fact.type === 'rsi/round-opened' && fact.data.roundId === request.roundId)
   if (opened?.type !== 'rsi/round-opened') throw new Error('Round is not open')
-  const patch = parseMethodPatch(request.value, opened.data.baseMethod)
+  const patch = parseRoundPatch(request.value, opened.data.baseMethod, request.mode ?? 'draft')
   for (const change of patch.changes) if (change.op === 'put-skill' && !isSkillName(change.skill.name))
     throw new MethodPatchRejection(`skill name ${JSON.stringify(change.skill.name)} is not DSH kebab-case`)
   if (request.service.facts().some(fact => (fact.type === 'rsi/proposal-submitted' || fact.type === 'rsi/round-closed') && fact.data.roundId === request.roundId)) {
@@ -76,29 +131,16 @@ export async function submitMethodPatch(request: {
 export async function precheckMethodPatch(request: PatchPrecheckRequest): Promise<PatchPrecheckResult> {
   const { service, actor, roundId } = request
   const proposal = service.facts().find(fact => fact.type === 'rsi/proposal-submitted' && fact.data.roundId === roundId)
-  const opened = service.facts().find(fact => fact.type === 'rsi/round-opened' && fact.data.roundId === roundId)
-  if (proposal?.type !== 'rsi/proposal-submitted' || opened?.type !== 'rsi/round-opened') {
-    throw new Error('Round must have one formal proposal before precheck')
-  }
+  if (proposal?.type !== 'rsi/proposal-submitted') throw new Error('Round must have one formal proposal before precheck')
   if (service.facts().some(fact => (fact.type === 'rsi/candidate-ready' || fact.type === 'rsi/round-closed') && fact.data.roundId === roundId)) {
     throw new Error('Round precheck is already complete')
   }
-  // These are already frozen host inputs. Corruption here is not a candidate rejection.
+  // Frozen host input failures are not candidate rejections.
   const patch = parseMethodPatch(await readJson(service, proposal.data.patch))
-  const base = parseProtocolValue(methodRevisionSchema, await readJson(service, opened.data.baseMethod, 'method'))
-  if (base.id !== opened.data.baseMethod.id || base.digest !== opened.data.baseMethod.digest) throw new Error('Pinned base Method identity is invalid')
-  const trace = await readPublicTrace(service, opened.data.sourceTrace)
-  const contractChapter = trace.chapters.find(chapter => chapter.id === 'contract')
-  if (contractChapter === undefined) throw new Error('Sealed trace has no root contract')
-  const root = parseProtocolValue(taskContractSchema, await readJson(service, contractChapter.object))
-  const exploration = root.resources.exploration === undefined ? undefined
-    : parseProtocolValue(globalResourceSnapshotSchema, await readJson(service, root.resources.exploration))
-  const defaultAcceptance = exploration?.fallbackAcceptance ?? root.acceptance
-  await service.readObject(defaultAcceptance)
-  let candidate: MethodRevision
+  const context = await readRoundMaterializationContext(service, roundId)
+  let materialized: MaterializedRoundPatch
   try {
-    if (!sameRef(patch.base, opened.data.baseMethod)) throw new MethodPatchRejection('MethodPatch base differs from the pinned Round base')
-    candidate = await applyPatch(service, base, patch, defaultAcceptance, exploration)
+    materialized = await materializeRoundPatch(service, context, patch, 'frozen')
   } catch (error) {
     if (!(error instanceof MethodPatchRejection || error instanceof MethodResourceError || error instanceof AdmissionError || error instanceof ZodError)) throw error
     const reason = error instanceof Error ? error.message : String(error)
@@ -114,7 +156,7 @@ export async function precheckMethodPatch(request: PatchPrecheckRequest): Promis
     }, [])
     return { accepted: false, reason, precheckReceipt }
   }
-  const candidateMethod = await putJson(service, candidate.id, candidate, 'method')
+  const { candidate, candidateMethod } = materialized
   const precheckReceipt = await putJson(service, `round:${roundId}:precheck`, seal('object', {
     v: 1, roundId, patch: proposal.data.patch, accepted: true, candidateMethod,
     mcpManifests: candidate.tools.map(tool => tool.server.manifest),

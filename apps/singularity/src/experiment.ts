@@ -3,13 +3,13 @@ import { basename,join } from 'node:path'
 
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { GlobalResourceSnapshot,JsonValue,Ref,RoundPlan,TaskContract,TaskLimits,TaskSpec } from '@singularity/protocol'
-import { admitRootTask,canonicalize,computeDigest,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseProtocolValue,resolveTemplateView,sealMethodRevision } from '@singularity/protocol'
+import type { GlobalResourceSnapshot,JsonValue,LocalFinalistPolicy,Ref,RoundPlan,TaskContract,TaskLimits,TaskSpec,UsageRecord } from '@singularity/protocol'
+import { admitRootTask,canonicalize,computeDigest,EXPLORE_TEMPLATE_ID,methodRevisionSchema,parseJsonText,parseProtocolValue,resolveTemplateView,sealMethodRevision } from '@singularity/protocol'
 import type { EvaluationTaskRequest } from '@singularity/runtime'
-import { activateRoundCandidate,AGENT_REVIEW_POLICY,createAgentVerifier,compareMetricScores,compareVerifiedFraction,CommandService,ContractSummaryService,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,freezeEvaluationCase,freezeGlobalResources,openRsiRound,resourceAssetCatalog,precheckMethodPatch,sealPublicTrace,taskProtocolReference } from '@singularity/runtime'
+import { activateRoundCandidate,AGENT_REVIEW_POLICY,buildProposalHistory,captureReplayPoints,closeRsiRound,contractForLocalSlot,createAgentVerifier,compareMetricScores,compareVerifiedFraction,CommandService,ContractSummaryService,draftRsiPatch,evaluateRsiCandidate,evaluationCaseFromContract,executeRsiProposer,executeTaskTree,extendProposalHistory,freezeEvaluationCase,freezeGlobalResources,openRsiRound,readSliceFinalist,resourceAssetCatalog,precheckMethodPatch,runSliceCampaign,sealPublicTrace,submitMethodPatch,taskProtocolReference } from '@singularity/runtime'
 
 import { bootSpikeProfile,buildSingleRunComposition } from './host-composition.ts'
-import { nativeAccounting } from './accounting.ts'
+import { campaignLedger,nativeAccounting } from './accounting.ts'
 import { bindDomainTask,freezeDomainTools } from './domain.ts'
 import type { ExperimentDomain } from './domain.ts'
 
@@ -23,6 +23,18 @@ export const EXPERIMENT_BUDGET = {
   rounds: 3,
   trialsPerCase: 1,
   sourceMustVerify: false,
+  searchMode: 'root-only' as const,
+  autoActivate: true,
+  slice: {
+    requireClosed: false,
+    baselinePolicy: 'strict' as const,
+    metricRelativeTolerance: 0,
+    maxCandidates: 2,
+    finalistPolicy: { kind: 'root-quality' } as const,
+    maxTokens: maxReportedTokens,
+    maxRuns: 6 * 256 * 3,
+    maxWallClockMs,
+  },
   maxActive: 4,
   reviewMaxSteps: 128,
   maxOutputBytes: 256 * 1024 * 1024,
@@ -32,6 +44,12 @@ export const EXPERIMENT_BUDGET = {
     maxWallClockMs } satisfies RoundPlan['proposerBudget'],
   evaluationBudget: { maxRuns: 6 * 256 * 3, maxTokens: maxReportedTokens,
     maxWallClockMs, maxActiveRuns: 4 } satisfies RoundPlan['budget'],
+}
+
+export type ExperimentBudget = Omit<typeof EXPERIMENT_BUDGET, 'searchMode' | 'autoActivate' | 'slice'> & {
+  readonly searchMode?: 'root-only' | 'slice-v1'
+  readonly autoActivate?: boolean
+  readonly slice?: Omit<typeof EXPERIMENT_BUDGET['slice'], 'finalistPolicy' | 'metricRelativeTolerance'> & { readonly finalistPolicy: LocalFinalistPolicy; readonly metricRelativeTolerance?: number }
 }
 
 const actor = { kind: 'runtime', id: 'singularity-experiment' } as const
@@ -44,7 +62,10 @@ export function sourceEligible(classification: string, requireVerified: boolean)
 }
 
 /** Operator host for any public domain bundle; domains own no Task or Round state. */
-export async function runExperiment(root: string, domain: ExperimentDomain, budget = EXPERIMENT_BUDGET, host: { readonly apiKey?: string; readonly patchFiles?: readonly string[] } = {}) {
+export async function runExperiment(root: string, domain: ExperimentDomain, budget: ExperimentBudget = EXPERIMENT_BUDGET, host: { readonly apiKey?: string; readonly patchFiles?: readonly string[] } = {}) {
+  const searchMode = budget.searchMode ?? 'root-only'
+  const autoActivate = budget.autoActivate ?? true
+  const sliceBudget = budget.slice ?? EXPERIMENT_BUDGET.slice
   if (domain.metric !== undefined && budget.trialsPerCase < MIN_CONTINUOUS_TRIALS) {
     throw new Error(`Continuous metric rounds require at least ${String(MIN_CONTINUOUS_TRIALS)} trials per case`)
   }
@@ -58,14 +79,16 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
   const spike = await bootSpikeProfile({ home: join(root, 'dsh'), apiKey: host.apiKey, patchFiles: [patch, ...host.patchFiles ?? []] })
   const accounting = nativeAccounting(spike.ctx, { ...budget, deadlineAt, cancellation, log: join(root, 'requests.jsonl') })
   const service = await CommandService.open({ root: join(root, 'domain'), actor, clock: Date.now })
+  const ledger = campaignLedger(accounting, () => service.facts())
   const timer = setTimeout(() => { cancellation.abort('campaign-deadline') }, Math.max(0, deadlineAt - Date.now()))
   const commit = <T extends 'method/registered' | 'method/activated'>(type: T, data: Parameters<typeof service.commit<T>>[0]['data'], id: string) => service.commit({
     command: { v: 1, commandId: id, tool: 'singularity-experiment', toolVersion: 1, actor, scope: {}, input: data as JsonValue }, type, data,
   }, [])
   const outcomes: unknown[] = []
+  const priorSliceAttempts: Ref[] = []
   let failure: string | undefined
   const failures: unknown[] = []
-  const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-v4-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 128000 }
+  const options: AgentOptions = { provider: 'singularity-local', model: 'deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('max'), maxTokens: 128000 }
   const put = (id: string, value: unknown) => service.putObject(id, bytes(value))
   try {
     const provider = await put(id('acceptance'), { v: 1, kind: 'independent-contract-review', policy: AGENT_REVIEW_POLICY })
@@ -95,7 +118,7 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
       const composition = await buildSingleRunComposition(spike.ctx, { store: service, id: runId, contract, agentOptions: options, base: { v: 1, seed } })
       const workspaceKey = computeDigest('object', { taskId: contract.taskId }).slice('sha256:'.length)
       return executeTaskTree({ ctx: spike.ctx, journalRoot: join(root, 'domain'), workspace: join(root, 'workspaces', workspaceKey),
-        runId, sessionId, admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt } },
+        runId, sessionId, admission: { contract, attempt: 1, budgetReservation: { tokens: contract.limits.maxTokens, steps: contract.limits.maxStepsPerRun, deadlineAt: Math.min(deadlineAt, contract.limits.deadlineAt) } },
         composition, agentOptions: options, maxOutputBytes: budget.maxOutputBytes, verifier: verifierFor(contract), actor,
         maxActive: slot?.maxActive ?? budget.maxActive, workspaceRoot: join(root, 'runs'), summaries,
         signal: slot === undefined ? cancellation.signal : AbortSignal.any([cancellation.signal, slot.signal]),
@@ -157,25 +180,89 @@ export async function runExperiment(root: string, domain: ExperimentDomain, budg
         validation: 'required-by-domain' as const, claim: 'domain-evaluation' as const, comparator: comparatorAsset, sourceSeed: seed, expectedPreviousActiveMethod: active }
       await openRsiRound({ service, actor, roundId, sourceTrace: trace.trace, baseMethod: active, plan, proposerSessionId: `${roundId}:proposer` })
       const workspace = join(root, 'proposers', String(index + 1)); await mkdir(workspace, { recursive: true })
-      const proposal = await executeRsiProposer({ ctx: spike.ctx, service, actor, roundId, workspace, agentOptions: options,
-        publicEvaluation: { goal: 'Improve reusable reasoning, workflow and interfaces across different real consumer tasks. Instance outputs stay in Task results.',
-          metric: `${metricDescription} Report total tokens and elapsed time separately.`,
-          thresholds: [domain.metric === undefined ? 'Public quality gain at least 0.01 with no per-case regression; reported token cost at most 2x baseline.' : 'Public geometric-mean performance gain at least 1% with no per-case regression. Generation costs are reported separately.'], validationPolicy: 'required-by-domain',
-          publicCases: domain.cases.filter(value => !value.validation).map(value => ({ id: value.id, description: value.description })) } })
-      const precheck = proposal.proposalRef === undefined ? undefined : await precheckMethodPatch({ service, actor, roundId })
+      const publicEvaluation = { goal: 'Improve reusable reasoning, workflow and interfaces across different real consumer tasks. Instance outputs stay in Task results.',
+        metric: `${metricDescription} Report total tokens and elapsed time separately.`,
+        thresholds: [domain.metric === undefined ? 'Public quality gain at least 0.01 with no per-case regression; reported token cost at most 2x baseline.' : 'Public geometric-mean performance gain at least 1% with no per-case regression. Generation costs are reported separately.'], validationPolicy: 'required-by-domain' as const,
+        publicCases: domain.cases.filter(value => !value.validation).map(value => ({ id: value.id, description: value.description })) }
+      let proposalRecord: Ref
+      let proposalRef: Ref | undefined
+      let slice: Awaited<ReturnType<typeof runSliceCampaign>> | undefined
+      if (searchMode === 'slice-v1') {
+        const base = parseProtocolValue(methodRevisionSchema,
+          parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode((await service.readObject(active, 'method')).bytes)))
+        const hostFingerprint = `dsh:${String(options.provider)}:${String(options.model)}:${String(options.reasoningEffort)}`
+        const sliceDeadlineAt = Math.min(deadlineAt, Date.now() + sliceBudget.maxWallClockMs)
+        const points = await captureReplayPoints({ store: service, trace: trace.trace, state: await service.taskRunState([]), base,
+          hostFingerprint, campaignDeadlineAt: sliceDeadlineAt, requireClosed: sliceBudget.requireClosed,
+          baselinePolicy: sliceBudget.baselinePolicy,
+          metricRelativeTolerance: sliceBudget.metricRelativeTolerance })
+        let proposerUsed: UsageRecord = { inputTokens: 0, outputTokens: 0, steps: 0, unknownRequests: 0 }
+        const addUsage = (value: UsageRecord) => {
+          proposerUsed = { inputTokens: proposerUsed.inputTokens + value.inputTokens,
+            outputTokens: proposerUsed.outputTokens + value.outputTokens, steps: proposerUsed.steps + value.steps,
+            unknownRequests: proposerUsed.unknownRequests + value.unknownRequests }
+        }
+        slice = await runSliceCampaign({ service, actor, roundId, roundIndex: index, pointCandidates: points,
+          rootPlan: plan, baseMethod: active, hostFingerprint,
+          comparator: { asset: comparatorAsset, describeMetric: () => ({ name: domain.metric?.name ?? 'consumer-quality', direction: 'higher-is-better', unit: domain.metric?.unit ?? 'verified-fraction', costObjective: false }), compare: domain.metric === undefined ? compareVerifiedFraction : compareMetricScores },
+          comparatorKind: domain.metric === undefined ? 'verified-fraction' : 'metric-scores', finalistPolicy: sliceBudget.finalistPolicy,
+          history: await buildProposalHistory({ service, roundId, attemptRefs: priorSliceAttempts }), requireClosed: sliceBudget.requireClosed,
+          localTrials: budget.trialsPerCase, localThresholds: plan.thresholds,
+          localBudget: { ...budget.evaluationBudget, maxWallClockMs: Math.max(1, sliceDeadlineAt - Date.now()) },
+          budget: { maxTokens: sliceBudget.maxTokens, maxRuns: sliceBudget.maxRuns, maxWallClockMs: sliceBudget.maxWallClockMs },
+          costs: ledger, maxCandidates: sliceBudget.maxCandidates, deadlineAt: sliceDeadlineAt, signal: cancellation.signal,
+          draft: async (point, history, attemptId) => {
+            // Native session and workspace paths must stay under one component.
+            const attemptKey = computeDigest('object', { attemptId }).slice('sha256:'.length, 'sha256:'.length + 32)
+            const draftWorkspace = join(root, 'slice-proposers', attemptKey)
+            await mkdir(draftWorkspace, { recursive: true })
+            const drafted = await draftRsiPatch({ ctx: spike.ctx, service, actor, roundId,
+              proposalSessionId: `slice-proposer:${attemptKey}`, recordId: `${attemptId}:proposer-record`, workspace: draftWorkspace,
+              agentOptions: options, publicEvaluation, sharedBudget: { deadlineAt: sliceDeadlineAt,
+                maxTokens: plan.proposerBudget.maxTokens, maxSteps: plan.proposerBudget.maxSteps, used: proposerUsed },
+              focus: point.templateId === EXPLORE_TEMPLATE_ID ? undefined : point.templateId, history })
+            addUsage(drafted.usage)
+            return drafted
+          },
+          extendHistory: (history, attemptRef) => extendProposalHistory({ service, history, attemptRefs: [attemptRef] }),
+          runTask: async (point, request) => {
+            const methodValue = parseProtocolValue(methodRevisionSchema,
+              parseJsonText(new TextDecoder('utf-8', { fatal: true }).decode((await service.readObject(request.slot.method, 'method')).bytes)))
+            const contract = await contractForLocalSlot({ store: service, point, base, candidate: request.slot.arm === 'candidate' ? methodValue : undefined,
+              arm: request.slot.arm, caseRef: request.slot.caseRef, taskId: request.slot.taskId, requestRef: request.requestRef })
+            await runTask(contract, request)
+          },
+          clock: Date.now })
+        proposalRecord = slice.resultRef
+        priorSliceAttempts.push(...slice.result.attempts)
+        if (slice.result.outcome === 'finalist') {
+          const finalist = await readSliceFinalist(service, slice.result, active)
+          proposalRef = await submitMethodPatch({ service, actor, roundId, value: finalist.patch, mode: 'frozen' })
+        } else {
+          // No finalist means no root comparison: the Round has insufficient evidence,
+          // never a business no-improvement verdict.
+          await closeRsiRound({ service, actor }, { roundId, outcome: 'insufficient-evidence',
+            reason: slice.result.reason ?? `slice-campaign-${slice.result.outcome}` })
+        }
+      } else {
+        const proposal = await executeRsiProposer({ ctx: spike.ctx, service, actor, roundId, workspace, agentOptions: options, publicEvaluation })
+        proposalRecord = proposal.recordRef
+        proposalRef = proposal.proposalRef
+      }
+      const precheck = proposalRef === undefined ? undefined : await precheckMethodPatch({ service, actor, roundId })
       const evaluation = precheck?.accepted === true ? await evaluateRsiCandidate({ service, actor, roundId,
         comparator: { asset: comparatorAsset, describeMetric: () => ({ name: domain.metric?.name ?? 'consumer-quality', direction: 'higher-is-better', unit: domain.metric?.unit ?? 'verified-fraction', costObjective: false }), compare: domain.metric === undefined ? compareVerifiedFraction : compareMetricScores },
         async runTask(slot) { const value = cases.find(value => value.ref.id === slot.slot.caseRef.id); if (value === undefined) throw new Error('Missing frozen case'); await runTask(await contractFor(slot.slot.taskId, value.spec, slot.slot.method, 'evaluation', slot.requestRef, value.acceptanceKind), slot) },
       }) : undefined
       let activation
-      if (evaluation?.comparison.outcome === 'improved') {
+      if (evaluation?.comparison.outcome === 'improved' && autoActivate) {
         const next = (await service.methodRoundState()).rounds.get(roundId)?.candidateMethod
         if (next === undefined) throw new Error('Missing improved candidate')
         const approval = await put(`${roundId}:approval`, { v: 1, authorization: 'operator-authorized-evaluated-winner', expectedPrevious: active, next })
         activation = await activateRoundCandidate({ service, actor, roundId, approval })
       }
-      const outcome = { roundId, source: source.root.classification, trace: trace.trace, proposal: proposal.recordRef, precheck,
-        comparison: evaluation?.comparison, activation, usage: { ...accounting.usage } }
+      const outcome = { roundId, source: source.root.classification, trace: trace.trace, proposal: proposalRecord, precheck,
+        ...(slice === undefined ? {} : { slice: slice.resultRef }), comparison: evaluation?.comparison, activation, usage: { ...accounting.usage } }
       outcomes.push(outcome)
       await writeFile(join(root, `round-${String(index + 1)}.json`), JSON.stringify(outcome, null, 2))
       console.log(JSON.stringify({ event: 'round-finished', ...outcome }))
